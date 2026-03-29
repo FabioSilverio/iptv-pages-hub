@@ -1,6 +1,7 @@
 export default {
   async fetch(request) {
     const url = new URL(request.url)
+    const isHeadRequest = request.method === 'HEAD'
 
     if (request.method === 'OPTIONS') {
       return new Response(null, {
@@ -36,7 +37,7 @@ export default {
     }
 
     const upstream = await fetch(targetUrl.toString(), {
-      method: request.method === 'HEAD' ? 'GET' : request.method,
+      method: isHeadRequest ? 'GET' : request.method,
       headers: filterRequestHeaders(request.headers),
       body: canHaveBody(request.method) ? request.body : undefined,
       redirect: 'follow',
@@ -56,16 +57,16 @@ export default {
         headers: responseHeaders(request, {
           'content-type': 'application/vnd.apple.mpegurl',
           'cache-control': 'no-store',
-        }),
+        }, upstream.headers),
       })
     }
 
-    return new Response(upstream.body, {
+    return new Response(isHeadRequest ? null : upstream.body, {
       status: upstream.status,
       headers: responseHeaders(request, {
         'content-type': contentType || 'application/octet-stream',
         'cache-control': 'no-store',
-      }),
+      }, upstream.headers),
     })
   },
 }
@@ -113,9 +114,24 @@ function buildProxyUrl(proxyOrigin, targetUrl) {
   return `${proxyOrigin}/proxy?url=${encodeURIComponent(targetUrl)}`
 }
 
-function responseHeaders(request, extra = {}) {
+function responseHeaders(request, extra = {}, upstreamHeaders) {
   const headers = new Headers(extra)
   const cors = corsHeaders(request)
+  const passthroughHeaders = [
+    'accept-ranges',
+    'content-length',
+    'content-range',
+    'etag',
+    'last-modified',
+    'expires',
+  ]
+
+  if (upstreamHeaders) {
+    passthroughHeaders.forEach((key) => {
+      const value = upstreamHeaders.get(key)
+      if (value) headers.set(key, value)
+    })
+  }
 
   for (const [key, value] of Object.entries(cors)) {
     headers.set(key, value)
