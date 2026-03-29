@@ -21,6 +21,7 @@ const CONNECTION_KEY = 'iptv-pages-hub.connection'
 const EMBEDS_KEY = 'iptv-pages-hub.embeds'
 const SETTINGS_KEY = 'iptv-pages-hub.settings'
 const LAST_CHANNEL_KEY = 'iptv-pages-hub.last-channel'
+const FAVORITES_KEY = 'iptv-pages-hub.favorites'
 
 interface AppSettings {
   rememberConnection: boolean
@@ -28,7 +29,13 @@ interface AppSettings {
   twitchAccessToken: string
 }
 
-const defaultXtream: XtreamCredentials = { serverUrl: '', username: '', password: '', output: 'm3u8' }
+const defaultXtream: XtreamCredentials = {
+  serverUrl: '',
+  username: '',
+  password: '',
+  output: 'm3u8',
+  proxyUrl: '',
+}
 const defaultM3U: M3UCredentials = { url: '' }
 const defaultSettings: AppSettings = {
   rememberConnection: true,
@@ -122,6 +129,7 @@ export function App() {
   )
   const [searchTerm, setSearchTerm] = useState('')
   const [groupFilter, setGroupFilter] = useState('Todos')
+  const [favorites, setFavorites] = useState<string[]>(() => readJson(FAVORITES_KEY, [] as string[]))
   const [embeds, setEmbeds] = useState<EmbedStream[]>(() => readJson(EMBEDS_KEY, embedDefaults))
   const [embedDraft, setEmbedDraft] = useState<EmbedStream>({
     id: '',
@@ -148,10 +156,20 @@ export function App() {
       channel.group.toLowerCase().includes(search) ||
       channel.tvgId?.toLowerCase().includes(search)
     return matchesGroup && matchesSearch
+  }).sort((left, right) => {
+    const leftFavorite = favorites.includes(left.id) ? 1 : 0
+    const rightFavorite = favorites.includes(right.id) ? 1 : 0
+    if (leftFavorite !== rightFavorite) return rightFavorite - leftFavorite
+    const groupCompare = left.group.localeCompare(right.group, 'pt-BR')
+    if (groupCompare !== 0) return groupCompare
+    return left.name.localeCompare(right.name, 'pt-BR')
   })
   const selectedChannel =
     channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null
-  const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && window.location.protocol === 'https:'
+  const xtreamNeedsHttps =
+    hasHttpUrl(xtream.serverUrl) &&
+    !xtream.proxyUrl?.trim() &&
+    window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
 
   useEffect(() => {
@@ -182,6 +200,7 @@ export function App() {
 
   useEffect(() => saveJson(EMBEDS_KEY, embeds), [embeds])
   useEffect(() => saveJson(SETTINGS_KEY, settings), [settings])
+  useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
 
   useEffect(() => {
     if (selectedChannel?.id) window.localStorage.setItem(LAST_CHANNEL_KEY, selectedChannel.id)
@@ -420,6 +439,14 @@ export function App() {
     setEmbedDraft({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
   }
 
+  function toggleFavorite(channelId: string) {
+    setFavorites((current) =>
+      current.includes(channelId)
+        ? current.filter((id) => id !== channelId)
+        : [channelId, ...current],
+    )
+  }
+
   return (
     <div class="app-shell">
       <header class="hero">
@@ -474,12 +501,25 @@ export function App() {
                   onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))}
                 />
               </label>
+              <label>
+                <span>Proxy HTTPS opcional</span>
+                <input
+                  placeholder="https://seu-proxy.exemplo.workers.dev"
+                  value={xtream.proxyUrl || ''}
+                  onInput={(event) =>
+                    setXtream((current) => ({
+                      ...current,
+                      proxyUrl: (event.currentTarget as HTMLInputElement).value,
+                    }))
+                  }
+                />
+              </label>
               {xtreamNeedsHttps ? (
                 <div class="alert warn compact-alert">
                   <strong>Servidor em HTTP</strong>
                   <span>
                     O site publicado em GitHub Pages roda em HTTPS e o navegador bloqueia esse
-                    login. Tente a versao segura do mesmo host.
+                    login. Tente a versao segura do mesmo host ou preencha um proxy HTTPS acima.
                   </span>
                   <div class="inline-actions">
                     <button
@@ -550,7 +590,10 @@ export function App() {
               />
               <span>Lembrar ultima conexao apenas neste navegador</span>
             </label>
-            <p class="helper-copy">Credenciais ficam locais no navegador. Em GitHub Pages nao existe backend proprio.</p>
+            <p class="helper-copy">
+              Credenciais ficam locais no navegador. Para Xtream HTTP-only em Pages, use um proxy
+              HTTPS.
+            </p>
           </div>
 
           {loadError ? <p class="alert error">{loadError}</p> : null}
@@ -570,7 +613,10 @@ export function App() {
               <p class="section-tag">Biblioteca</p>
               <h2>Busca e troca instantanea</h2>
             </div>
-            <span class="pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
+            <div class="pill-row">
+              <span class="pill">{favorites.length} favoritos</span>
+              <span class="pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
+            </div>
           </div>
           <div class="field-grid compact">
             <label>
@@ -588,20 +634,40 @@ export function App() {
 
           <div class="channel-list">
             {visibleChannels.length ? visibleChannels.map((channel) => (
-              <button
+              <div
                 key={channel.id}
                 class={channel.id === selectedChannel?.id ? 'channel-card active' : 'channel-card'}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => setSelectedChannelId(channel.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    setSelectedChannelId(channel.id)
+                  }
+                }}
               >
                 <div class="channel-art">
                   {channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}
                 </div>
                 <div class="channel-copy">
-                  <strong>{channel.name}</strong>
+                  <div class="channel-topline">
+                    <strong>{channel.name}</strong>
+                    <button
+                      aria-label={favorites.includes(channel.id) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
+                      class={favorites.includes(channel.id) ? 'favorite-button active' : 'favorite-button'}
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        toggleFavorite(channel.id)
+                      }}
+                    >
+                      ★
+                    </button>
+                  </div>
                   <span>{channel.group}</span>
                 </div>
-              </button>
+              </div>
             )) : (
               <div class="empty-state">
                 <strong>Nenhum canal encontrado.</strong>
@@ -617,7 +683,18 @@ export function App() {
               <p class="section-tag">Player</p>
               <h2>{selectedChannel?.name || 'Selecione um canal'}</h2>
             </div>
-            <span class="pill">{selectedChannel?.group || 'Sem grupo'}</span>
+            <div class="pill-row">
+              {selectedChannel ? (
+                <button
+                  class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'}
+                  type="button"
+                  onClick={() => toggleFavorite(selectedChannel.id)}
+                >
+                  {favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}
+                </button>
+              ) : null}
+              <span class="pill">{selectedChannel?.group || 'Sem grupo'}</span>
+            </div>
           </div>
 
           <div class="player-frame"><video controls playsInline ref={videoRef} /></div>

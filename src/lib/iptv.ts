@@ -27,6 +27,7 @@ export interface XtreamCredentials {
   username: string
   password: string
   output: 'm3u8' | 'ts'
+  proxyUrl?: string
 }
 
 export interface M3UCredentials {
@@ -76,6 +77,15 @@ export const TWITCH_STATUS_HELP =
 
 export function normalizeServerUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
+}
+
+export function normalizeProxyUrl(url?: string) {
+  return url?.trim().replace(/\/+$/, '') || ''
+}
+
+export function buildProxyUrl(proxyBase: string, targetUrl: string) {
+  const base = normalizeProxyUrl(proxyBase)
+  return `${base}/proxy?url=${encodeURIComponent(targetUrl)}`
 }
 
 function ensureBrowserSafeRemoteUrl(rawUrl: string, label: string) {
@@ -155,14 +165,21 @@ export async function fetchXtreamPlaylist(
   signal?: AbortSignal,
 ): Promise<PlaylistSession> {
   const serverUrl = normalizeServerUrl(credentials.serverUrl)
-  ensureBrowserSafeRemoteUrl(serverUrl, 'Esse servidor Xtream')
+  const proxyUrl = normalizeProxyUrl(credentials.proxyUrl)
+
+  if (!proxyUrl) {
+    ensureBrowserSafeRemoteUrl(serverUrl, 'Esse servidor Xtream')
+  }
+
   const params = new URLSearchParams({
     username: credentials.username.trim(),
     password: credentials.password.trim(),
   })
 
-  const categoriesUrl = `${serverUrl}/player_api.php?${params.toString()}&action=get_live_categories`
-  const streamsUrl = `${serverUrl}/player_api.php?${params.toString()}&action=get_live_streams`
+  const rawCategoriesUrl = `${serverUrl}/player_api.php?${params.toString()}&action=get_live_categories`
+  const rawStreamsUrl = `${serverUrl}/player_api.php?${params.toString()}&action=get_live_streams`
+  const categoriesUrl = proxyUrl ? buildProxyUrl(proxyUrl, rawCategoriesUrl) : rawCategoriesUrl
+  const streamsUrl = proxyUrl ? buildProxyUrl(proxyUrl, rawStreamsUrl) : rawStreamsUrl
 
   const [categoriesResponse, streamsResponse] = await Promise.all([
     fetch(categoriesUrl, { signal }),
@@ -190,9 +207,10 @@ export async function fetchXtreamPlaylist(
       .filter((item) => item.stream_id && item.stream_type !== 'radio')
       .map((item) => {
         const streamId = String(item.stream_id)
-        const streamUrl = `${serverUrl}/live/${encodeURIComponent(
+        const rawStreamUrl = `${serverUrl}/live/${encodeURIComponent(
           credentials.username.trim(),
         )}/${encodeURIComponent(credentials.password.trim())}/${streamId}.${extension}`
+        const streamUrl = proxyUrl ? buildProxyUrl(proxyUrl, rawStreamUrl) : rawStreamUrl
 
         return {
           id: createChannelId('xtream', streamId),

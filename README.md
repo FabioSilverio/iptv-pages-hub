@@ -20,8 +20,10 @@ Escolhi essa base porque ela entrega bundle pequeno, renderizacao rapida e pouco
 ## O que ja vem pronto
 
 - Conexao por Xtream Codes com `server`, `username`, `password` e saida `m3u8` ou `ts`
+- Campo opcional de `proxy HTTPS` para Xtream que so responde em `http://`
 - Conexao por `M3U URL`
 - Lista de canais com busca e filtro por grupo
+- Favoritos persistentes que sobem para o topo da lista
 - Player ao vivo com fallback nativo de HLS e fallback via `hls.js`
 - Persistencia local da ultima conexao e do ultimo canal
 - Embeds de Twitch e Kick
@@ -61,6 +63,22 @@ npm run build
 5. Faca push para `main`.
 
 O workflow em `.github/workflows/deploy.yml` vai gerar e publicar `dist/`.
+
+## Xtream HTTP-only com proxy
+
+Se o seu Xtream so abre em `http://`, ele nao vai funcionar direto dentro de um site em `https://`.
+
+O repo agora inclui um proxy pronto em [proxy/wrangler.toml](C:/Users/fasil/Documents/iptv-pages-hub/proxy/wrangler.toml) e [proxy/src/index.js](C:/Users/fasil/Documents/iptv-pages-hub/proxy/src/index.js).
+
+Fluxo:
+
+1. Faça login no Cloudflare: `npx wrangler login`
+2. Entre na pasta `proxy`
+3. Rode `npx wrangler deploy`
+4. Copie a URL final do Worker
+5. Cole essa URL no campo `Proxy HTTPS opcional` da tela Xtream
+
+Esse proxy reencaminha a API Xtream e também reescreve manifests `m3u8`, para que os segmentos continuem passando pelo mesmo domínio HTTPS.
 
 ## Twitch status oficial
 
