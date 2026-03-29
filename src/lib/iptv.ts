@@ -78,6 +78,36 @@ export function normalizeServerUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
 }
 
+function ensureBrowserSafeRemoteUrl(rawUrl: string, label: string) {
+  const url = new URL(rawUrl)
+
+  if (
+    typeof window !== 'undefined' &&
+    window.location.protocol === 'https:' &&
+    url.protocol === 'http:'
+  ) {
+    throw new Error(
+      `${label} usa HTTP puro (${url.host}). O navegador bloqueia login HTTP dentro de uma pagina HTTPS.`,
+    )
+  }
+
+  return url
+}
+
+async function parseJsonPayload(response: Response, label: string) {
+  const rawText = await response.text()
+
+  if (!rawText.trim()) {
+    throw new Error(`${label} respondeu vazio. Verifique login, senha ou a API do provedor.`)
+  }
+
+  try {
+    return JSON.parse(rawText) as unknown
+  } catch {
+    throw new Error(`${label} nao devolveu JSON valido para uso no navegador.`)
+  }
+}
+
 export function normalizeGroupName(group?: string | null) {
   return group?.trim() || FALLBACK_GROUP
 }
@@ -125,6 +155,7 @@ export async function fetchXtreamPlaylist(
   signal?: AbortSignal,
 ): Promise<PlaylistSession> {
   const serverUrl = normalizeServerUrl(credentials.serverUrl)
+  ensureBrowserSafeRemoteUrl(serverUrl, 'Esse servidor Xtream')
   const params = new URLSearchParams({
     username: credentials.username.trim(),
     password: credentials.password.trim(),
@@ -143,9 +174,12 @@ export async function fetchXtreamPlaylist(
   }
 
   const categoryList = categoriesResponse.ok
-    ? ((await categoriesResponse.json()) as XtreamCategory[])
+    ? (await parseJsonPayload(categoriesResponse, 'A resposta de categorias do Xtream')) as XtreamCategory[]
     : []
-  const streamList = (await streamsResponse.json()) as XtreamStream[]
+  const streamList = (await parseJsonPayload(
+    streamsResponse,
+    'A resposta de canais do Xtream',
+  )) as XtreamStream[]
   const categoryMap = new Map(
     categoryList.map((item) => [String(item.category_id ?? ''), item.category_name ?? FALLBACK_GROUP]),
   )
@@ -207,7 +241,9 @@ export async function fetchM3UPlaylist(
   credentials: M3UCredentials,
   signal?: AbortSignal,
 ): Promise<PlaylistSession> {
-  const response = await fetch(credentials.url.trim(), { signal })
+  const url = credentials.url.trim()
+  ensureBrowserSafeRemoteUrl(url, 'Essa playlist M3U')
+  const response = await fetch(url, { signal })
 
   if (!response.ok) {
     throw new Error('Nao foi possivel baixar a playlist M3U.')

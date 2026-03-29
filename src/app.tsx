@@ -79,6 +79,38 @@ function buildTwitchEmbedUrl(channel: string) {
   return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&muted=true`
 }
 
+function hasHttpUrl(value: string) {
+  return value.trim().toLowerCase().startsWith('http://')
+}
+
+function toHttpsUrl(value: string) {
+  return value.trim().replace(/^http:\/\//i, 'https://')
+}
+
+function formatXtreamError(error: unknown, serverUrl: string) {
+  if (hasHttpUrl(serverUrl) && window.location.protocol === 'https:') {
+    return `GitHub Pages abriu em HTTPS, mas esse Xtream esta em HTTP (${serverUrl.trim()}). O navegador bloqueia esse login. Tente a versao https:// do servidor. Se o provedor so responder em HTTP, vai precisar de proxy ou backend.`
+  }
+
+  if (error instanceof TypeError) {
+    return 'Falha de rede ao consultar o Xtream. O servidor pode estar offline, sem CORS ou recusando acesso do navegador.'
+  }
+
+  return error instanceof Error ? error.message : 'Falha ao carregar o Xtream Codes.'
+}
+
+function formatM3UError(error: unknown, url: string) {
+  if (hasHttpUrl(url) && window.location.protocol === 'https:') {
+    return `Essa M3U esta em HTTP (${url.trim()}) e foi bloqueada por mixed content dentro do GitHub Pages. Use https:// ou um proxy.`
+  }
+
+  if (error instanceof TypeError) {
+    return 'Falha de rede ao baixar a M3U. O host pode estar offline ou sem CORS para navegador.'
+  }
+
+  return error instanceof Error ? error.message : 'Falha ao carregar a M3U.'
+}
+
 export function App() {
   const [sourceTab, setSourceTab] = useState<'xtream' | 'm3u'>('xtream')
   const [xtream, setXtream] = useState<XtreamCredentials>(defaultXtream)
@@ -119,6 +151,8 @@ export function App() {
   })
   const selectedChannel =
     channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null
+  const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && window.location.protocol === 'https:'
+  const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
 
   useEffect(() => {
     const hashToken = takeTwitchTokenFromHash()
@@ -336,11 +370,7 @@ export function App() {
         })
       }
     } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? `${error.message} Se o provedor bloquear CORS, essa conexao nao abre direto no GitHub Pages.`
-          : 'Falha ao carregar o Xtream Codes.',
-      )
+      setLoadError(formatXtreamError(error, credentials.serverUrl))
     } finally {
       setIsLoading(false)
     }
@@ -363,11 +393,7 @@ export function App() {
         })
       }
     } catch (error) {
-      setLoadError(
-        error instanceof Error
-          ? `${error.message} O host precisa liberar CORS para leitura no navegador.`
-          : 'Falha ao carregar a M3U.',
-      )
+      setLoadError(formatM3UError(error, credentials.url))
     } finally {
       setIsLoading(false)
     }
@@ -448,6 +474,26 @@ export function App() {
                   onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))}
                 />
               </label>
+              {xtreamNeedsHttps ? (
+                <div class="alert warn compact-alert">
+                  <strong>Servidor em HTTP</strong>
+                  <span>
+                    O site publicado em GitHub Pages roda em HTTPS e o navegador bloqueia esse
+                    login. Tente a versao segura do mesmo host.
+                  </span>
+                  <div class="inline-actions">
+                    <button
+                      class="ghost-button compact"
+                      type="button"
+                      onClick={() =>
+                        setXtream((current) => ({ ...current, serverUrl: xtreamHttpsSuggestion }))
+                      }
+                    >
+                      Trocar para {xtreamHttpsSuggestion}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <div class="field-grid">
                 <label>
                   <span>Usuario</span>
