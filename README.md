@@ -80,6 +80,10 @@ Fluxo:
 
 Esse proxy reencaminha a API Xtream e também reescreve manifests `m3u8`, para que os segmentos continuem passando pelo mesmo domínio HTTPS.
 
+URL já publicada neste projeto:
+
+- `https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev`
+
 ## Twitch status oficial
 
 Se quiser badge `on/off` oficial da Twitch:

@@ -22,6 +22,7 @@ const EMBEDS_KEY = 'iptv-pages-hub.embeds'
 const SETTINGS_KEY = 'iptv-pages-hub.settings'
 const LAST_CHANNEL_KEY = 'iptv-pages-hub.last-channel'
 const FAVORITES_KEY = 'iptv-pages-hub.favorites'
+const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 
 interface AppSettings {
   rememberConnection: boolean
@@ -34,7 +35,7 @@ const defaultXtream: XtreamCredentials = {
   username: '',
   password: '',
   output: 'm3u8',
-  proxyUrl: '',
+  proxyUrl: DEFAULT_XTREAM_PROXY_URL,
 }
 const defaultM3U: M3UCredentials = { url: '' }
 const defaultSettings: AppSettings = {
@@ -118,6 +119,13 @@ function formatM3UError(error: unknown, url: string) {
   return error instanceof Error ? error.message : 'Falha ao carregar a M3U.'
 }
 
+function withDefaultProxy(credentials: XtreamCredentials) {
+  return {
+    ...credentials,
+    proxyUrl: credentials.proxyUrl?.trim() || DEFAULT_XTREAM_PROXY_URL,
+  }
+}
+
 export function App() {
   const [sourceTab, setSourceTab] = useState<'xtream' | 'm3u'>('xtream')
   const [xtream, setXtream] = useState<XtreamCredentials>(defaultXtream)
@@ -185,12 +193,12 @@ export function App() {
     const storedConnection = readJson<PersistedConnection | null>(CONNECTION_KEY, null)
     if (!storedConnection?.remember) return
 
-    setXtream(storedConnection.xtream)
+    setXtream(withDefaultProxy(storedConnection.xtream))
     setM3U(storedConnection.m3u)
     setSourceTab(storedConnection.kind)
 
     if (storedConnection.kind === 'xtream' && storedConnection.xtream.serverUrl) {
-      void connectXtream(storedConnection.xtream, false)
+      void connectXtream(withDefaultProxy(storedConnection.xtream), false)
     }
 
     if (storedConnection.kind === 'm3u' && storedConnection.m3u.url) {
@@ -374,22 +382,24 @@ export function App() {
 
   async function connectXtream(credentials = xtream, persist = true) {
     const controller = new AbortController()
+    const nextCredentials = withDefaultProxy(credentials)
     try {
       setIsLoading(true)
       setLoadError('')
-      const nextPlaylist = await fetchXtreamPlaylist(credentials, controller.signal)
+      const nextPlaylist = await fetchXtreamPlaylist(nextCredentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
+      setXtream(nextCredentials)
       if (persist) {
         saveJson<PersistedConnection>(CONNECTION_KEY, {
           kind: 'xtream',
           remember: settings.rememberConnection,
-          xtream: credentials,
+          xtream: nextCredentials,
           m3u,
         })
       }
     } catch (error) {
-      setLoadError(formatXtreamError(error, credentials.serverUrl))
+      setLoadError(formatXtreamError(error, nextCredentials.serverUrl))
     } finally {
       setIsLoading(false)
     }
@@ -591,8 +601,8 @@ export function App() {
               <span>Lembrar ultima conexao apenas neste navegador</span>
             </label>
             <p class="helper-copy">
-              Credenciais ficam locais no navegador. Para Xtream HTTP-only em Pages, use um proxy
-              HTTPS.
+              Credenciais ficam locais no navegador. O proxy HTTPS do app ja vem preenchido para
+              ajudar com Xtream em HTTP.
             </p>
           </div>
 
