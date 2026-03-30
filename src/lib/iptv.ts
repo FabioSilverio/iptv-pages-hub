@@ -7,6 +7,7 @@ export interface Channel {
   name: string
   group: string
   streamUrl: string
+  fallbackStreamUrl?: string
   logo?: string
   tvgId?: string
   categoryId?: string
@@ -26,7 +27,7 @@ export interface XtreamCredentials {
   serverUrl: string
   username: string
   password: string
-  output: 'm3u8' | 'ts'
+  output: 'auto' | 'm3u8' | 'ts'
   proxyUrl?: string
 }
 
@@ -201,7 +202,9 @@ export async function fetchXtreamPlaylist(
     categoryList.map((item) => [String(item.category_id ?? ''), item.category_name ?? FALLBACK_GROUP]),
   )
 
-  const extension = credentials.output === 'ts' ? 'ts' : 'm3u8'
+  const primaryExtension = credentials.output === 'ts' ? 'ts' : 'm3u8'
+  const fallbackExtension =
+    credentials.output === 'ts' ? 'm3u8' : 'ts'
   const channels = sortChannels(
     streamList
       .filter((item) => item.stream_id && item.stream_type !== 'radio')
@@ -209,14 +212,24 @@ export async function fetchXtreamPlaylist(
         const streamId = String(item.stream_id)
         const rawStreamUrl = `${serverUrl}/live/${encodeURIComponent(
           credentials.username.trim(),
-        )}/${encodeURIComponent(credentials.password.trim())}/${streamId}.${extension}`
+        )}/${encodeURIComponent(credentials.password.trim())}/${streamId}.${primaryExtension}`
+        const rawFallbackStreamUrl = `${serverUrl}/live/${encodeURIComponent(
+          credentials.username.trim(),
+        )}/${encodeURIComponent(credentials.password.trim())}/${streamId}.${fallbackExtension}`
         const streamUrl = proxyUrl ? buildProxyUrl(proxyUrl, rawStreamUrl) : rawStreamUrl
+        const fallbackStreamUrl =
+          primaryExtension === fallbackExtension
+            ? undefined
+            : proxyUrl
+              ? buildProxyUrl(proxyUrl, rawFallbackStreamUrl)
+              : rawFallbackStreamUrl
 
         return {
           id: createChannelId('xtream', streamId),
           name: safeChannelName(item.name),
           group: normalizeGroupName(categoryMap.get(String(item.category_id ?? ''))),
           streamUrl,
+          fallbackStreamUrl,
           logo: item.stream_icon || undefined,
           tvgId: item.epg_channel_id || undefined,
           categoryId: item.category_id || undefined,

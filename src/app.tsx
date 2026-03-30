@@ -2,6 +2,7 @@ import type Hls from 'hls.js'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
   buildTwitchAuthUrl,
+  type Channel,
   fetchCustomStatus,
   fetchM3UPlaylist,
   fetchTwitchStatuses,
@@ -24,6 +25,8 @@ const LAST_CHANNEL_KEY = 'iptv-pages-hub.last-channel'
 const FAVORITES_KEY = 'iptv-pages-hub.favorites'
 const FORM_STATE_KEY = 'iptv-pages-hub.form-state'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
+const INITIAL_CHANNEL_BATCH = 180
+const CHANNEL_BATCH_STEP = 240
 
 interface AppSettings {
   rememberConnection: boolean
@@ -41,7 +44,7 @@ const defaultXtream: XtreamCredentials = {
   serverUrl: '',
   username: '',
   password: '',
-  output: 'm3u8',
+  output: 'auto',
   proxyUrl: DEFAULT_XTREAM_PROXY_URL,
 }
 const defaultM3U: M3UCredentials = { url: '' }
@@ -152,6 +155,55 @@ function isLikelyHlsStream(streamUrl: string) {
   return target.includes('.m3u8') || target.includes('.m3u')
 }
 
+function isLikelyTsStream(streamUrl: string) {
+  return extractTargetStreamUrl(streamUrl).toLowerCase().includes('.ts')
+}
+
+function replaceStreamExtension(streamUrl: string, nextExtension: 'm3u8' | 'ts') {
+  try {
+    const url = new URL(streamUrl)
+    const nested = url.searchParams.get('url')
+
+    if (nested) {
+      const decoded = decodeURIComponent(nested).replace(/\.(m3u8|ts)(?=($|\?))/i, `.${nextExtension}`)
+      url.searchParams.set('url', decoded)
+      return url.toString()
+    }
+
+    return streamUrl.replace(/\.(m3u8|ts)(?=($|\?))/i, `.${nextExtension}`)
+  } catch {
+    return streamUrl.replace(/\.(m3u8|ts)(?=($|\?))/i, `.${nextExtension}`)
+  }
+}
+
+function buildPlaybackSources(channel: Channel) {
+  const sources = [
+    channel.streamUrl,
+    channel.fallbackStreamUrl,
+    isLikelyHlsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'ts') : undefined,
+    isLikelyTsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'm3u8') : undefined,
+  ].filter((value): value is string => Boolean(value))
+
+  return Array.from(new Set(sources)).map((url) => ({
+    url,
+    engine: isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
+  }))
+}
+
+async function probePlaybackSource(url: string, engine: 'hls' | 'mpegts' | 'native', signal: AbortSignal) {
+  const response = await fetch(url, {
+    method: 'GET',
+    cache: 'no-store',
+    signal,
+    headers: engine === 'mpegts' ? { Range: 'bytes=0-2047' } : undefined,
+  })
+
+  return {
+    ok: response.ok,
+    status: response.status,
+  }
+}
+
 async function attemptPlayback(video: HTMLVideoElement, stateOnBlocked: string) {
   try {
     await video.play()
@@ -178,10 +230,22 @@ export function App() {
   const [loadError, setLoadError] = useState('')
   const [playerError, setPlayerError] = useState('')
   const [playerState, setPlayerState] = useState('Pronto para tocar')
+  const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const mpegtsRef = useRef<{
+    attachMediaElement: (mediaElement: HTMLMediaElement) => void
+    detachMediaElement: () => void
+    destroy: () => void
+    load: () => void
+    play: () => Promise<void> | void
+    pause: () => void
+    unload: () => void
+    on: (event: string, listener: (...args: unknown[]) => void) => void
+  } | null>(null)
 
   const channels = playlist?.channels ?? []
+  const favoriteIds = useMemo(() => new Set(favorites), [favorites])
   const visibleChannels = useMemo(
     () =>
       channels
@@ -196,22 +260,31 @@ export function App() {
           return matchesGroup && matchesSearch
         })
         .sort((left, right) => {
-          const leftFavorite = favorites.includes(left.id) ? 1 : 0
-          const rightFavorite = favorites.includes(right.id) ? 1 : 0
+          const leftFavorite = favoriteIds.has(left.id) ? 1 : 0
+          const rightFavorite = favoriteIds.has(right.id) ? 1 : 0
           if (leftFavorite !== rightFavorite) return rightFavorite - leftFavorite
           const groupCompare = left.group.localeCompare(right.group, 'pt-BR')
           if (groupCompare !== 0) return groupCompare
           return left.name.localeCompare(right.name, 'pt-BR')
         }),
-    [channels, favorites, groupFilter, searchTerm],
+    [channels, favoriteIds, groupFilter, searchTerm],
+  )
+  const displayedChannels = useMemo(
+    () => visibleChannels.slice(0, visibleCount),
+    [visibleChannels, visibleCount],
   )
 
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
     [channels, selectedChannelId, visibleChannels],
   )
+  const hasMoreChannels = displayedChannels.length < visibleChannels.length
   const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
+
+  useEffect(() => {
+    setVisibleCount(INITIAL_CHANNEL_BATCH)
+  }, [playlist?.id, groupFilter, searchTerm])
 
   useEffect(() => {
     const hashToken = takeTwitchTokenFromHash()
@@ -255,7 +328,9 @@ export function App() {
     if (!video || !selectedChannel) return
 
     let cancelled = false
-    const prefersHls = isLikelyHlsStream(selectedChannel.streamUrl)
+    let suppressMediaError = false
+    const probeController = new AbortController()
+    const playbackSources = buildPlaybackSources(selectedChannel)
 
     setPlayerError('')
     setPlayerState('Conectando stream...')
@@ -263,6 +338,13 @@ export function App() {
     if (hlsRef.current) {
       hlsRef.current.destroy()
       hlsRef.current = null
+    }
+    if (mpegtsRef.current) {
+      mpegtsRef.current.pause()
+      mpegtsRef.current.unload()
+      mpegtsRef.current.detachMediaElement()
+      mpegtsRef.current.destroy()
+      mpegtsRef.current = null
     }
 
     video.pause()
@@ -274,6 +356,7 @@ export function App() {
     const onStalled = () => setPlayerState('Reconectando...')
     const onCanPlay = () => setPlayerState((current) => (current === 'Ao vivo' ? current : 'Stream pronta'))
     const onError = () => {
+      if (suppressMediaError || cancelled) return
       setPlayerError('Nao foi possivel abrir a stream deste canal no navegador.')
       setPlayerState('Falha no player')
     }
@@ -284,78 +367,228 @@ export function App() {
     video.addEventListener('canplay', onCanPlay)
     video.addEventListener('error', onError)
 
-    const boot = async () => {
-      if (prefersHls) {
+    const cleanupPlayers = () => {
+      suppressMediaError = true
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+      if (mpegtsRef.current) {
+        mpegtsRef.current.pause()
+        mpegtsRef.current.unload()
+        mpegtsRef.current.detachMediaElement()
+        mpegtsRef.current.destroy()
+        mpegtsRef.current = null
+      }
+      video.pause()
+      video.removeAttribute('src')
+      video.load()
+      window.setTimeout(() => {
+        suppressMediaError = false
+      }, 0)
+    }
+
+    const failWithProbe = async (url: string, fallbackMessage: string) => {
+      try {
+        const probe = await probePlaybackSource(
+          url,
+          isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
+          probeController.signal,
+        )
+        if (cancelled) return
+        setPlayerError(
+          probe.ok
+            ? fallbackMessage
+            : `O provedor recusou a stream com HTTP ${probe.status}. Esse canal nao abriu nem com fallback.`,
+        )
+      } catch {
+        if (!cancelled) setPlayerError(fallbackMessage)
+      }
+      if (!cancelled) setPlayerState('Falha no player')
+    }
+
+    const trySource = async (sourceIndex: number): Promise<void> => {
+      const source = playbackSources[sourceIndex]
+      if (!source) {
+        await failWithProbe(
+          selectedChannel.streamUrl,
+          'Nao foi possivel abrir esta stream nem com os fallbacks disponiveis.',
+        )
+        return
+      }
+
+      cleanupPlayers()
+      if (cancelled) return
+
+      setPlayerState(
+        source.engine === 'hls'
+          ? sourceIndex === 0
+            ? 'Abrindo HLS otimizado...'
+            : 'HLS falhou, tentando fallback TS...'
+          : source.engine === 'mpegts'
+            ? sourceIndex === 0
+              ? 'Abrindo stream TS otimizada...'
+              : 'Tentando fallback TS...'
+            : 'Tentando modo nativo...',
+      )
+
+      if (source.engine === 'hls') {
+        try {
+          const probe = await probePlaybackSource(source.url, source.engine, probeController.signal)
+          if (!probe.ok) {
+            await trySource(sourceIndex + 1)
+            return
+          }
+        } catch {
+          await trySource(sourceIndex + 1)
+          return
+        }
+
         const { default: HlsClient } = await import('hls.js')
         if (cancelled) return
 
-        if (HlsClient.isSupported()) {
-          const hls = new HlsClient({
-            enableWorker: true,
-            lowLatencyMode: true,
-            backBufferLength: 20,
-            liveSyncDurationCount: 2,
-            liveMaxLatencyDurationCount: 6,
-            maxBufferLength: 12,
-            maxMaxBufferLength: 24,
-            manifestLoadingTimeOut: 12000,
-            levelLoadingTimeOut: 12000,
-            fragLoadingTimeOut: 15000,
-            manifestLoadingMaxRetry: 4,
-            levelLoadingMaxRetry: 4,
-            fragLoadingMaxRetry: 5,
-          })
-
-          hlsRef.current = hls
-          hls.attachMedia(video)
-          hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(selectedChannel.streamUrl))
-          hls.on(HlsClient.Events.MANIFEST_PARSED, async () => {
-            const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
-            if (!cancelled) setPlayerState(nextState)
-          })
-          hls.on(HlsClient.Events.ERROR, (_, data) => {
-            if (!data.fatal) return
-            if (data.type === HlsClient.ErrorTypes.NETWORK_ERROR) {
-              setPlayerState('Reconectando stream...')
-              hls.startLoad()
-              return
-            }
-            if (data.type === HlsClient.ErrorTypes.MEDIA_ERROR) {
-              setPlayerState('Recuperando player...')
-              hls.recoverMediaError()
-              return
-            }
-            setPlayerError(`Erro fatal no player: ${data.details}`)
-            setPlayerState('Erro fatal')
-          })
+        if (!HlsClient.isSupported()) {
+          await trySource(sourceIndex + 1)
           return
         }
+
+        let retriedNetwork = false
+        const hls = new HlsClient({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 16,
+          liveSyncDurationCount: 2,
+          liveMaxLatencyDurationCount: 5,
+          maxBufferLength: 10,
+          maxMaxBufferLength: 20,
+          manifestLoadingTimeOut: 9000,
+          levelLoadingTimeOut: 9000,
+          fragLoadingTimeOut: 12000,
+          manifestLoadingMaxRetry: 2,
+          levelLoadingMaxRetry: 2,
+          fragLoadingMaxRetry: 2,
+        })
+
+        hlsRef.current = hls
+        hls.attachMedia(video)
+        hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(source.url))
+        hls.on(HlsClient.Events.MANIFEST_PARSED, async () => {
+          const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
+          if (!cancelled) setPlayerState(nextState)
+        })
+        hls.on(HlsClient.Events.ERROR, async (_, data) => {
+          if (!data.fatal) return
+
+          if (data.type === HlsClient.ErrorTypes.NETWORK_ERROR && !retriedNetwork) {
+            retriedNetwork = true
+            setPlayerState('Reconectando HLS...')
+            hls.startLoad()
+            return
+          }
+
+          if (data.type === HlsClient.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError()
+            return
+          }
+
+          await trySource(sourceIndex + 1)
+        })
+        return
       }
 
-      if (video.canPlayType('application/vnd.apple.mpegurl') || video.canPlayType('video/mp2t') || !prefersHls) {
-        video.src = selectedChannel.streamUrl
+      if (source.engine === 'mpegts') {
+        try {
+          const probe = await probePlaybackSource(source.url, source.engine, probeController.signal)
+          if (!probe.ok) {
+            await trySource(sourceIndex + 1)
+            return
+          }
+        } catch {
+          await trySource(sourceIndex + 1)
+          return
+        }
+
+        const imported = await import('mpegts.js')
+        const mpegts = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
+        const moduleApi = mpegts as {
+          getFeatureList?: () => { mseLivePlayback?: boolean }
+          createPlayer?: (
+            mediaDataSource: { type: string; isLive: boolean; url: string; cors: boolean },
+            config: Record<string, unknown>,
+          ) => {
+            attachMediaElement: (mediaElement: HTMLMediaElement) => void
+            detachMediaElement: () => void
+            destroy: () => void
+            load: () => void
+            play: () => Promise<void> | void
+            pause: () => void
+            unload: () => void
+            on: (event: string, listener: (...args: unknown[]) => void) => void
+          }
+        }
+
+        if (!moduleApi.getFeatureList?.().mseLivePlayback || !moduleApi.createPlayer) {
+          await trySource(sourceIndex + 1)
+          return
+        }
+
+        const player = moduleApi.createPlayer(
+          {
+            type: 'mse',
+            isLive: true,
+            url: source.url,
+            cors: true,
+          },
+          {
+            enableWorker: true,
+            enableStashBuffer: false,
+            isLive: true,
+            lazyLoad: false,
+            liveBufferLatencyChasing: true,
+            liveBufferLatencyMaxLatency: 1.6,
+            liveBufferLatencyMinRemain: 0.35,
+            liveSync: true,
+            liveSyncTargetLatency: 0.9,
+            liveSyncMaxLatency: 1.8,
+            liveSyncPlaybackRate: 1.12,
+            autoCleanupSourceBuffer: true,
+            autoCleanupMaxBackwardDuration: 12,
+            autoCleanupMinBackwardDuration: 6,
+          },
+        )
+
+        mpegtsRef.current = player
+        player.attachMediaElement(video)
+        player.load()
+        player.on('error', async () => {
+          await trySource(sourceIndex + 1)
+        })
         const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
         if (!cancelled) setPlayerState(nextState)
         return
       }
 
-      setPlayerError('Seu navegador nao conseguiu abrir essa stream com o modo otimizado.')
-      setPlayerState('Falha no player')
+      if (video.canPlayType('application/vnd.apple.mpegurl') || video.canPlayType('video/mp2t')) {
+        video.src = source.url
+        const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
+        if (!cancelled) setPlayerState(nextState)
+        return
+      }
+
+      await trySource(sourceIndex + 1)
     }
 
-    void boot()
+    void trySource(0)
 
     return () => {
       cancelled = true
+      probeController.abort()
       video.removeEventListener('waiting', onWaiting)
       video.removeEventListener('playing', onPlaying)
       video.removeEventListener('stalled', onStalled)
       video.removeEventListener('canplay', onCanPlay)
       video.removeEventListener('error', onError)
-      if (hlsRef.current) {
-        hlsRef.current.destroy()
-        hlsRef.current = null
-      }
+      cleanupPlayers()
     }
   }, [selectedChannel?.id])
 
@@ -562,8 +795,9 @@ export function App() {
               </div>
               <label>
                 <span>Saida para browser</span>
-                <select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'm3u8' | 'ts' }))}>
-                  <option value="m3u8">m3u8 (recomendado)</option>
+                <select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'auto' | 'm3u8' | 'ts' }))}>
+                  <option value="auto">auto (testa melhor caminho)</option>
+                  <option value="m3u8">m3u8</option>
                   <option value="ts">ts</option>
                 </select>
               </label>
@@ -624,17 +858,21 @@ export function App() {
               <span>Buscar</span>
               <input placeholder="Nome, grupo ou EPG" value={searchTerm} onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)} />
             </label>
-            <label>
+            <label class="group-field">
               <span>Grupo</span>
-              <select value={groupFilter} onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}>
+              <select class="group-select" value={groupFilter} onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}>
                 <option value="Todos">Todos</option>
                 {(playlist?.groups ?? []).map((group) => <option key={group} value={group}>{group}</option>)}
               </select>
             </label>
           </div>
+          <div class="group-summary">
+            <span class="pill active-group">{groupFilter}</span>
+            <span class="helper-copy">{playlist?.groups.length || 0} grupos disponiveis</span>
+          </div>
 
           <div class="channel-list">
-            {visibleChannels.length ? visibleChannels.map((channel) => (
+            {displayedChannels.length ? displayedChannels.map((channel) => (
               <div
                 key={channel.id}
                 class={channel.id === selectedChannel?.id ? 'channel-card active' : 'channel-card'}
@@ -676,6 +914,13 @@ export function App() {
               </div>
             )}
           </div>
+          {hasMoreChannels ? (
+            <div class="load-more-row">
+              <button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>
+                Carregar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)} canais
+              </button>
+            </div>
+          ) : null}
         </section>
 
         <section class="panel player-panel">
