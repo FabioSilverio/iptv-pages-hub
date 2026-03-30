@@ -177,31 +177,28 @@ function replaceStreamExtension(streamUrl: string, nextExtension: 'm3u8' | 'ts')
 }
 
 function buildPlaybackSources(channel: Channel) {
-  const sources = [
-    channel.streamUrl,
-    channel.fallbackStreamUrl,
-    isLikelyHlsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'ts') : undefined,
-    isLikelyTsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'm3u8') : undefined,
-  ].filter((value): value is string => Boolean(value))
+  const primaryIsHls = isLikelyHlsStream(channel.streamUrl)
+  const fallbackIsTs = Boolean(channel.fallbackStreamUrl && isLikelyTsStream(channel.fallbackStreamUrl))
+  const orderedSources = primaryIsHls && fallbackIsTs
+    ? [
+        channel.fallbackStreamUrl,
+        channel.streamUrl,
+        replaceStreamExtension(channel.streamUrl, 'ts'),
+        replaceStreamExtension(channel.streamUrl, 'm3u8'),
+      ]
+    : [
+        channel.streamUrl,
+        channel.fallbackStreamUrl,
+        isLikelyHlsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'ts') : undefined,
+        isLikelyTsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'm3u8') : undefined,
+      ]
+
+  const sources = orderedSources.filter((value): value is string => Boolean(value))
 
   return Array.from(new Set(sources)).map((url) => ({
     url,
     engine: isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
   }))
-}
-
-async function probePlaybackSource(url: string, engine: 'hls' | 'mpegts' | 'native', signal: AbortSignal) {
-  const response = await fetch(url, {
-    method: 'GET',
-    cache: 'no-store',
-    signal,
-    headers: engine === 'mpegts' ? { Range: 'bytes=0-2047' } : undefined,
-  })
-
-  return {
-    ok: response.ok,
-    status: response.status,
-  }
 }
 
 async function attemptPlayback(video: HTMLVideoElement, stateOnBlocked: string) {
@@ -326,11 +323,14 @@ export function App() {
   useEffect(() => {
     const video = videoRef.current
     if (!video || !selectedChannel) return
+    const media: HTMLVideoElement = video
 
     let cancelled = false
     let suppressMediaError = false
-    const probeController = new AbortController()
     const playbackSources = buildPlaybackSources(selectedChannel)
+    let sourceAttempt = 0
+    let successLocked = false
+    let fallbackTimer = 0
 
     setPlayerError('')
     setPlayerState('Conectando stream...')
@@ -347,27 +347,31 @@ export function App() {
       mpegtsRef.current = null
     }
 
-    video.pause()
-    video.removeAttribute('src')
-    video.load()
+    media.pause()
+    media.removeAttribute('src')
+    media.load()
 
     const onWaiting = () => setPlayerState('Aguardando buffer...')
     const onPlaying = () => setPlayerState('Ao vivo')
     const onStalled = () => setPlayerState('Reconectando...')
-    const onCanPlay = () => setPlayerState((current) => (current === 'Ao vivo' ? current : 'Stream pronta'))
+    const onCanPlay = () => {
+      window.clearTimeout(fallbackTimer)
+      successLocked = true
+      setPlayerState((current) => (current === 'Ao vivo' ? current : 'Stream pronta'))
+    }
     const onError = () => {
       if (suppressMediaError || cancelled) return
-      setPlayerError('Nao foi possivel abrir a stream deste canal no navegador.')
-      setPlayerState('Falha no player')
+      void trySource(sourceAttempt + 1, 'O canal falhou no modo atual, tentando outro formato...')
     }
 
-    video.addEventListener('waiting', onWaiting)
-    video.addEventListener('playing', onPlaying)
-    video.addEventListener('stalled', onStalled)
-    video.addEventListener('canplay', onCanPlay)
-    video.addEventListener('error', onError)
+    media.addEventListener('waiting', onWaiting)
+    media.addEventListener('playing', onPlaying)
+    media.addEventListener('stalled', onStalled)
+    media.addEventListener('canplay', onCanPlay)
+    media.addEventListener('error', onError)
 
     const cleanupPlayers = () => {
+      window.clearTimeout(fallbackTimer)
       suppressMediaError = true
       if (hlsRef.current) {
         hlsRef.current.destroy()
@@ -380,43 +384,32 @@ export function App() {
         mpegtsRef.current.destroy()
         mpegtsRef.current = null
       }
-      video.pause()
-      video.removeAttribute('src')
-      video.load()
+        media.pause()
+        media.removeAttribute('src')
+        media.load()
       window.setTimeout(() => {
         suppressMediaError = false
       }, 0)
     }
 
-    const failWithProbe = async (url: string, fallbackMessage: string) => {
-      try {
-        const probe = await probePlaybackSource(
-          url,
-          isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
-          probeController.signal,
-        )
-        if (cancelled) return
-        setPlayerError(
-          probe.ok
-            ? fallbackMessage
-            : `O provedor recusou a stream com HTTP ${probe.status}. Esse canal nao abriu nem com fallback.`,
-        )
-      } catch {
-        if (!cancelled) setPlayerError(fallbackMessage)
-      }
-      if (!cancelled) setPlayerState('Falha no player')
+    const finishFailure = (message: string) => {
+      window.clearTimeout(fallbackTimer)
+      successLocked = false
+      setPlayerError(message)
+      setPlayerState('Falha no player')
     }
 
-    const trySource = async (sourceIndex: number): Promise<void> => {
+    async function trySource(sourceIndex: number, failureReason?: string): Promise<void> {
       const source = playbackSources[sourceIndex]
       if (!source) {
-        await failWithProbe(
-          selectedChannel.streamUrl,
-          'Nao foi possivel abrir esta stream nem com os fallbacks disponiveis.',
+        finishFailure(
+          failureReason || 'Nao foi possivel abrir esta stream nem com os fallbacks disponiveis.',
         )
         return
       }
 
+      sourceAttempt = sourceIndex
+      successLocked = false
       cleanupPlayers()
       if (cancelled) return
 
@@ -432,23 +425,20 @@ export function App() {
             : 'Tentando modo nativo...',
       )
 
-      if (source.engine === 'hls') {
-        try {
-          const probe = await probePlaybackSource(source.url, source.engine, probeController.signal)
-          if (!probe.ok) {
-            await trySource(sourceIndex + 1)
-            return
-          }
-        } catch {
-          await trySource(sourceIndex + 1)
-          return
-        }
+      fallbackTimer = window.setTimeout(() => {
+        if (cancelled || successLocked || sourceAttempt !== sourceIndex) return
+        void trySource(
+          sourceIndex + 1,
+          'O provedor nao respondeu a tempo no formato atual. Tentando outro formato...',
+        )
+      }, source.engine === 'mpegts' ? 9000 : 8000)
 
+      if (source.engine === 'hls') {
         const { default: HlsClient } = await import('hls.js')
         if (cancelled) return
 
         if (!HlsClient.isSupported()) {
-          await trySource(sourceIndex + 1)
+          void trySource(sourceIndex + 1, 'HLS nao disponivel aqui. Mudando para outro formato...')
           return
         }
 
@@ -470,44 +460,38 @@ export function App() {
         })
 
         hlsRef.current = hls
-        hls.attachMedia(video)
+        hls.attachMedia(media)
         hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(source.url))
         hls.on(HlsClient.Events.MANIFEST_PARSED, async () => {
-          const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
+          window.clearTimeout(fallbackTimer)
+          successLocked = true
+          const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
           if (!cancelled) setPlayerState(nextState)
         })
         hls.on(HlsClient.Events.ERROR, async (_, data) => {
           if (!data.fatal) return
 
-          if (data.type === HlsClient.ErrorTypes.NETWORK_ERROR && !retriedNetwork) {
-            retriedNetwork = true
-            setPlayerState('Reconectando HLS...')
-            hls.startLoad()
-            return
+            if (data.type === HlsClient.ErrorTypes.NETWORK_ERROR && !retriedNetwork) {
+              retriedNetwork = true
+              setPlayerState('Reconectando HLS...')
+              hls.startLoad()
+              return
           }
 
-          if (data.type === HlsClient.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError()
-            return
-          }
+            if (data.type === HlsClient.ErrorTypes.MEDIA_ERROR) {
+              hls.recoverMediaError()
+              return
+            }
 
-          await trySource(sourceIndex + 1)
+          void trySource(
+            sourceIndex + 1,
+            `HLS recusado: ${data.details || 'erro fatal no stream.'}`,
+          )
         })
         return
       }
 
       if (source.engine === 'mpegts') {
-        try {
-          const probe = await probePlaybackSource(source.url, source.engine, probeController.signal)
-          if (!probe.ok) {
-            await trySource(sourceIndex + 1)
-            return
-          }
-        } catch {
-          await trySource(sourceIndex + 1)
-          return
-        }
-
         const imported = await import('mpegts.js')
         const mpegts = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
         const moduleApi = mpegts as {
@@ -528,7 +512,7 @@ export function App() {
         }
 
         if (!moduleApi.getFeatureList?.().mseLivePlayback || !moduleApi.createPlayer) {
-          await trySource(sourceIndex + 1)
+          void trySource(sourceIndex + 1, 'TS otimizado nao disponivel neste navegador.')
           return
         }
 
@@ -558,36 +542,40 @@ export function App() {
         )
 
         mpegtsRef.current = player
-        player.attachMediaElement(video)
+        player.attachMediaElement(media)
         player.load()
         player.on('error', async () => {
-          await trySource(sourceIndex + 1)
+          void trySource(sourceIndex + 1, 'Fluxo TS recusado no player otimizado.')
         })
-        const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
+        window.clearTimeout(fallbackTimer)
+        successLocked = true
+        const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
         if (!cancelled) setPlayerState(nextState)
         return
       }
 
-      if (video.canPlayType('application/vnd.apple.mpegurl') || video.canPlayType('video/mp2t')) {
-        video.src = source.url
-        const nextState = await attemptPlayback(video, 'Clique em play para iniciar')
+      if (media.canPlayType('application/vnd.apple.mpegurl') || media.canPlayType('video/mp2t')) {
+        media.src = source.url
+        window.clearTimeout(fallbackTimer)
+        successLocked = true
+        const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
         if (!cancelled) setPlayerState(nextState)
         return
       }
 
-      await trySource(sourceIndex + 1)
+      void trySource(sourceIndex + 1, 'Formato nativo indisponivel. Tentando outro caminho...')
     }
 
     void trySource(0)
 
     return () => {
       cancelled = true
-      probeController.abort()
-      video.removeEventListener('waiting', onWaiting)
-      video.removeEventListener('playing', onPlaying)
-      video.removeEventListener('stalled', onStalled)
-      video.removeEventListener('canplay', onCanPlay)
-      video.removeEventListener('error', onError)
+      window.clearTimeout(fallbackTimer)
+      media.removeEventListener('waiting', onWaiting)
+      media.removeEventListener('playing', onPlaying)
+      media.removeEventListener('stalled', onStalled)
+      media.removeEventListener('canplay', onCanPlay)
+      media.removeEventListener('error', onError)
       cleanupPlayers()
     }
   }, [selectedChannel?.id])
