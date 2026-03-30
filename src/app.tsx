@@ -431,7 +431,7 @@ export function App() {
           sourceIndex + 1,
           'O provedor nao respondeu a tempo no formato atual. Tentando outro formato...',
         )
-      }, source.engine === 'mpegts' ? 9000 : 8000)
+      }, source.engine === 'mpegts' ? 14000 : 12000)
 
       if (source.engine === 'hls') {
         const { default: HlsClient } = await import('hls.js')
@@ -445,18 +445,18 @@ export function App() {
         let retriedNetwork = false
         const hls = new HlsClient({
           enableWorker: true,
-          lowLatencyMode: true,
-          backBufferLength: 16,
-          liveSyncDurationCount: 2,
-          liveMaxLatencyDurationCount: 5,
-          maxBufferLength: 10,
-          maxMaxBufferLength: 20,
-          manifestLoadingTimeOut: 9000,
-          levelLoadingTimeOut: 9000,
-          fragLoadingTimeOut: 12000,
-          manifestLoadingMaxRetry: 2,
-          levelLoadingMaxRetry: 2,
-          fragLoadingMaxRetry: 2,
+          lowLatencyMode: false,
+          backBufferLength: 30,
+          liveSyncDurationCount: 4,
+          liveMaxLatencyDurationCount: 12,
+          maxBufferLength: 30,
+          maxMaxBufferLength: 60,
+          manifestLoadingTimeOut: 15000,
+          levelLoadingTimeOut: 15000,
+          fragLoadingTimeOut: 20000,
+          manifestLoadingMaxRetry: 4,
+          levelLoadingMaxRetry: 4,
+          fragLoadingMaxRetry: 5,
         })
 
         hlsRef.current = hls
@@ -525,19 +525,15 @@ export function App() {
           },
           {
             enableWorker: true,
-            enableStashBuffer: false,
+            enableStashBuffer: true,
+            stashInitialSize: 786432,
             isLive: true,
             lazyLoad: false,
-            liveBufferLatencyChasing: true,
-            liveBufferLatencyMaxLatency: 1.6,
-            liveBufferLatencyMinRemain: 0.35,
-            liveSync: true,
-            liveSyncTargetLatency: 0.9,
-            liveSyncMaxLatency: 1.8,
-            liveSyncPlaybackRate: 1.12,
+            liveBufferLatencyChasing: false,
+            liveSync: false,
             autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 12,
-            autoCleanupMinBackwardDuration: 6,
+            autoCleanupMaxBackwardDuration: 40,
+            autoCleanupMinBackwardDuration: 20,
           },
         )
 
