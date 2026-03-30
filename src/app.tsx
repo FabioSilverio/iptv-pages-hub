@@ -40,6 +40,13 @@ interface PersistedFormState {
   m3u: M3UCredentials
 }
 
+interface ConnectionTransferBundle {
+  version: 1
+  sourceTab: 'xtream' | 'm3u'
+  xtream: XtreamCredentials
+  m3u: M3UCredentials
+}
+
 const defaultXtream: XtreamCredentials = {
   serverUrl: '',
   username: '',
@@ -225,10 +232,12 @@ export function App() {
   const [statusMap, setStatusMap] = useState<Record<string, EmbedStatus>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
+  const [transferMessage, setTransferMessage] = useState('')
   const [playerError, setPlayerError] = useState('')
   const [playerState, setPlayerState] = useState('Pronto para tocar')
   const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const mpegtsRef = useRef<{
     attachMediaElement: (mediaElement: HTMLMediaElement) => void
@@ -649,6 +658,7 @@ export function App() {
     try {
       setIsLoading(true)
       setLoadError('')
+      setTransferMessage('')
       const nextPlaylist = await fetchXtreamPlaylist(nextCredentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
@@ -667,6 +677,7 @@ export function App() {
     try {
       setIsLoading(true)
       setLoadError('')
+      setTransferMessage('')
       const nextPlaylist = await fetchM3UPlaylist(credentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
@@ -700,6 +711,57 @@ export function App() {
 
   function toggleFavorite(channelId: string) {
     setFavorites((current) => (current.includes(channelId) ? current.filter((id) => id !== channelId) : [channelId, ...current]))
+  }
+
+  function exportConnectionBundle() {
+    const payload: ConnectionTransferBundle = {
+      version: 1,
+      sourceTab,
+      xtream,
+      m3u,
+    }
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    })
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = `iptv-pages-hub-${sourceTab}-backup.json`
+    link.click()
+    URL.revokeObjectURL(objectUrl)
+    setLoadError('')
+    setTransferMessage('Configuracao exportada. Leve esse arquivo para o PC do trabalho e importe la.')
+  }
+
+  async function importConnectionBundle(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    try {
+      const rawText = await file.text()
+      const payload = JSON.parse(rawText) as Partial<ConnectionTransferBundle>
+      const nextSourceTab = payload.sourceTab === 'm3u' ? 'm3u' : 'xtream'
+      const nextXtream = withDefaultProxy(payload.xtream ? payload.xtream as XtreamCredentials : defaultXtream)
+      const nextM3U = mergeM3U(payload.m3u)
+
+      setSourceTab(nextSourceTab)
+      setXtream(nextXtream)
+      setM3U(nextM3U)
+      saveJson<PersistedFormState>(FORM_STATE_KEY, {
+        sourceTab: nextSourceTab,
+        xtream: nextXtream,
+        m3u: nextM3U,
+      })
+      setLoadError('')
+      setTransferMessage('Configuracao importada neste navegador. Agora e so conectar a playlist.')
+    } catch {
+      setTransferMessage('')
+      setLoadError('Nao consegui importar esse arquivo. Use um backup gerado pelo botao Exportar.')
+    } finally {
+      input.value = ''
+    }
   }
 
   return (
@@ -807,6 +869,12 @@ export function App() {
               <span>Lembrar e tentar reconectar neste navegador</span>
             </label>
             <p class="helper-copy">Os campos ficam salvos automaticamente aqui no browser, mesmo antes de conectar.</p>
+            <div class="button-row">
+              <button class="ghost-button" type="button" onClick={exportConnectionBundle}>Exportar conexao</button>
+              <button class="ghost-button" type="button" onClick={() => fileInputRef.current?.click()}>Importar conexao</button>
+              <input ref={fileInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importConnectionBundle} />
+            </div>
+            {transferMessage ? <p class="helper-copy">{transferMessage}</p> : null}
           </div>
 
           {loadError ? <p class="alert error">{loadError}</p> : null}
