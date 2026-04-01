@@ -952,7 +952,7 @@ export function App() {
             </div>
 
             <div class={activeSurface === 'iptv' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'iptv' ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setActiveSurface('iptv')}>
+              <button class={activeSurface === 'iptv' ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setSurface('iptv')}>
                 <span>Lista IPTV</span>
                 <small>{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} canais</small>
               </button>
@@ -978,7 +978,7 @@ export function App() {
             </div>
 
             <div class={activeSurface === 'twitch' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'twitch' ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => { setActiveSurface('twitch'); if (twitchEmbeds[0]) setSelectedEmbedId(twitchEmbeds[0].id) }}>
+              <button class={activeSurface === 'twitch' ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>
                 <span>Feeds Twitch</span>
                 <small>{twitchEmbeds.length} cadastrados</small>
               </button>
@@ -986,7 +986,7 @@ export function App() {
             </div>
 
             <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'kick' ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => { setActiveSurface('kick'); if (kickEmbeds[0]) setSelectedEmbedId(kickEmbeds[0].id) }}>
+              <button class={activeSurface === 'kick' ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>
                 <span>Feeds Kick</span>
                 <small>{kickEmbeds.length} cadastrados</small>
               </button>
@@ -995,28 +995,28 @@ export function App() {
           </div>
         </aside>
 
-        <div class="feed-strip">
-          {activeSurface === 'iptv' ? (
-            <>
-              <span class="feed-pill active">{groupFilter}</span>
-              <span class="feed-pill">{favorites.length} favoritos</span>
-              <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
-              <span class="feed-pill soft">{playerState}</span>
-            </>
-          ) : (
-            activeFeedItems.map((item) => {
-              const status = statusMap[item.channel.toLowerCase()]
-              return (
-                <button class={activeEmbed?.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => activateEmbed(item)}>
-                  <span>{item.channel}</span>
-                  <strong>{status?.label || 'OFF'}</strong>
-                </button>
-              )
-            })
-          )}
-        </div>
-
         <section class="panel stage-panel">
+          <div class="feed-strip stage-feed-strip">
+            {activeSurface === 'iptv' ? (
+              <>
+                <span class="feed-pill active">{groupFilter}</span>
+                <span class="feed-pill">{favorites.length} favoritos</span>
+                <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
+                <span class="feed-pill soft">{playerState}</span>
+              </>
+            ) : (
+              activeFeedItems.map((item) => {
+                const status = statusMap[item.channel.toLowerCase()]
+                return (
+                  <button class={activeEmbed?.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => activateEmbed(item)}>
+                    <span>{item.channel}</span>
+                    <strong>{status?.label || 'OFF'}</strong>
+                  </button>
+                )
+              })
+            )}
+          </div>
+
           {activeSurface === 'iptv' ? (
             <>
               <div class="panel-heading">
