@@ -361,18 +361,51 @@ export function App() {
     () => embeds.filter((item) => item.platform === 'kick'),
     [embeds],
   )
+  const sortEmbedsByStatus = (items: EmbedStream[]) =>
+    [...items].sort((left, right) => {
+      const leftState = statusMap[left.channel.toLowerCase()]?.state
+      const rightState = statusMap[right.channel.toLowerCase()]?.state
+      const leftScore = leftState === 'online' ? 2 : leftState === 'offline' ? 1 : 0
+      const rightScore = rightState === 'online' ? 2 : rightState === 'offline' ? 1 : 0
+
+      if (leftScore !== rightScore) return rightScore - leftScore
+      return left.title.localeCompare(right.title, 'pt-BR')
+    })
+  const sortedTwitchEmbeds = useMemo(
+    () => sortEmbedsByStatus(twitchEmbeds),
+    [statusMap, twitchEmbeds],
+  )
+  const sortedKickEmbeds = useMemo(
+    () => sortEmbedsByStatus(kickEmbeds),
+    [kickEmbeds, statusMap],
+  )
+  const liveEmbeds = useMemo(
+    () =>
+      [...sortedTwitchEmbeds, ...sortedKickEmbeds].filter(
+        (item) => statusMap[item.channel.toLowerCase()]?.state === 'online',
+      ),
+    [sortedKickEmbeds, sortedTwitchEmbeds, statusMap],
+  )
+  const onlineTwitchCount = useMemo(
+    () => sortedTwitchEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
+    [sortedTwitchEmbeds, statusMap],
+  )
+  const onlineKickCount = useMemo(
+    () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
+    [sortedKickEmbeds, statusMap],
+  )
 
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
     [channels, selectedChannelId, visibleChannels],
   )
   const activeEmbed = useMemo(() => {
-    const pool = activeSurface === 'twitch' ? twitchEmbeds : activeSurface === 'kick' ? kickEmbeds : []
+    const pool = activeSurface === 'twitch' ? sortedTwitchEmbeds : activeSurface === 'kick' ? sortedKickEmbeds : []
     return pool.find((item) => item.id === selectedEmbedId) ?? pool[0] ?? null
-  }, [activeSurface, kickEmbeds, selectedEmbedId, twitchEmbeds])
+  }, [activeSurface, selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds])
   const activeFeedItems = useMemo(
-    () => activeSurface === 'twitch' ? twitchEmbeds : activeSurface === 'kick' ? kickEmbeds : [],
-    [activeSurface, kickEmbeds, twitchEmbeds],
+    () => activeSurface === 'twitch' ? sortedTwitchEmbeds : activeSurface === 'kick' ? sortedKickEmbeds : [],
+    [activeSurface, sortedKickEmbeds, sortedTwitchEmbeds],
   )
   const selectedNewsLink = useMemo(
     () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
@@ -1057,6 +1090,34 @@ export function App() {
       <main class="hub-grid">
         <aside class="panel sidebar-panel">
           <div class="sidebar-stack">
+            <div class="sidebar-section active">
+              <button class="section-toggle active" type="button" onClick={() => setSurface(liveEmbeds[0]?.platform || 'twitch')}>
+                <span>Ao vivo agora</span>
+                <small>{liveEmbeds.length ? `${liveEmbeds.length} feeds live` : 'Nenhum feed live'}</small>
+              </button>
+              <div class="sidebar-content">
+                <div class="sidebar-list">
+                  {liveEmbeds.length ? liveEmbeds.map((item) => {
+                    const status = statusMap[item.channel.toLowerCase()]
+                    return (
+                      <button
+                        key={item.id}
+                        class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'}
+                        type="button"
+                        onClick={() => activateEmbed(item)}
+                      >
+                        <div class="list-row-copy">
+                          <strong>{item.title}</strong>
+                          <span>{item.platform === 'twitch' ? 'Twitch' : 'Kick'} · {item.channel}</span>
+                        </div>
+                        <span class={statusTone(status?.state || 'online', item.platform)}>{status?.label || 'Ao vivo'}</span>
+                      </button>
+                    )
+                  }) : <div class="empty-state compact-empty"><strong>Nenhum feed ao vivo agora.</strong><span>Twitch e Kick aparecem aqui automaticamente quando o status vier como online.</span></div>}
+                </div>
+              </div>
+            </div>
+
             <div class="sidebar-section">
               <button class={showConnectionPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowConnectionPanel((current) => !current)}>
                 <span>Conexao e backup</span>
@@ -1122,17 +1183,17 @@ export function App() {
             <div class={activeSurface === 'twitch' ? 'sidebar-section active' : 'sidebar-section'}>
               <button class={activeSurface === 'twitch' ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>
                 <span>Feeds Twitch</span>
-                <small>{twitchEmbeds.length} cadastrados</small>
+                <small>{onlineTwitchCount} ao vivo · {twitchEmbeds.length} total</small>
               </button>
-              {activeSurface === 'twitch' ? <div class="sidebar-content"><div class="sidebar-list">{twitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
+              <div class="sidebar-content"><div class="sidebar-list">{sortedTwitchEmbeds.length ? sortedTwitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Twitch cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div>
             </div>
 
             <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
               <button class={activeSurface === 'kick' ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>
                 <span>Feeds Kick</span>
-                <small>{kickEmbeds.length} cadastrados</small>
+                <small>{onlineKickCount} ao vivo · {kickEmbeds.length} total</small>
               </button>
-              {activeSurface === 'kick' ? <div class="sidebar-content"><div class="sidebar-list">{kickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
+              <div class="sidebar-content"><div class="sidebar-list">{sortedKickEmbeds.length ? sortedKickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Kick cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div>
             </div>
 
             <div class={activeSurface === 'news' ? 'sidebar-section active' : 'sidebar-section'}>
@@ -1264,7 +1325,7 @@ export function App() {
                 <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
               </div>
               <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
-              <p class="helper-copy">Twitch usa OAuth do navegador. Kick agora aceita `Client ID + secret` de um app oficial para ligar o selo `ao vivo/offline`, sempre salvo so neste navegador.</p>
+              <p class="helper-copy">Twitch usa OAuth do navegador. Kick precisa de `Client ID + secret` de um app oficial para ligar o selo `ao vivo/offline`; sem isso, o embed abre, mas a barra lateral nao consegue confirmar o status real.</p>
             </div>
             <div class="subtle-card stack compact-card">
               <div class="field-grid compact">

@@ -445,38 +445,41 @@ export async function fetchKickStatuses(
     return {}
   }
 
-  const params = new URLSearchParams()
-  channels.forEach((channel) => params.append('slug', channel))
+  const entries = await Promise.all(
+    channels.map(async (channel) => {
+      const targetUrl = `https://api.kick.com/public/v1/channels/${encodeURIComponent(channel)}`
+      const requestUrl = proxyBase ? buildProxyUrl(proxyBase, targetUrl) : targetUrl
+      const response = await fetch(requestUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      })
 
-  const targetUrl = `https://api.kick.com/public/v1/channels?${params.toString()}`
-  const requestUrl = proxyBase ? buildProxyUrl(proxyBase, targetUrl) : targetUrl
-  const response = await fetch(requestUrl, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error('Falha ao consultar o status da Kick.')
-  }
-
-  const payload = (await response.json()) as {
-    data?: Array<{
-      slug?: string
-      stream?: {
-        is_live?: boolean
-        viewer_count?: number
+      if (!response.ok) {
+        throw new Error('Falha ao consultar o status da Kick.')
       }
-      stream_title?: string
-    }>
-  }
+
+      const payload = (await response.json()) as {
+        data?: {
+          slug?: string
+          stream?: {
+            is_live?: boolean
+            viewer_count?: number
+          }
+          stream_title?: string
+        }
+      }
+
+      return payload.data
+    }),
+  )
 
   const liveMap = new Map(
-    (payload.data ?? []).map((item) => {
-      const key = item.slug?.toLowerCase() ?? ''
-      const isLive = Boolean(item.stream?.is_live)
-      const viewerCount = item.stream?.viewer_count
+    entries.filter(Boolean).map((item) => {
+      const key = item!.slug?.toLowerCase() ?? ''
+      const isLive = Boolean(item!.stream?.is_live)
+      const viewerCount = item!.stream?.viewer_count
 
       return [
         key,
@@ -484,8 +487,8 @@ export async function fetchKickStatuses(
           label: isLive ? 'Ao vivo' : 'Offline',
           state: isLive ? ('online' as const) : ('offline' as const),
           detail: isLive
-            ? item.stream_title
-              ? `${item.stream_title}${viewerCount ? ` • ${viewerCount} assistindo` : ''}`
+            ? item!.stream_title
+              ? `${item!.stream_title}${viewerCount ? ` • ${viewerCount} assistindo` : ''}`
               : 'Canal ao vivo na Kick.'
             : 'Canal offline no ultimo refresh.',
           updatedAt: new Date().toISOString(),
