@@ -5,9 +5,12 @@ import {
   buildTwitchAuthUrl,
   type Channel,
   fetchCustomStatus,
+  fetchKickAppAccessToken,
+  fetchKickStatuses,
   fetchM3UPlaylist,
   fetchTwitchStatuses,
   fetchXtreamPlaylist,
+  KICK_STATUS_HELP,
   takeTwitchTokenFromHash,
   TWITCH_STATUS_HELP,
   type EmbedStatus,
@@ -47,6 +50,10 @@ interface AppSettings {
   rememberConnection: boolean
   twitchClientId: string
   twitchAccessToken: string
+  kickClientId: string
+  kickClientSecret: string
+  kickAppAccessToken: string
+  kickAppTokenExpiresAt: string
 }
 
 interface PersistedFormState {
@@ -74,6 +81,10 @@ const defaultSettings: AppSettings = {
   rememberConnection: true,
   twitchClientId: '',
   twitchAccessToken: '',
+  kickClientId: '',
+  kickClientSecret: '',
+  kickAppAccessToken: '',
+  kickAppTokenExpiresAt: '',
 }
 const embedDefaults: EmbedStream[] = [
   { id: crypto.randomUUID(), platform: 'twitch', channel: 'shroud', title: 'Twitch destaque' },
@@ -127,11 +138,25 @@ function saveJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value))
 }
 
-function statusTone(state: LiveState) {
-  if (state === 'online') return 'status-chip online'
-  if (state === 'offline') return 'status-chip offline'
-  if (state === 'error') return 'status-chip error'
-  return 'status-chip unknown'
+function classNames(...values: Array<string | false | null | undefined>) {
+  return values.filter(Boolean).join(' ')
+}
+
+function statusTone(state: LiveState, platform?: 'twitch' | 'kick') {
+  if (state === 'online') return classNames('status-chip', 'online', platform)
+  if (state === 'offline') return classNames('status-chip', 'offline', platform)
+  if (state === 'error') return classNames('status-chip', 'error', platform)
+  return classNames('status-chip', 'unknown', platform)
+}
+
+function feedPillTone(platform?: 'twitch' | 'kick', active = false) {
+  return classNames('feed-pill', 'button-pill', platform, active && 'active')
+}
+
+function isTokenFresh(expiresAt?: string) {
+  if (!expiresAt) return false
+  const expiry = Date.parse(expiresAt)
+  return Number.isFinite(expiry) && expiry > Date.now() + 30_000
 }
 
 function buildKickEmbedUrl(channel: string) {
@@ -753,6 +778,59 @@ export function App() {
         })
       }
 
+      const kickChannels = embeds
+        .filter((item) => item.platform === 'kick')
+        .map((item) => item.channel.trim().toLowerCase())
+        .filter(Boolean)
+
+      if (kickChannels.length && settings.kickClientId && settings.kickClientSecret) {
+        try {
+          let accessToken = settings.kickAppAccessToken
+          let expiresAt = settings.kickAppTokenExpiresAt
+
+          if (!accessToken || !isTokenFresh(expiresAt)) {
+            const token = await fetchKickAppAccessToken(
+              settings.kickClientId,
+              settings.kickClientSecret,
+              DEFAULT_XTREAM_PROXY_URL,
+            )
+            accessToken = token.accessToken
+            expiresAt = token.expiresAt
+
+            if (isActive) {
+              setSettings((current) => {
+                const next = {
+                  ...current,
+                  kickAppAccessToken: accessToken,
+                  kickAppTokenExpiresAt: expiresAt,
+                }
+                saveJson(SETTINGS_KEY, next)
+                return next
+              })
+            }
+          }
+
+          Object.assign(
+            nextStatus,
+            await fetchKickStatuses(kickChannels, accessToken, DEFAULT_XTREAM_PROXY_URL),
+          )
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : KICK_STATUS_HELP
+          kickChannels.forEach((channel) => {
+            nextStatus[channel] = { label: 'Erro', state: 'error', detail, updatedAt: new Date().toISOString() }
+          })
+        }
+      } else {
+        kickChannels.forEach((channel) => {
+          nextStatus[channel] = {
+            label: 'Sem auth',
+            state: 'unknown',
+            detail: KICK_STATUS_HELP,
+            updatedAt: new Date().toISOString(),
+          }
+        })
+      }
+
       await Promise.all(
         embeds
           .filter((item) => item.statusEndpoint?.trim())
@@ -769,19 +847,6 @@ export function App() {
             }
           }),
       )
-
-      embeds
-        .filter((item) => item.platform === 'kick' && !item.statusEndpoint?.trim())
-        .forEach((item) => {
-          const key = item.channel.toLowerCase()
-          if (nextStatus[key]) return
-          nextStatus[key] = {
-            label: 'Sem API',
-            state: 'unknown',
-            detail: 'Kick permite embed oficial, mas o status em Pages precisa de endpoint externo.',
-            updatedAt: new Date().toISOString(),
-          }
-        })
 
       if (isActive) setStatusMap(nextStatus)
     }
@@ -1059,7 +1124,7 @@ export function App() {
                 <span>Feeds Twitch</span>
                 <small>{twitchEmbeds.length} cadastrados</small>
               </button>
-              {activeSurface === 'twitch' ? <div class="sidebar-content"><div class="sidebar-list">{twitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
+              {activeSurface === 'twitch' ? <div class="sidebar-content"><div class="sidebar-list">{twitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
             </div>
 
             <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
@@ -1067,7 +1132,7 @@ export function App() {
                 <span>Feeds Kick</span>
                 <small>{kickEmbeds.length} cadastrados</small>
               </button>
-              {activeSurface === 'kick' ? <div class="sidebar-content"><div class="sidebar-list">{kickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
+              {activeSurface === 'kick' ? <div class="sidebar-content"><div class="sidebar-list">{kickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
             </div>
 
             <div class={activeSurface === 'news' ? 'sidebar-section active' : 'sidebar-section'}>
@@ -1100,7 +1165,7 @@ export function App() {
               activeFeedItems.map((item) => {
                 const status = statusMap[item.channel.toLowerCase()]
                 return (
-                  <button class={activeEmbed?.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => activateEmbed(item)}>
+                  <button class={feedPillTone(item.platform, activeEmbed?.id === item.id)} key={item.id} type="button" onClick={() => activateEmbed(item)}>
                     <span>{item.channel}</span>
                     <strong>{status?.label || 'OFF'}</strong>
                   </button>
@@ -1172,7 +1237,7 @@ export function App() {
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
-                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
+                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
               </div>
               <div class="player-frame embed-stage-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={activeSurface === 'twitch' ? buildTwitchEmbedUrl(activeEmbed.channel) : buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} /></div>
               <div class="player-meta">
@@ -1194,8 +1259,12 @@ export function App() {
                 <label><span>Twitch Client ID</span><input placeholder="Para status oficial da Twitch" value={settings.twitchClientId} onInput={(event) => setSettings((current) => ({ ...current, twitchClientId: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 <label><span>Twitch token</span><input placeholder="Preenchido via OAuth" value={settings.twitchAccessToken} onInput={(event) => setSettings((current) => ({ ...current, twitchAccessToken: (event.currentTarget as HTMLInputElement).value }))} /></label>
               </div>
+              <div class="field-grid compact">
+                <label><span>Kick Client ID</span><input placeholder="App da Kick para status oficial" value={settings.kickClientId} onInput={(event) => setSettings((current) => ({ ...current, kickClientId: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
+                <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
+              </div>
               <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
-              <p class="helper-copy">Agora o palco abre um tipo de feed por vez. IPTV, Twitch e Kick alternam sem competir pela tela.</p>
+              <p class="helper-copy">Twitch usa OAuth do navegador. Kick agora aceita `Client ID + secret` de um app oficial para ligar o selo `ao vivo/offline`, sempre salvo so neste navegador.</p>
             </div>
             <div class="subtle-card stack compact-card">
               <div class="field-grid compact">
@@ -1210,7 +1279,7 @@ export function App() {
           <div class="feed-chip-grid">
             {embeds.map((item) => {
               const status = statusMap[item.channel.toLowerCase()]
-              return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
+              return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
             })}
           </div>
         </section>

@@ -57,6 +57,11 @@ export interface EmbedStatus {
   updatedAt: string
 }
 
+export interface KickAppToken {
+  accessToken: string
+  expiresAt: string
+}
+
 interface XtreamCategory {
   category_id?: string
   category_name?: string
@@ -75,6 +80,8 @@ const FALLBACK_GROUP = 'Sem grupo'
 
 export const TWITCH_STATUS_HELP =
   'Status oficial requer Client ID da Twitch e um token OAuth do navegador.'
+export const KICK_STATUS_HELP =
+  'Status oficial da Kick requer Client ID e Client Secret de um app Kick, guardados localmente no navegador.'
 
 export function normalizeServerUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
@@ -378,6 +385,121 @@ export async function fetchTwitchStatuses(
       return [
         key,
         online || {
+          label: 'Offline',
+          state: 'offline' as const,
+          detail: 'Canal offline no ultimo refresh.',
+          updatedAt: new Date().toISOString(),
+        },
+      ]
+    }),
+  )
+}
+
+export async function fetchKickAppAccessToken(
+  clientId: string,
+  clientSecret: string,
+  proxyBase?: string,
+): Promise<KickAppToken> {
+  const targetUrl = 'https://id.kick.com/oauth/token'
+  const requestUrl = proxyBase ? buildProxyUrl(proxyBase, targetUrl) : targetUrl
+  const body = new URLSearchParams({
+    client_id: clientId.trim(),
+    client_secret: clientSecret.trim(),
+    grant_type: 'client_credentials',
+  })
+
+  const response = await fetch(requestUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    throw new Error('Falha ao gerar o App Access Token da Kick.')
+  }
+
+  const payload = (await response.json()) as {
+    access_token?: string
+    expires_in?: number
+  }
+
+  if (!payload.access_token) {
+    throw new Error('A Kick nao devolveu um access token valido.')
+  }
+
+  return {
+    accessToken: payload.access_token,
+    expiresAt: new Date(Date.now() + Math.max((payload.expires_in || 3600) - 60, 60) * 1000).toISOString(),
+  }
+}
+
+export async function fetchKickStatuses(
+  channels: string[],
+  accessToken: string,
+  proxyBase?: string,
+): Promise<Record<string, EmbedStatus>> {
+  if (!channels.length) {
+    return {}
+  }
+
+  const params = new URLSearchParams()
+  channels.forEach((channel) => params.append('slug', channel))
+
+  const targetUrl = `https://api.kick.com/public/v1/channels?${params.toString()}`
+  const requestUrl = proxyBase ? buildProxyUrl(proxyBase, targetUrl) : targetUrl
+  const response = await fetch(requestUrl, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error('Falha ao consultar o status da Kick.')
+  }
+
+  const payload = (await response.json()) as {
+    data?: Array<{
+      slug?: string
+      stream?: {
+        is_live?: boolean
+        viewer_count?: number
+      }
+      stream_title?: string
+    }>
+  }
+
+  const liveMap = new Map(
+    (payload.data ?? []).map((item) => {
+      const key = item.slug?.toLowerCase() ?? ''
+      const isLive = Boolean(item.stream?.is_live)
+      const viewerCount = item.stream?.viewer_count
+
+      return [
+        key,
+        {
+          label: isLive ? 'Ao vivo' : 'Offline',
+          state: isLive ? ('online' as const) : ('offline' as const),
+          detail: isLive
+            ? item.stream_title
+              ? `${item.stream_title}${viewerCount ? ` • ${viewerCount} assistindo` : ''}`
+              : 'Canal ao vivo na Kick.'
+            : 'Canal offline no ultimo refresh.',
+          updatedAt: new Date().toISOString(),
+        },
+      ]
+    }),
+  )
+
+  return Object.fromEntries(
+    channels.map((channel) => {
+      const key = channel.toLowerCase()
+      return [
+        key,
+        liveMap.get(key) || {
           label: 'Offline',
           state: 'offline' as const,
           detail: 'Canal offline no ultimo refresh.',

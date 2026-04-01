@@ -369,6 +369,42 @@ input:focus, select:focus {
 .status-chip.unknown { color: #f8fafc; background: rgba(148, 163, 184, 0.28); }
 .status-chip.error { color: #fff7ed; background: rgba(249, 115, 22, 0.88); }
 
+.status-chip.twitch.online {
+  color: #faf5ff;
+  background: rgba(168, 85, 247, 0.9);
+}
+
+.status-chip.twitch.offline {
+  color: #f3e8ff;
+  background: rgba(88, 28, 135, 0.92);
+}
+
+.status-chip.twitch.unknown {
+  color: #f3e8ff;
+  background: rgba(126, 34, 206, 0.26);
+}
+
+.status-chip.kick.online {
+  color: #052e16;
+  background: rgba(74, 222, 128, 0.94);
+}
+
+.status-chip.kick.offline {
+  color: #dcfce7;
+  background: rgba(20, 83, 45, 0.96);
+}
+
+.status-chip.kick.unknown {
+  color: #dcfce7;
+  background: rgba(22, 163, 74, 0.22);
+  border-color: rgba(74, 222, 128, 0.22);
+}
+
+.status-chip.kick.error {
+  color: #f7fee7;
+  background: rgba(101, 163, 13, 0.82);
+}
+
 @media (max-width: 1240px) {
   .layout-grid { grid-template-columns: 1fr; }
   .connect-panel, .embed-panel, .player-panel { grid-row: auto; grid-column: auto; position: static; }
@@ -869,6 +905,28 @@ input:focus, select:focus {
   background: rgba(184, 95, 238, 0.82);
   color: #fff;
   font-size: 0.84rem;
+}
+
+.feed-pill.twitch {
+  background: rgba(184, 95, 238, 0.82);
+  border-color: rgba(197, 118, 235, 0.35);
+}
+
+.feed-pill.twitch.active {
+  background: linear-gradient(135deg, #a855f7, #f472b6);
+  border-color: rgba(216, 126, 255, 0.72);
+}
+
+.feed-pill.kick {
+  background: rgba(22, 163, 74, 0.82);
+  border-color: rgba(74, 222, 128, 0.32);
+  color: #f0fdf4;
+}
+
+.feed-pill.kick.active {
+  background: linear-gradient(135deg, #22c55e, #86efac);
+  border-color: rgba(134, 239, 172, 0.72);
+  color: #052e16;
 }
 
 .feed-pill strong {
