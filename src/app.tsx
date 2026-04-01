@@ -231,6 +231,7 @@ export function App() {
   const [playerError, setPlayerError] = useState('')
   const [playerState, setPlayerState] = useState('Pronto para tocar')
   const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
+  const [clockTick, setClockTick] = useState(() => Date.now())
   const [activeSurface, setActiveSurface] = useState<MediaSurface>(
     () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
   )
@@ -298,6 +299,27 @@ export function App() {
     const pool = activeSurface === 'twitch' ? twitchEmbeds : activeSurface === 'kick' ? kickEmbeds : []
     return pool.find((item) => item.id === selectedEmbedId) ?? pool[0] ?? null
   }, [activeSurface, kickEmbeds, selectedEmbedId, twitchEmbeds])
+  const activeFeedItems = useMemo(
+    () => activeSurface === 'twitch' ? twitchEmbeds : activeSurface === 'kick' ? kickEmbeds : [],
+    [activeSurface, kickEmbeds, twitchEmbeds],
+  )
+  const dashboardTimes = useMemo(() => {
+    const now = new Date(clockTick)
+    const zones = [
+      ['Brasil', 'America/Sao_Paulo'],
+      ['LA', 'America/Los_Angeles'],
+      ['NY', 'America/New_York'],
+    ] as const
+
+    return zones.map(([label, timeZone]) => ({
+      label,
+      value: new Intl.DateTimeFormat('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone,
+      }).format(now),
+    }))
+  }, [clockTick])
   const hasMoreChannels = displayedChannels.length < visibleChannels.length
   const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
@@ -305,6 +327,11 @@ export function App() {
   useEffect(() => {
     setVisibleCount(INITIAL_CHANNEL_BATCH)
   }, [playlist?.id, groupFilter, searchTerm])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockTick(Date.now()), 60000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     const hashToken = takeTwitchTokenFromHash()
@@ -745,14 +772,28 @@ export function App() {
     if (settings.twitchClientId.trim()) window.location.href = buildTwitchAuthUrl(settings.twitchClientId)
   }
 
+  function setSurface(surface: MediaSurface) {
+    setActiveSurface(surface)
+
+    if (surface === 'twitch') {
+      setSelectedEmbedId((current) => current && twitchEmbeds.some((item) => item.id === current) ? current : (twitchEmbeds[0]?.id ?? null))
+      return
+    }
+
+    if (surface === 'kick') {
+      setSelectedEmbedId((current) => current && kickEmbeds.some((item) => item.id === current) ? current : (kickEmbeds[0]?.id ?? null))
+      return
+    }
+  }
+
   function activateIPTV(channelId?: string) {
     if (channelId) setSelectedChannelId(channelId)
-    setActiveSurface('iptv')
+    setSurface('iptv')
   }
 
   function activateEmbed(embed: EmbedStream) {
     setSelectedEmbedId(embed.id)
-    setActiveSurface(embed.platform)
+    setSurface(embed.platform)
     setPlayerError('')
     setPlayerState(embed.platform === 'twitch' ? 'Twitch em foco' : 'Kick em foco')
   }
@@ -853,32 +894,21 @@ export function App() {
       <header class="topbar">
         <div>
           <p class="eyebrow">IPTV Pages Hub</p>
-          <h1>Hub de playback com sidebar, palco unico e troca rapida entre IPTV, Twitch e Kick.</h1>
+          <h1>links e canais ao vivo num painel rapido e limpo</h1>
+          <p class="hero-subcopy">Horario no Brasil, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
         </div>
         <div class="topbar-stats">
-          <div class="stat-card">
-            <span>Modo ativo</span>
-            <strong>{activeSurface === 'iptv' ? 'IPTV' : activeSurface === 'twitch' ? 'Twitch' : 'Kick'}</strong>
-          </div>
-          <div class="stat-card">
-            <span>Biblioteca</span>
-            <strong>{activeSurface === 'iptv' ? `${new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} canais` : `${activeSurface === 'twitch' ? twitchEmbeds.length : kickEmbeds.length} feeds`}</strong>
-          </div>
-          <div class="stat-card">
-            <span>Player</span>
-            <strong>{playerState}</strong>
-          </div>
+          {dashboardTimes.map((entry) => (
+            <div class="stat-card time-card" key={entry.label}>
+              <span>{entry.label}</span>
+              <strong>{entry.value}</strong>
+            </div>
+          ))}
         </div>
         <div class="surface-switch hero-surface-switch">
-          <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setActiveSurface('iptv')}>IPTV</button>
-          <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => {
-            setActiveSurface('twitch')
-            if (twitchEmbeds[0]) setSelectedEmbedId(twitchEmbeds[0].id)
-          }}>Twitch</button>
-          <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => {
-            setActiveSurface('kick')
-            if (kickEmbeds[0]) setSelectedEmbedId(kickEmbeds[0].id)
-          }}>Kick</button>
+          <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+          <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
+          <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
         </div>
       </header>
 
@@ -964,6 +994,27 @@ export function App() {
             </div>
           </div>
         </aside>
+
+        <div class="feed-strip">
+          {activeSurface === 'iptv' ? (
+            <>
+              <span class="feed-pill active">{groupFilter}</span>
+              <span class="feed-pill">{favorites.length} favoritos</span>
+              <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
+              <span class="feed-pill soft">{playerState}</span>
+            </>
+          ) : (
+            activeFeedItems.map((item) => {
+              const status = statusMap[item.channel.toLowerCase()]
+              return (
+                <button class={activeEmbed?.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => activateEmbed(item)}>
+                  <span>{item.channel}</span>
+                  <strong>{status?.label || 'OFF'}</strong>
+                </button>
+              )
+            })
+          )}
+        </div>
 
         <section class="panel stage-panel">
           {activeSurface === 'iptv' ? (
