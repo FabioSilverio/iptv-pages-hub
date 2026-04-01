@@ -30,7 +30,15 @@ const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.wo
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
 
-type MediaSurface = 'iptv' | 'twitch' | 'kick'
+type MediaSurface = 'iptv' | 'twitch' | 'kick' | 'news'
+
+interface NewsLink {
+  id: string
+  name: string
+  href: string
+  note: string
+  source: string
+}
 
 interface AppSettings {
   rememberConnection: boolean
@@ -67,6 +75,36 @@ const defaultSettings: AppSettings = {
 const embedDefaults: EmbedStream[] = [
   { id: crypto.randomUUID(), platform: 'twitch', channel: 'shroud', title: 'Twitch destaque' },
   { id: crypto.randomUUID(), platform: 'kick', channel: 'xqc', title: 'Kick destaque' },
+]
+const newsLinks: NewsLink[] = [
+  {
+    id: 'bbc-news',
+    name: 'BBC News',
+    href: 'https://livenewsof.com/bbc-world-news-live-stream/',
+    note: 'Link informado por voce para a transmissao ao vivo da BBC News.',
+    source: 'LiveNewsof',
+  },
+  {
+    id: 'sky-news',
+    name: 'Sky News',
+    href: 'https://news.sky.com/watch-live',
+    note: 'Stream oficial ao vivo da Sky News.',
+    source: 'Sky News',
+  },
+  {
+    id: 'nbc-news-now',
+    name: 'NBC News NOW',
+    href: 'https://www.nbcnews.com/now',
+    note: 'Canal de noticias 24/7 da NBC News.',
+    source: 'NBC News',
+  },
+  {
+    id: 'cbs-news-247',
+    name: 'CBS News 24/7',
+    href: 'https://www.cbsnews.com/video/live-cbsnews/',
+    note: 'Feed oficial da CBS News 24/7.',
+    source: 'CBS News',
+  },
 ]
 
 function readJson<T>(key: string, fallback: T) {
@@ -235,6 +273,7 @@ export function App() {
   const [activeSurface, setActiveSurface] = useState<MediaSurface>(
     () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
   )
+  const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
   const [selectedEmbedId, setSelectedEmbedId] = useState<string | null>(
     () => window.localStorage.getItem(SELECTED_EMBED_KEY),
   )
@@ -302,6 +341,10 @@ export function App() {
   const activeFeedItems = useMemo(
     () => activeSurface === 'twitch' ? twitchEmbeds : activeSurface === 'kick' ? kickEmbeds : [],
     [activeSurface, kickEmbeds, twitchEmbeds],
+  )
+  const selectedNewsLink = useMemo(
+    () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
+    [selectedNewsId],
   )
   const dashboardTimes = useMemo(() => {
     const now = new Date(clockTick)
@@ -896,7 +939,7 @@ export function App() {
         <div>
           <p class="eyebrow">IPTV Pages Hub</p>
           <h1>links e canais ao vivo num painel rapido e limpo</h1>
-          <p class="hero-subcopy">Horario no Brasil, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
+          <p class="hero-subcopy">Horario no Brasil, em Londres, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
         </div>
         <div class="topbar-stats">
           {dashboardTimes.map((entry) => (
@@ -910,6 +953,7 @@ export function App() {
           <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
           <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
           <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
+          <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
         </div>
       </header>
 
@@ -993,6 +1037,14 @@ export function App() {
               </button>
               {activeSurface === 'kick' ? <div class="sidebar-content"><div class="sidebar-list">{kickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
             </div>
+
+            <div class={activeSurface === 'news' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={activeSurface === 'news' ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setSurface('news')}>
+                <span>Noticias ao vivo</span>
+                <small>{newsLinks.length} links</small>
+              </button>
+              {activeSurface === 'news' ? <div class="sidebar-content"><div class="sidebar-list">{newsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
+            </div>
           </div>
         </aside>
 
@@ -1005,6 +1057,13 @@ export function App() {
                 <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
                 <span class="feed-pill soft">{playerState}</span>
               </>
+            ) : activeSurface === 'news' ? (
+              newsLinks.map((item) => (
+                <button class={selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
+                  <span>{item.name}</span>
+                  <strong>LIVE</strong>
+                </button>
+              ))
             ) : (
               activeFeedItems.map((item) => {
                 const status = statusMap[item.channel.toLowerCase()]
@@ -1030,6 +1089,33 @@ export function App() {
                 <div class="subtle-card compact-card"><p class="section-tag">URL da stream</p><h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao de canal'}</h3></div>
               </div>
               {playerError ? <p class="alert error">{playerError}</p> : null}
+            </>
+          ) : activeSurface === 'news' ? (
+            <>
+              <div class="panel-heading">
+                <div><p class="section-tag">Noticias ao vivo</p><h2>{selectedNewsLink.name}</h2></div>
+                <div class="pill-row"><span class="pill">{selectedNewsLink.source}</span><a class="ghost-button compact" href={selectedNewsLink.href} rel="noreferrer" target="_blank">Abrir transmissao</a></div>
+              </div>
+              <div class="subtle-card compact-card news-stage-card">
+                <h3>{selectedNewsLink.name}</h3>
+                <p class="helper-copy">{selectedNewsLink.note}</p>
+                <p class="helper-copy">Essa aba foi feita para atalho rapido: voce escolhe a emissora e abre a live em outra guia, sem pesar o site.</p>
+                <div class="feed-chip-grid news-link-grid">
+                  {newsLinks.map((item) => (
+                    <article class="feed-chip-card" key={item.id}>
+                      <div>
+                        <p class="section-tag">{item.source}</p>
+                        <h3>{item.name}</h3>
+                        <p class="helper-copy">{item.note}</p>
+                      </div>
+                      <div class="feed-chip-actions">
+                        <button class="ghost-button compact" type="button" onClick={() => setSelectedNewsId(item.id)}>Selecionar</button>
+                        <a class="ghost-button compact" href={item.href} rel="noreferrer" target="_blank">Abrir link</a>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </div>
             </>
           ) : activeEmbed ? (
             <>

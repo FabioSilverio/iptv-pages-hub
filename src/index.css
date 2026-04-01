@@ -1218,3 +1218,12 @@ input:focus, select:focus {
     justify-self: start;
   }
 }
+
+.news-stage-card {
+  display: grid;
+  gap: 12px;
+}
+
+.news-link-grid {
+  margin-top: 6px;
+}
