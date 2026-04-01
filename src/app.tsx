@@ -38,6 +38,7 @@ interface NewsLink {
   href: string
   note: string
   source: string
+  embedUrl?: string
 }
 
 interface AppSettings {
@@ -90,6 +91,7 @@ const newsLinks: NewsLink[] = [
     href: 'https://news.sky.com/watch-live',
     note: 'Stream oficial ao vivo da Sky News.',
     source: 'Sky News',
+    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UCoMdktPbSTixAyNGwb-UYkQ',
   },
   {
     id: 'nbc-news-now',
@@ -97,6 +99,7 @@ const newsLinks: NewsLink[] = [
     href: 'https://www.nbcnews.com/now',
     note: 'Canal de noticias 24/7 da NBC News.',
     source: 'NBC News',
+    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UCeY0bbntWzzVIaj2z3QigXg',
   },
   {
     id: 'cbs-news-247',
@@ -104,6 +107,7 @@ const newsLinks: NewsLink[] = [
     href: 'https://www.cbsnews.com/video/live-cbsnews/',
     note: 'Feed oficial da CBS News 24/7.',
     source: 'CBS News',
+    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UC8p1vwvWtl6T73JiExfWs1g',
   },
 ]
 
@@ -957,6 +961,15 @@ export function App() {
         </div>
       </header>
 
+      <div class="news-shortcuts">
+        {newsLinks.map((item) => (
+          <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
+            <span>{item.name}</span>
+            <strong>{item.embedUrl ? 'PLAY' : 'LINK'}</strong>
+          </button>
+        ))}
+      </div>
+
       <main class="hub-grid">
         <aside class="panel sidebar-panel">
           <div class="sidebar-stack">
@@ -1096,25 +1109,35 @@ export function App() {
                 <div><p class="section-tag">Noticias ao vivo</p><h2>{selectedNewsLink.name}</h2></div>
                 <div class="pill-row"><span class="pill">{selectedNewsLink.source}</span><a class="ghost-button compact" href={selectedNewsLink.href} rel="noreferrer" target="_blank">Abrir transmissao</a></div>
               </div>
-              <div class="subtle-card compact-card news-stage-card">
-                <h3>{selectedNewsLink.name}</h3>
-                <p class="helper-copy">{selectedNewsLink.note}</p>
-                <p class="helper-copy">Essa aba foi feita para atalho rapido: voce escolhe a emissora e abre a live em outra guia, sem pesar o site.</p>
-                <div class="feed-chip-grid news-link-grid">
-                  {newsLinks.map((item) => (
-                    <article class="feed-chip-card" key={item.id}>
-                      <div>
-                        <p class="section-tag">{item.source}</p>
-                        <h3>{item.name}</h3>
-                        <p class="helper-copy">{item.note}</p>
-                      </div>
-                      <div class="feed-chip-actions">
-                        <button class="ghost-button compact" type="button" onClick={() => setSelectedNewsId(item.id)}>Selecionar</button>
-                        <a class="ghost-button compact" href={item.href} rel="noreferrer" target="_blank">Abrir link</a>
-                      </div>
-                    </article>
-                  ))}
+              {selectedNewsLink.embedUrl ? (
+                <>
+                  <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsLink.embedUrl} title={selectedNewsLink.name} /></div>
+                  <div class="player-meta">
+                    <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Origem</p><h3>{selectedNewsLink.source}</h3><p class="helper-copy">Se o embed for bloqueado pela emissora ou pela sua regiao, use o botao para abrir a transmissao original.</p></div>
+                  </div>
+                </>
+              ) : (
+                <div class="subtle-card compact-card news-stage-card">
+                  <h3>{selectedNewsLink.name}</h3>
+                  <p class="helper-copy">{selectedNewsLink.note}</p>
+                  <p class="helper-copy">Esse canal abre em outra guia para manter o site leve quando nao existe embed confiavel dentro da pagina.</p>
                 </div>
+              )}
+              <div class="feed-chip-grid news-link-grid">
+                {newsLinks.map((item) => (
+                  <article class="feed-chip-card" key={item.id}>
+                    <div>
+                      <p class="section-tag">{item.source}</p>
+                      <h3>{item.name}</h3>
+                      <p class="helper-copy">{item.note}</p>
+                    </div>
+                    <div class="feed-chip-actions">
+                      <button class="ghost-button compact" type="button" onClick={() => setSelectedNewsId(item.id)}>Selecionar</button>
+                      <a class="ghost-button compact" href={item.href} rel="noreferrer" target="_blank">Abrir link</a>
+                    </div>
+                  </article>
+                ))}
               </div>
             </>
           ) : activeEmbed ? (

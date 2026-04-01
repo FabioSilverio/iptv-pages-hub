@@ -1227,3 +1227,14 @@ input:focus, select:focus {
 .news-link-grid {
   margin-top: 6px;
 }
+
+.news-shortcuts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: -4px 0 14px;
+}
+
+.news-embed-frame {
+  min-height: 420px;
+}
