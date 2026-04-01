@@ -30,6 +30,7 @@ const FAVORITES_KEY = 'iptv-pages-hub.favorites'
 const FORM_STATE_KEY = 'iptv-pages-hub.form-state'
 const ACTIVE_SURFACE_KEY = 'iptv-pages-hub.active-surface'
 const SELECTED_EMBED_KEY = 'iptv-pages-hub.selected-embed'
+const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
@@ -310,6 +311,13 @@ export function App() {
     () => window.localStorage.getItem(SELECTED_EMBED_KEY),
   )
   const [showConnectionPanel, setShowConnectionPanel] = useState(true)
+  const [showLiveNowPanel, setShowLiveNowPanel] = useState(
+    () => readJson<boolean>(SHOW_LIVE_NOW_KEY, false),
+  )
+  const [showIptvPanel, setShowIptvPanel] = useState(true)
+  const [showTwitchPanel, setShowTwitchPanel] = useState(true)
+  const [showKickPanel, setShowKickPanel] = useState(true)
+  const [showNewsPanel, setShowNewsPanel] = useState(true)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -394,6 +402,7 @@ export function App() {
     () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedKickEmbeds, statusMap],
   )
+  const kickStatusReady = Boolean(settings.kickClientId.trim() && settings.kickClientSecret.trim())
 
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
@@ -488,6 +497,7 @@ export function App() {
   useEffect(() => saveJson(SETTINGS_KEY, settings), [settings])
   useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
   useEffect(() => saveJson(ACTIVE_SURFACE_KEY, activeSurface), [activeSurface])
+  useEffect(() => saveJson(SHOW_LIVE_NOW_KEY, showLiveNowPanel), [showLiveNowPanel])
   useEffect(() => {
     saveJson<PersistedFormState>(FORM_STATE_KEY, { sourceTab, xtream, m3u })
   }, [m3u, sourceTab, xtream])
@@ -1091,11 +1101,11 @@ export function App() {
         <aside class="panel sidebar-panel">
           <div class="sidebar-stack">
             <div class="sidebar-section active">
-              <button class="section-toggle active" type="button" onClick={() => setSurface(liveEmbeds[0]?.platform || 'twitch')}>
+              <button class={showLiveNowPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowLiveNowPanel((current) => !current)}>
                 <span>Ao vivo agora</span>
                 <small>{liveEmbeds.length ? `${liveEmbeds.length} feeds live` : 'Nenhum feed live'}</small>
               </button>
-              <div class="sidebar-content">
+              {showLiveNowPanel ? <div class="sidebar-content">
                 <div class="sidebar-list">
                   {liveEmbeds.length ? liveEmbeds.map((item) => {
                     const status = statusMap[item.channel.toLowerCase()]
@@ -1115,7 +1125,7 @@ export function App() {
                     )
                   }) : <div class="empty-state compact-empty"><strong>Nenhum feed ao vivo agora.</strong><span>Twitch e Kick aparecem aqui automaticamente quando o status vier como online.</span></div>}
                 </div>
-              </div>
+              </div> : null}
             </div>
 
             <div class="sidebar-section">
@@ -1155,11 +1165,11 @@ export function App() {
             </div>
 
             <div class={activeSurface === 'iptv' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'iptv' ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setSurface('iptv')}>
+              <button class={showIptvPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowIptvPanel((current) => !current)}>
                 <span>Lista IPTV</span>
                 <small>{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} canais</small>
               </button>
-              {activeSurface === 'iptv' ? (
+              {showIptvPanel ? (
                 <div class="sidebar-content stack">
                   <div class="field-grid compact sidebar-filters">
                     <label><span>Buscar</span><input placeholder="Nome, grupo ou EPG" value={searchTerm} onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)} /></label>
@@ -1181,27 +1191,28 @@ export function App() {
             </div>
 
             <div class={activeSurface === 'twitch' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'twitch' ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>
+              <button class={showTwitchPanel ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => setShowTwitchPanel((current) => !current)}>
                 <span>Feeds Twitch</span>
-                <small>{onlineTwitchCount} ao vivo · {twitchEmbeds.length} total</small>
+                <small>{onlineTwitchCount} ao vivo - {twitchEmbeds.length} total</small>
               </button>
-              <div class="sidebar-content"><div class="sidebar-list">{sortedTwitchEmbeds.length ? sortedTwitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Twitch cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div>
+              {showTwitchPanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedTwitchEmbeds.length ? sortedTwitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Twitch cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
             </div>
 
             <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'kick' ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>
+              <button class={showKickPanel ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setShowKickPanel((current) => !current)}>
                 <span>Feeds Kick</span>
-                <small>{onlineKickCount} ao vivo · {kickEmbeds.length} total</small>
+                <small>{kickStatusReady ? `${onlineKickCount} ao vivo - ${kickEmbeds.length} total` : `status exige auth - ${kickEmbeds.length} total`}</small>
               </button>
-              <div class="sidebar-content"><div class="sidebar-list">{sortedKickEmbeds.length ? sortedKickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Kick cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div>
+              {showKickPanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedKickEmbeds.length ? sortedKickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Kick cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
+              {showKickPanel && !kickStatusReady && kickEmbeds.length ? <div class="sidebar-content"><p class="helper-copy">Para a Kick avisar se esta ao vivo ou offline, preencha `Kick Client ID` e `Kick secret` no painel da direita.</p></div> : null}
             </div>
 
             <div class={activeSurface === 'news' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={activeSurface === 'news' ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setSurface('news')}>
+              <button class={showNewsPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowNewsPanel((current) => !current)}>
                 <span>Noticias ao vivo</span>
                 <small>{newsLinks.length} links</small>
               </button>
-              {activeSurface === 'news' ? <div class="sidebar-content"><div class="sidebar-list">{newsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
+              {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{newsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
             </div>
           </div>
         </aside>
