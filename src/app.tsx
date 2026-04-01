@@ -82,8 +82,9 @@ const newsLinks: NewsLink[] = [
     id: 'bbc-news',
     name: 'BBC News',
     href: 'https://livenewsof.com/bbc-world-news-live-stream/',
-    note: 'Link informado por voce para a transmissao ao vivo da BBC News.',
-    source: 'LiveNewsof',
+    note: 'Embed alternativo da BBC News informado por voce.',
+    source: 'DLStreams',
+    embedUrl: 'https://dlstreams.top/cast/stream-349.php',
   },
   {
     id: 'sky-news',
