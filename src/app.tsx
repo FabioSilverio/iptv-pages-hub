@@ -91,15 +91,14 @@ const newsLinks: NewsLink[] = [
     href: 'https://news.sky.com/watch-live',
     note: 'Stream oficial ao vivo da Sky News.',
     source: 'Sky News',
-    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UCoMdktPbSTixAyNGwb-UYkQ',
+    embedUrl: 'https://news.sky.com/iframe/widget/video/6066507',
   },
   {
     id: 'nbc-news-now',
     name: 'NBC News NOW',
     href: 'https://www.nbcnews.com/now',
-    note: 'Canal de noticias 24/7 da NBC News.',
+    note: 'Canal de noticias 24/7 da NBC News. A propria NBC bloqueia embed fora dos dominios deles.',
     source: 'NBC News',
-    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UCeY0bbntWzzVIaj2z3QigXg',
   },
   {
     id: 'cbs-news-247',
@@ -107,7 +106,7 @@ const newsLinks: NewsLink[] = [
     href: 'https://www.cbsnews.com/video/live-cbsnews/',
     note: 'Feed oficial da CBS News 24/7.',
     source: 'CBS News',
-    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UC8p1vwvWtl6T73JiExfWs1g',
+    embedUrl: 'https://www.cbsnews.com/video/live-cbsnews/?embed=1&ftag=CNM-00-10aag7j',
   },
 ]
 
