@@ -401,8 +401,9 @@ input:focus, select:focus {
 }
 
 .status-chip.kick.error {
-  color: #f7fee7;
-  background: rgba(101, 163, 13, 0.82);
+  color: #fff7ed;
+  background: rgba(249, 115, 22, 0.92);
+  border-color: rgba(251, 146, 60, 0.4);
 }
 
 @media (max-width: 1240px) {
@@ -604,7 +605,14 @@ input:focus, select:focus {
 }
 
 .media-row {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.media-row > .status-chip {
+  justify-self: start;
+  margin-top: 4px;
+  max-width: 100%;
 }
 
 .compact-empty {

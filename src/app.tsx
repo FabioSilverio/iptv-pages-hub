@@ -7,6 +7,7 @@ import {
   fetchCustomStatus,
   fetchKickAppAccessToken,
   fetchKickStatuses,
+  fetchKickStatusesFromWorker,
   fetchM3UPlaylist,
   fetchTwitchStatuses,
   fetchXtreamPlaylist,
@@ -99,10 +100,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
     name: 'BBC News',
-    href: 'https://www.ustream.to/stream.php?embed&id=bbc-news',
-    note: 'Fonte alternativa da BBC News via player embutivel validado hoje.',
-    source: 'Ustream.to',
-    embedUrl: 'https://www.ustream.to/stream.php?embed&id=bbc-news',
+    href: 'https://freeshot.live/live-tv/bbc-news-uk/491',
+    note: 'Fonte alternativa focada em BBC News UK via embed externo.',
+    source: 'FreeShot',
+    embedUrl: 'https://freeshot.live/embed/BBCNewsUK.php',
   },
   {
     id: 'sky-news',
@@ -406,8 +407,6 @@ export function App() {
     () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedKickEmbeds, statusMap],
   )
-  const kickStatusReady = Boolean(settings.kickClientId?.trim() && settings.kickClientSecret?.trim())
-
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
     [channels, selectedChannelId, visibleChannels],
@@ -868,14 +867,21 @@ export function App() {
           })
         }
       } else {
-        kickChannels.forEach((channel) => {
-          nextStatus[channel] = {
-            label: 'Sem auth',
-            state: 'unknown',
-            detail: KICK_STATUS_HELP,
-            updatedAt: new Date().toISOString(),
-          }
-        })
+        try {
+          Object.assign(
+            nextStatus,
+            await fetchKickStatusesFromWorker(kickChannels, DEFAULT_XTREAM_PROXY_URL),
+          )
+        } catch {
+          kickChannels.forEach((channel) => {
+            nextStatus[channel] = {
+              label: 'Sem auth',
+              state: 'unknown',
+              detail: KICK_STATUS_HELP,
+              updatedAt: new Date().toISOString(),
+            }
+          })
+        }
       }
 
       await Promise.all(
@@ -1205,10 +1211,10 @@ export function App() {
             <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
               <button class={showKickPanel ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setShowKickPanel((current) => !current)}>
                 <span>Feeds Kick</span>
-                <small>{kickStatusReady ? `${onlineKickCount} ao vivo - ${kickEmbeds.length} total` : `status exige auth - ${kickEmbeds.length} total`}</small>
+                <small>{`${onlineKickCount} ao vivo - ${kickEmbeds.length} total`}</small>
               </button>
               {showKickPanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedKickEmbeds.length ? sortedKickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Kick cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
-              {showKickPanel && !kickStatusReady && kickEmbeds.length ? <div class="sidebar-content"><p class="helper-copy">Para a Kick avisar se esta ao vivo ou offline, preencha `Kick Client ID` e `Kick secret` no painel da direita.</p></div> : null}
+              {showKickPanel && !onlineKickCount && kickEmbeds.length ? <div class="sidebar-content"><p class="helper-copy">O worker do app atualiza o status da Kick em segundo plano. Se algum canal seguir sem selo, eu ja deixei o override manual disponivel no painel da direita.</p></div> : null}
             </div>
 
             <div class={activeSurface === 'news' ? 'sidebar-section active' : 'sidebar-section'}>
@@ -1340,7 +1346,7 @@ export function App() {
                 <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
               </div>
               <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
-              <p class="helper-copy">Twitch usa OAuth do navegador. Kick precisa de `Client ID + secret` de um app oficial para ligar o selo `ao vivo/offline`; sem isso, o embed abre, mas a barra lateral nao consegue confirmar o status real.</p>
+              <p class="helper-copy">Twitch usa OAuth do navegador. Na Kick, o site ja consulta o status oficial pelo worker do app; esses campos ficam como override manual caso voce queira testar outra credencial.</p>
             </div>
             <div class="subtle-card stack compact-card">
               <div class="field-grid compact">

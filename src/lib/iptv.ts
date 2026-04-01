@@ -81,7 +81,7 @@ const FALLBACK_GROUP = 'Sem grupo'
 export const TWITCH_STATUS_HELP =
   'Status oficial requer Client ID da Twitch e um token OAuth do navegador.'
 export const KICK_STATUS_HELP =
-  'Status oficial da Kick requer Client ID e Client Secret de um app Kick, guardados localmente no navegador.'
+  'Status da Kick usa o worker do app por padrao. Se quiser, voce ainda pode sobrescrever com Client ID e Client Secret locais.'
 
 export function normalizeServerUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
@@ -447,7 +447,7 @@ export async function fetchKickStatuses(
 
   const entries = await Promise.all(
     channels.map(async (channel) => {
-      const targetUrl = `https://api.kick.com/public/v1/channels/${encodeURIComponent(channel)}`
+      const targetUrl = `https://api.kick.com/public/v1/channels?slug=${encodeURIComponent(channel)}`
       const requestUrl = proxyBase ? buildProxyUrl(proxyBase, targetUrl) : targetUrl
       const response = await fetch(requestUrl, {
         headers: {
@@ -461,17 +461,17 @@ export async function fetchKickStatuses(
       }
 
       const payload = (await response.json()) as {
-        data?: {
+        data?: Array<{
           slug?: string
           stream?: {
             is_live?: boolean
             viewer_count?: number
           }
           stream_title?: string
-        }
+        }>
       }
 
-      return payload.data
+      return payload.data?.[0]
     }),
   )
 
@@ -533,4 +533,22 @@ export async function fetchCustomStatus(endpoint: string): Promise<EmbedStatus> 
     detail: payload.detail || (isLive ? 'Status informado por endpoint externo.' : 'Canal offline.'),
     updatedAt: new Date().toISOString(),
   }
+}
+
+export async function fetchKickStatusesFromWorker(
+  channels: string[],
+  proxyBase: string,
+): Promise<Record<string, EmbedStatus>> {
+  if (!channels.length) {
+    return {}
+  }
+
+  const entries = await Promise.all(
+    channels.map(async (channel) => {
+      const endpoint = `${normalizeProxyUrl(proxyBase)}/kick-status?channel=${encodeURIComponent(channel)}`
+      return [channel.toLowerCase(), await fetchCustomStatus(endpoint)] as const
+    }),
+  )
+
+  return Object.fromEntries(entries)
 }

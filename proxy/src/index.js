@@ -1,5 +1,5 @@
 export default {
-  async fetch(request) {
+  async fetch(request, env) {
     const url = new URL(request.url)
     const isHeadRequest = request.method === 'HEAD'
 
@@ -9,11 +9,15 @@ export default {
       })
     }
 
+    if (url.pathname === '/kick-status') {
+      return handleKickStatus(request, env, url)
+    }
+
     if (url.pathname !== '/proxy') {
       return json(
         {
           ok: true,
-          usage: '/proxy?url=http://origin/path',
+          usage: '/proxy?url=http://origin/path or /kick-status?channel=xqc',
         },
         200,
         request,
@@ -69,6 +73,102 @@ export default {
       }, upstream.headers),
     })
   },
+}
+
+async function handleKickStatus(request, env, url) {
+  const channel = String(url.searchParams.get('channel') || '').trim().toLowerCase()
+  if (!channel) {
+    return json({ error: 'Missing channel query param.' }, 400, request)
+  }
+
+  if (!env.KICK_CLIENT_ID || !env.KICK_CLIENT_SECRET) {
+    return json({
+      live: false,
+      label: 'Sem auth',
+      detail: 'Worker sem credenciais da Kick configuradas.',
+    }, 200, request)
+  }
+
+  try {
+    const token = await getKickAccessToken(env)
+    const endpoint = new URL('https://api.kick.com/public/v1/channels')
+    endpoint.searchParams.append('slug', channel)
+
+    const response = await fetch(endpoint.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`Kick status respondeu ${response.status}.`)
+    }
+
+    const payload = await response.json()
+    const data = Array.isArray(payload?.data) ? payload.data[0] || {} : {}
+    const isLive = Boolean(data?.stream?.is_live)
+    const viewers = Number(data?.stream?.viewer_count || 0)
+    const title = typeof data?.stream_title === 'string' ? data.stream_title : ''
+
+    return json({
+      live: isLive,
+      label: isLive ? 'Ao vivo' : 'Offline',
+      detail: isLive
+        ? title
+          ? `${title}${viewers ? ` • ${viewers} assistindo` : ''}`
+          : 'Canal ao vivo na Kick.'
+        : 'Canal offline no ultimo refresh.',
+    }, 200, request)
+  } catch (error) {
+    return json({
+      live: false,
+      label: 'Erro',
+      detail: error instanceof Error ? error.message : 'Falha ao consultar a Kick.',
+    }, 200, request)
+  }
+}
+
+let kickTokenCache = {
+  accessToken: '',
+  expiresAt: 0,
+}
+
+async function getKickAccessToken(env) {
+  if (kickTokenCache.accessToken && kickTokenCache.expiresAt > Date.now() + 30_000) {
+    return kickTokenCache.accessToken
+  }
+
+  const body = new URLSearchParams({
+    client_id: String(env.KICK_CLIENT_ID),
+    client_secret: String(env.KICK_CLIENT_SECRET),
+    grant_type: 'client_credentials',
+  })
+
+  const response = await fetch('https://id.kick.com/oauth/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body,
+  })
+
+  if (!response.ok) {
+    throw new Error(`Kick token respondeu ${response.status}.`)
+  }
+
+  const payload = await response.json()
+  if (!payload?.access_token) {
+    throw new Error('Kick nao devolveu access token.')
+  }
+
+  kickTokenCache = {
+    accessToken: payload.access_token,
+    expiresAt: Date.now() + Math.max((payload.expires_in || 3600) - 60, 60) * 1000,
+  }
+
+  return kickTokenCache.accessToken
 }
 
 function canHaveBody(method) {
