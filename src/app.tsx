@@ -87,6 +87,10 @@ const defaultSettings: AppSettings = {
   kickAppAccessToken: '',
   kickAppTokenExpiresAt: '',
 }
+
+function mergeSettings(value?: Partial<AppSettings> | null): AppSettings {
+  return { ...defaultSettings, ...(value || {}) }
+}
 const embedDefaults: EmbedStream[] = [
   { id: crypto.randomUUID(), platform: 'twitch', channel: 'shroud', title: 'Twitch destaque' },
   { id: crypto.randomUUID(), platform: 'kick', channel: 'xqc', title: 'Kick destaque' },
@@ -287,7 +291,7 @@ export function App() {
   const [sourceTab, setSourceTab] = useState<'xtream' | 'm3u'>('xtream')
   const [xtream, setXtream] = useState<XtreamCredentials>(defaultXtream)
   const [m3u, setM3U] = useState<M3UCredentials>(defaultM3U)
-  const [settings, setSettings] = useState<AppSettings>(() => readJson(SETTINGS_KEY, defaultSettings))
+  const [settings, setSettings] = useState<AppSettings>(() => mergeSettings(readJson<Partial<AppSettings> | null>(SETTINGS_KEY, null)))
   const [playlist, setPlaylist] = useState<PlaylistSession | null>(null)
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(() => window.localStorage.getItem(LAST_CHANNEL_KEY))
   const [searchTerm, setSearchTerm] = useState('')
@@ -402,7 +406,7 @@ export function App() {
     () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedKickEmbeds, statusMap],
   )
-  const kickStatusReady = Boolean(settings.kickClientId.trim() && settings.kickClientSecret.trim())
+  const kickStatusReady = Boolean(settings.kickClientId?.trim() && settings.kickClientSecret?.trim())
 
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
