@@ -307,6 +307,7 @@ export function App() {
     const now = new Date(clockTick)
     const zones = [
       ['Brasil', 'America/Sao_Paulo'],
+      ['Londres', 'Europe/London'],
       ['LA', 'America/Los_Angeles'],
       ['NY', 'America/New_York'],
     ] as const
