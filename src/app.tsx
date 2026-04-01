@@ -24,9 +24,13 @@ const SETTINGS_KEY = 'iptv-pages-hub.settings'
 const LAST_CHANNEL_KEY = 'iptv-pages-hub.last-channel'
 const FAVORITES_KEY = 'iptv-pages-hub.favorites'
 const FORM_STATE_KEY = 'iptv-pages-hub.form-state'
+const ACTIVE_SURFACE_KEY = 'iptv-pages-hub.active-surface'
+const SELECTED_EMBED_KEY = 'iptv-pages-hub.selected-embed'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
+
+type MediaSurface = 'iptv' | 'twitch' | 'kick'
 
 interface AppSettings {
   rememberConnection: boolean
@@ -78,15 +82,6 @@ function saveJson<T>(key: string, value: T) {
   window.localStorage.setItem(key, JSON.stringify(value))
 }
 
-function relativeTime(iso?: string) {
-  if (!iso) return 'agora'
-  const formatter = new Intl.RelativeTimeFormat('pt-BR', { numeric: 'auto' })
-  const delta = Math.round((new Date(iso).getTime() - Date.now()) / 60000)
-  if (Math.abs(delta) < 1) return 'agora'
-  if (Math.abs(delta) < 60) return formatter.format(delta, 'minute')
-  return formatter.format(Math.round(delta / 60), 'hour')
-}
-
 function statusTone(state: LiveState) {
   if (state === 'online') return 'status-chip online'
   if (state === 'offline') return 'status-chip offline'
@@ -95,12 +90,12 @@ function statusTone(state: LiveState) {
 }
 
 function buildKickEmbedUrl(channel: string) {
-  return `https://player.kick.com/${channel}?autoplay=false&muted=true`
+  return `https://player.kick.com/${channel}?autoplay=false&muted=false`
 }
 
 function buildTwitchEmbedUrl(channel: string) {
   const parent = window.location.hostname || 'localhost'
-  return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&muted=true`
+  return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&muted=false`
 }
 
 function hasHttpUrl(value: string) {
@@ -236,6 +231,13 @@ export function App() {
   const [playerError, setPlayerError] = useState('')
   const [playerState, setPlayerState] = useState('Pronto para tocar')
   const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
+  const [activeSurface, setActiveSurface] = useState<MediaSurface>(
+    () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
+  )
+  const [selectedEmbedId, setSelectedEmbedId] = useState<string | null>(
+    () => window.localStorage.getItem(SELECTED_EMBED_KEY),
+  )
+  const [showConnectionPanel, setShowConnectionPanel] = useState(true)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -279,11 +281,23 @@ export function App() {
     () => visibleChannels.slice(0, visibleCount),
     [visibleChannels, visibleCount],
   )
+  const twitchEmbeds = useMemo(
+    () => embeds.filter((item) => item.platform === 'twitch'),
+    [embeds],
+  )
+  const kickEmbeds = useMemo(
+    () => embeds.filter((item) => item.platform === 'kick'),
+    [embeds],
+  )
 
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
     [channels, selectedChannelId, visibleChannels],
   )
+  const activeEmbed = useMemo(() => {
+    const pool = activeSurface === 'twitch' ? twitchEmbeds : activeSurface === 'kick' ? kickEmbeds : []
+    return pool.find((item) => item.id === selectedEmbedId) ?? pool[0] ?? null
+  }, [activeSurface, kickEmbeds, selectedEmbedId, twitchEmbeds])
   const hasMoreChannels = displayedChannels.length < visibleChannels.length
   const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
@@ -321,17 +335,52 @@ export function App() {
   useEffect(() => saveJson(EMBEDS_KEY, embeds), [embeds])
   useEffect(() => saveJson(SETTINGS_KEY, settings), [settings])
   useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
+  useEffect(() => saveJson(ACTIVE_SURFACE_KEY, activeSurface), [activeSurface])
   useEffect(() => {
     saveJson<PersistedFormState>(FORM_STATE_KEY, { sourceTab, xtream, m3u })
   }, [m3u, sourceTab, xtream])
 
   useEffect(() => {
     if (selectedChannel?.id) window.localStorage.setItem(LAST_CHANNEL_KEY, selectedChannel.id)
-  }, [selectedChannel?.id])
+  }, [activeSurface, selectedChannel?.id])
+  useEffect(() => {
+    if (selectedEmbedId) {
+      window.localStorage.setItem(SELECTED_EMBED_KEY, selectedEmbedId)
+      return
+    }
+
+    window.localStorage.removeItem(SELECTED_EMBED_KEY)
+  }, [selectedEmbedId])
+
+  useEffect(() => {
+    if (activeSurface === 'twitch' && !twitchEmbeds.length) {
+      if (kickEmbeds.length) {
+        setActiveSurface('kick')
+        setSelectedEmbedId(kickEmbeds[0].id)
+      } else {
+        setActiveSurface('iptv')
+      }
+      return
+    }
+
+    if (activeSurface === 'kick' && !kickEmbeds.length) {
+      if (twitchEmbeds.length) {
+        setActiveSurface('twitch')
+        setSelectedEmbedId(twitchEmbeds[0].id)
+      } else {
+        setActiveSurface('iptv')
+      }
+      return
+    }
+
+    if ((activeSurface === 'twitch' || activeSurface === 'kick') && activeEmbed) {
+      setSelectedEmbedId(activeEmbed.id)
+    }
+  }, [activeEmbed, activeSurface, kickEmbeds, twitchEmbeds])
 
   useEffect(() => {
     const video = videoRef.current
-    if (!video || !selectedChannel) return
+    if (!video || !selectedChannel || activeSurface !== 'iptv') return
     const media: HTMLVideoElement = video
 
     let cancelled = false
@@ -583,7 +632,7 @@ export function App() {
       media.removeEventListener('error', onError)
       cleanupPlayers()
     }
-  }, [selectedChannel?.id])
+  }, [activeSurface, selectedChannel?.id])
 
   useEffect(() => {
     let isActive = true
@@ -662,6 +711,7 @@ export function App() {
       const nextPlaylist = await fetchXtreamPlaylist(nextCredentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
+      setActiveSurface('iptv')
       setXtream(nextCredentials)
       if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'xtream', remember: settings.rememberConnection, xtream: nextCredentials, m3u })
     } catch (error) {
@@ -681,6 +731,7 @@ export function App() {
       const nextPlaylist = await fetchM3UPlaylist(credentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
+      setActiveSurface('iptv')
       setM3U(credentials)
       if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'm3u', remember: settings.rememberConnection, xtream, m3u: credentials })
     } catch (error) {
@@ -694,23 +745,56 @@ export function App() {
     if (settings.twitchClientId.trim()) window.location.href = buildTwitchAuthUrl(settings.twitchClientId)
   }
 
+  function activateIPTV(channelId?: string) {
+    if (channelId) setSelectedChannelId(channelId)
+    setActiveSurface('iptv')
+  }
+
+  function activateEmbed(embed: EmbedStream) {
+    setSelectedEmbedId(embed.id)
+    setActiveSurface(embed.platform)
+    setPlayerError('')
+    setPlayerState(embed.platform === 'twitch' ? 'Twitch em foco' : 'Kick em foco')
+  }
+
   function addEmbed() {
     if (!embedDraft.channel.trim()) return
+    const nextEmbed = {
+      id: crypto.randomUUID(),
+      platform: embedDraft.platform,
+      channel: embedDraft.channel.trim(),
+      title: embedDraft.title.trim() || `${embedDraft.platform} / ${embedDraft.channel.trim()}`,
+      statusEndpoint: embedDraft.statusEndpoint?.trim() || undefined,
+    }
     setEmbeds((current) => [
-      {
-        id: crypto.randomUUID(),
-        platform: embedDraft.platform,
-        channel: embedDraft.channel.trim(),
-        title: embedDraft.title.trim() || `${embedDraft.platform} / ${embedDraft.channel.trim()}`,
-        statusEndpoint: embedDraft.statusEndpoint?.trim() || undefined,
-      },
+      nextEmbed,
       ...current,
     ])
+    setSelectedEmbedId(nextEmbed.id)
+    setActiveSurface(nextEmbed.platform)
     setEmbedDraft({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
   }
 
   function toggleFavorite(channelId: string) {
     setFavorites((current) => (current.includes(channelId) ? current.filter((id) => id !== channelId) : [channelId, ...current]))
+  }
+
+  function removeEmbed(embedId: string) {
+    setEmbeds((current) => current.filter((entry) => entry.id !== embedId))
+
+    if (selectedEmbedId === embedId) {
+      const nextTwitch = twitchEmbeds.find((entry) => entry.id !== embedId)
+      const nextKick = kickEmbeds.find((entry) => entry.id !== embedId)
+
+      if (activeSurface === 'twitch' && nextTwitch) {
+        setSelectedEmbedId(nextTwitch.id)
+      } else if (activeSurface === 'kick' && nextKick) {
+        setSelectedEmbedId(nextKick.id)
+      } else {
+        setSelectedEmbedId(null)
+        setActiveSurface('iptv')
+      }
+    }
   }
 
   function exportConnectionBundle() {
@@ -769,337 +853,175 @@ export function App() {
       <header class="topbar">
         <div>
           <p class="eyebrow">IPTV Pages Hub</p>
-          <h1>Player leve, lista rapida e login salvo no navegador.</h1>
+          <h1>Hub de playback com sidebar, palco unico e troca rapida entre IPTV, Twitch e Kick.</h1>
         </div>
         <div class="topbar-stats">
           <div class="stat-card">
-            <span>Fonte</span>
-            <strong>{playlist?.kind === 'xtream' ? 'Xtream' : playlist?.kind === 'm3u' ? 'M3U' : 'Nenhuma'}</strong>
+            <span>Modo ativo</span>
+            <strong>{activeSurface === 'iptv' ? 'IPTV' : activeSurface === 'twitch' ? 'Twitch' : 'Kick'}</strong>
           </div>
           <div class="stat-card">
-            <span>Canais</span>
-            <strong>{new Intl.NumberFormat('pt-BR').format(channels.length)}</strong>
+            <span>Biblioteca</span>
+            <strong>{activeSurface === 'iptv' ? `${new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} canais` : `${activeSurface === 'twitch' ? twitchEmbeds.length : kickEmbeds.length} feeds`}</strong>
           </div>
           <div class="stat-card">
             <span>Player</span>
             <strong>{playerState}</strong>
           </div>
         </div>
+        <div class="surface-switch hero-surface-switch">
+          <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setActiveSurface('iptv')}>IPTV</button>
+          <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => {
+            setActiveSurface('twitch')
+            if (twitchEmbeds[0]) setSelectedEmbedId(twitchEmbeds[0].id)
+          }}>Twitch</button>
+          <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => {
+            setActiveSurface('kick')
+            if (kickEmbeds[0]) setSelectedEmbedId(kickEmbeds[0].id)
+          }}>Kick</button>
+        </div>
       </header>
 
-      <main class="layout-grid">
-        <section class="panel connect-panel">
-          <div class="panel-heading compact-heading">
-            <div>
-              <p class="section-tag">Entrada</p>
-              <h2>Conectar playlist</h2>
-            </div>
-            <div class="source-switch">
-              <button class={sourceTab === 'xtream' ? 'active' : ''} type="button" onClick={() => setSourceTab('xtream')}>Xtream Codes</button>
-              <button class={sourceTab === 'm3u' ? 'active' : ''} type="button" onClick={() => setSourceTab('m3u')}>M3U URL</button>
-            </div>
-          </div>
-
-          {sourceTab === 'xtream' ? (
-            <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectXtream() }}>
-              <label>
-                <span>Servidor</span>
-                <input
-                  placeholder="http://ou-https://painel.exemplo.com"
-                  value={xtream.serverUrl}
-                  onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))}
-                />
-              </label>
-              <label>
-                <span>Proxy HTTPS</span>
-                <input
-                  placeholder="https://seu-proxy.exemplo.workers.dev"
-                  value={xtream.proxyUrl || ''}
-                  onInput={(event) => setXtream((current) => ({ ...current, proxyUrl: (event.currentTarget as HTMLInputElement).value }))}
-                />
-              </label>
-              {xtreamNeedsHttps ? (
-                <div class="alert warn compact-alert">
-                  <strong>Servidor em HTTP</strong>
-                  <span>GitHub Pages roda em HTTPS. Sem proxy, o navegador bloqueia esse login.</span>
-                  <div class="inline-actions">
-                    <button class="ghost-button compact" type="button" onClick={() => setXtream((current) => ({ ...current, serverUrl: xtreamHttpsSuggestion }))}>
-                      Trocar para {xtreamHttpsSuggestion}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-              <div class="field-grid">
-                <label>
-                  <span>Usuario</span>
-                  <input value={xtream.username} onInput={(event) => setXtream((current) => ({ ...current, username: (event.currentTarget as HTMLInputElement).value }))} />
-                </label>
-                <label>
-                  <span>Senha</span>
-                  <input type="password" value={xtream.password} onInput={(event) => setXtream((current) => ({ ...current, password: (event.currentTarget as HTMLInputElement).value }))} />
-                </label>
-              </div>
-              <label>
-                <span>Saida para browser</span>
-                <select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'auto' | 'm3u8' | 'ts' }))}>
-                  <option value="auto">auto (testa melhor caminho)</option>
-                  <option value="m3u8">m3u8</option>
-                  <option value="ts">ts</option>
-                </select>
-              </label>
-              <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Carregando playlist...' : 'Entrar com Xtream'}</button>
-            </form>
-          ) : (
-            <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectM3U() }}>
-              <label>
-                <span>URL da playlist</span>
-                <input
-                  placeholder="https://exemplo.com/lista.m3u"
-                  value={m3u.url}
-                  onInput={(event) => setM3U({ url: (event.currentTarget as HTMLInputElement).value })}
-                />
-              </label>
-              <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Lendo playlist...' : 'Abrir M3U'}</button>
-            </form>
-          )}
-
-          <div class="subtle-card stack compact-card">
-            <label class="check-row">
-              <input checked={settings.rememberConnection} type="checkbox" onChange={(event) => setSettings((current) => ({ ...current, rememberConnection: (event.currentTarget as HTMLInputElement).checked }))} />
-              <span>Lembrar e tentar reconectar neste navegador</span>
-            </label>
-            <p class="helper-copy">Os campos ficam salvos automaticamente aqui no browser, mesmo antes de conectar.</p>
-            <div class="button-row">
-              <button class="ghost-button" type="button" onClick={exportConnectionBundle}>Exportar conexao</button>
-              <button class="ghost-button" type="button" onClick={() => fileInputRef.current?.click()}>Importar conexao</button>
-              <input ref={fileInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importConnectionBundle} />
-            </div>
-            {transferMessage ? <p class="helper-copy">{transferMessage}</p> : null}
-          </div>
-
-          {loadError ? <p class="alert error">{loadError}</p> : null}
-
-          <div class="subtle-card info-grid">
-            <div>
-              <p class="section-tag">Origem atual</p>
-              <h3>{playlist?.label || 'Nenhuma playlist conectada'}</h3>
-              <p class="helper-copy">{playlist ? `${playlist.sourceLabel} - atualizado ${relativeTime(playlist.loadedAt)}` : 'Conecte uma fonte para listar canais.'}</p>
-            </div>
-            <div>
-              <p class="section-tag">Prioridade</p>
-              <h3>{favorites.length} favoritos</h3>
-              <p class="helper-copy">Favoritos aparecem primeiro na lista carregada.</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel browser-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="section-tag">Biblioteca</p>
-              <h2>Canais</h2>
-            </div>
-            <div class="pill-row">
-              <span class="pill">{favorites.length} favoritos</span>
-              <span class="pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
-            </div>
-          </div>
-
-          <div class="field-grid compact">
-            <label>
-              <span>Buscar</span>
-              <input placeholder="Nome, grupo ou EPG" value={searchTerm} onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)} />
-            </label>
-            <label class="group-field">
-              <span>Grupo</span>
-              <select class="group-select" value={groupFilter} onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}>
-                <option value="Todos">Todos</option>
-                {(playlist?.groups ?? []).map((group) => <option key={group} value={group}>{group}</option>)}
-              </select>
-            </label>
-          </div>
-          <div class="group-summary">
-            <span class="pill active-group">{groupFilter}</span>
-            <span class="helper-copy">{playlist?.groups.length || 0} grupos disponiveis</span>
-          </div>
-
-          <div class="channel-list">
-            {displayedChannels.length ? displayedChannels.map((channel) => (
-              <div
-                key={channel.id}
-                class={channel.id === selectedChannel?.id ? 'channel-card active' : 'channel-card'}
-                role="button"
-                tabIndex={0}
-                onClick={() => setSelectedChannelId(channel.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault()
-                    setSelectedChannelId(channel.id)
-                  }
-                }}
-              >
-                <div class="channel-art">
-                  {channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}
-                </div>
-                <div class="channel-copy">
-                  <div class="channel-topline">
-                    <strong>{channel.name}</strong>
-                    <button
-                      aria-label={favorites.includes(channel.id) ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}
-                      class={favorites.includes(channel.id) ? 'favorite-button active' : 'favorite-button'}
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        toggleFavorite(channel.id)
-                      }}
-                    >
-                      {favorites.includes(channel.id) ? 'Salvo' : 'Fav'}
-                    </button>
-                  </div>
-                  <span>{channel.group}</span>
-                </div>
-              </div>
-            )) : (
-              <div class="empty-state">
-                <strong>Nenhum canal encontrado.</strong>
-                <span>Carregue uma playlist ou ajuste os filtros.</span>
-              </div>
-            )}
-          </div>
-          {hasMoreChannels ? (
-            <div class="load-more-row">
-              <button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>
-                Carregar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)} canais
+      <main class="hub-grid">
+        <aside class="panel sidebar-panel">
+          <div class="sidebar-stack">
+            <div class="sidebar-section">
+              <button class={showConnectionPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowConnectionPanel((current) => !current)}>
+                <span>Conexao e backup</span>
+                <small>{playlist?.sourceLabel || 'Sem playlist'}</small>
               </button>
-            </div>
-          ) : null}
-        </section>
-
-        <section class="panel player-panel">
-          <div class="panel-heading">
-            <div>
-              <p class="section-tag">Player</p>
-              <h2>{selectedChannel?.name || 'Selecione um canal'}</h2>
-            </div>
-            <div class="pill-row">
-              {selectedChannel ? (
-                <button class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'} type="button" onClick={() => toggleFavorite(selectedChannel.id)}>
-                  {favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}
-                </button>
+              {showConnectionPanel ? (
+                <div class="sidebar-content stack">
+                  <div class="source-switch">
+                    <button class={sourceTab === 'xtream' ? 'active' : ''} type="button" onClick={() => setSourceTab('xtream')}>Xtream Codes</button>
+                    <button class={sourceTab === 'm3u' ? 'active' : ''} type="button" onClick={() => setSourceTab('m3u')}>M3U URL</button>
+                  </div>
+                  {sourceTab === 'xtream' ? (
+                    <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectXtream() }}>
+                      <label><span>Servidor</span><input placeholder="http://ou-https://painel.exemplo.com" value={xtream.serverUrl} onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                      <label><span>Proxy HTTPS</span><input placeholder="https://seu-proxy.exemplo.workers.dev" value={xtream.proxyUrl || ''} onInput={(event) => setXtream((current) => ({ ...current, proxyUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                      {xtreamNeedsHttps ? <div class="alert warn compact-alert"><strong>Servidor em HTTP</strong><span>GitHub Pages roda em HTTPS. Sem proxy, o navegador bloqueia esse login.</span><div class="inline-actions"><button class="ghost-button compact" type="button" onClick={() => setXtream((current) => ({ ...current, serverUrl: xtreamHttpsSuggestion }))}>Trocar para {xtreamHttpsSuggestion}</button></div></div> : null}
+                      <div class="field-grid"><label><span>Usuario</span><input value={xtream.username} onInput={(event) => setXtream((current) => ({ ...current, username: (event.currentTarget as HTMLInputElement).value }))} /></label><label><span>Senha</span><input type="password" value={xtream.password} onInput={(event) => setXtream((current) => ({ ...current, password: (event.currentTarget as HTMLInputElement).value }))} /></label></div>
+                      <label><span>Saida para browser</span><select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'auto' | 'm3u8' | 'ts' }))}><option value="auto">auto (testa melhor caminho)</option><option value="m3u8">m3u8</option><option value="ts">ts</option></select></label>
+                      <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Carregando playlist...' : 'Entrar com Xtream'}</button>
+                    </form>
+                  ) : (
+                    <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectM3U() }}>
+                      <label><span>URL da playlist</span><input placeholder="https://exemplo.com/lista.m3u" value={m3u.url} onInput={(event) => setM3U({ url: (event.currentTarget as HTMLInputElement).value })} /></label>
+                      <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Lendo playlist...' : 'Abrir M3U'}</button>
+                    </form>
+                  )}
+                  <div class="subtle-card stack compact-card">
+                    <label class="check-row"><input checked={settings.rememberConnection} type="checkbox" onChange={(event) => setSettings((current) => ({ ...current, rememberConnection: (event.currentTarget as HTMLInputElement).checked }))} /><span>Lembrar neste navegador</span></label>
+                    <div class="button-row"><button class="ghost-button" type="button" onClick={exportConnectionBundle}>Exportar conexao</button><button class="ghost-button" type="button" onClick={() => fileInputRef.current?.click()}>Importar conexao</button><input ref={fileInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importConnectionBundle} /></div>
+                    {transferMessage ? <p class="helper-copy">{transferMessage}</p> : null}
+                  </div>
+                  {loadError ? <p class="alert error">{loadError}</p> : null}
+                </div>
               ) : null}
-              <span class="pill">{selectedChannel?.group || 'Sem grupo'}</span>
+            </div>
+
+            <div class={activeSurface === 'iptv' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={activeSurface === 'iptv' ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setActiveSurface('iptv')}>
+                <span>Lista IPTV</span>
+                <small>{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} canais</small>
+              </button>
+              {activeSurface === 'iptv' ? (
+                <div class="sidebar-content stack">
+                  <div class="field-grid compact sidebar-filters">
+                    <label><span>Buscar</span><input placeholder="Nome, grupo ou EPG" value={searchTerm} onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)} /></label>
+                    <label class="group-field"><span>Grupo</span><select class="group-select" value={groupFilter} onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}><option value="Todos">Todos</option>{(playlist?.groups ?? []).map((group) => <option key={group} value={group}>{group}</option>)}</select></label>
+                  </div>
+                  <div class="group-summary"><span class="pill active-group">{groupFilter}</span><span class="helper-copy">{playlist?.groups.length || 0} grupos</span></div>
+                  <div class="sidebar-list">
+                    {displayedChannels.length ? displayedChannels.map((channel) => (
+                      <button key={channel.id} class={channel.id === selectedChannel?.id ? 'list-row active' : 'list-row'} type="button" onClick={() => activateIPTV(channel.id)}>
+                        <div class="list-row-art">{channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}</div>
+                        <div class="list-row-copy"><strong>{channel.name}</strong><span>{channel.group}</span></div>
+                        <span class={favorites.includes(channel.id) ? 'favorite-button active' : 'favorite-button'}>{favorites.includes(channel.id) ? 'Salvo' : 'Fav'}</span>
+                      </button>
+                    )) : <div class="empty-state compact-empty"><strong>Nenhum canal encontrado.</strong><span>Ajuste os filtros ou conecte uma playlist.</span></div>}
+                  </div>
+                  {hasMoreChannels ? <div class="load-more-row"><button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>Adicionar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)}</button></div> : null}
+                </div>
+              ) : null}
+            </div>
+
+            <div class={activeSurface === 'twitch' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={activeSurface === 'twitch' ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => { setActiveSurface('twitch'); if (twitchEmbeds[0]) setSelectedEmbedId(twitchEmbeds[0].id) }}>
+                <span>Feeds Twitch</span>
+                <small>{twitchEmbeds.length} cadastrados</small>
+              </button>
+              {activeSurface === 'twitch' ? <div class="sidebar-content"><div class="sidebar-list">{twitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
+            </div>
+
+            <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={activeSurface === 'kick' ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => { setActiveSurface('kick'); if (kickEmbeds[0]) setSelectedEmbedId(kickEmbeds[0].id) }}>
+                <span>Feeds Kick</span>
+                <small>{kickEmbeds.length} cadastrados</small>
+              </button>
+              {activeSurface === 'kick' ? <div class="sidebar-content"><div class="sidebar-list">{kickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span></button> })}</div></div> : null}
             </div>
           </div>
+        </aside>
 
-          <div class="player-frame">
-            <video controls playsInline preload="auto" ref={videoRef} />
-          </div>
-
-          <div class="player-meta">
-            <div class="subtle-card compact-card">
-              <p class="section-tag">Status</p>
-              <h3>{playerState}</h3>
-              <p class="helper-copy">HLS fica no modo otimizado quando disponivel, com retomada mais agressiva em stream ao vivo.</p>
-            </div>
-            <div class="subtle-card compact-card">
-              <p class="section-tag">URL da stream</p>
-              <h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao de canal'}</h3>
-            </div>
-          </div>
-
-          {playerError ? <p class="alert error">{playerError}</p> : null}
+        <section class="panel stage-panel">
+          {activeSurface === 'iptv' ? (
+            <>
+              <div class="panel-heading">
+                <div><p class="section-tag">IPTV ao vivo</p><h2>{selectedChannel?.name || 'Selecione um canal'}</h2></div>
+                <div class="pill-row">{selectedChannel ? <button class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'} type="button" onClick={() => toggleFavorite(selectedChannel.id)}>{favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}</button> : null}<span class="pill">{selectedChannel?.group || 'Sem grupo'}</span></div>
+              </div>
+              <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
+              <div class="player-meta">
+                <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">A sidebar fica focada em navegacao e o palco central abre um feed por vez.</p></div>
+                <div class="subtle-card compact-card"><p class="section-tag">URL da stream</p><h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao de canal'}</h3></div>
+              </div>
+              {playerError ? <p class="alert error">{playerError}</p> : null}
+            </>
+          ) : activeEmbed ? (
+            <>
+              <div class="panel-heading">
+                <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
+                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
+              </div>
+              <div class="player-frame embed-stage-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={activeSurface === 'twitch' ? buildTwitchEmbedUrl(activeEmbed.channel) : buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} /></div>
+              <div class="player-meta">
+                <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{activeEmbed.channel}</h3><p class="helper-copy">{statusMap[activeEmbed.channel.toLowerCase()]?.detail || 'Feed ativo no palco principal.'}</p></div>
+                <div class="subtle-card compact-card"><p class="section-tag">Audio</p><h3>{activeSurface === 'kick' ? 'Kick sem mute forcado' : 'Feed focado'}</h3><p class="helper-copy">{activeSurface === 'kick' ? 'Removi o muted=true do embed. Se o navegador ainda segurar audio, use Abrir original.' : 'Ao abrir Twitch, a secao Kick fica recolhida automaticamente.'}</p></div>
+              </div>
+            </>
+          ) : <div class="empty-stage"><strong>Nenhum feed selecionado.</strong><span>Escolha um canal ou feed na sidebar.</span></div>}
         </section>
 
-        <section class="panel embed-panel">
+        <section class="panel manager-panel">
           <div class="panel-heading">
-            <div>
-              <p class="section-tag">Embeds</p>
-              <h2>Twitch e Kick</h2>
-            </div>
-            <span class="pill">{embeds.length} embeds</span>
+            <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch e Kick</h2></div>
+            <span class="pill">{embeds.length} feeds cadastrados</span>
           </div>
-
           <div class="embed-tools">
             <div class="subtle-card stack compact-card">
               <div class="field-grid compact">
-                <label>
-                  <span>Twitch Client ID</span>
-                  <input
-                    placeholder="Para status oficial da Twitch"
-                    value={settings.twitchClientId}
-                    onInput={(event) => setSettings((current) => ({ ...current, twitchClientId: (event.currentTarget as HTMLInputElement).value }))}
-                  />
-                </label>
-                <label>
-                  <span>Twitch token</span>
-                  <input
-                    placeholder="Preenchido via OAuth"
-                    value={settings.twitchAccessToken}
-                    onInput={(event) => setSettings((current) => ({ ...current, twitchAccessToken: (event.currentTarget as HTMLInputElement).value }))}
-                  />
-                </label>
+                <label><span>Twitch Client ID</span><input placeholder="Para status oficial da Twitch" value={settings.twitchClientId} onInput={(event) => setSettings((current) => ({ ...current, twitchClientId: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                <label><span>Twitch token</span><input placeholder="Preenchido via OAuth" value={settings.twitchAccessToken} onInput={(event) => setSettings((current) => ({ ...current, twitchAccessToken: (event.currentTarget as HTMLInputElement).value }))} /></label>
               </div>
-              <div class="button-row">
-                <button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button>
-              </div>
-              <p class="helper-copy">Twitch pode mostrar status oficial com OAuth. Kick usa embed oficial e pode ganhar status externo se voce informar um endpoint seu.</p>
+              <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
+              <p class="helper-copy">Agora o palco abre um tipo de feed por vez. IPTV, Twitch e Kick alternam sem competir pela tela.</p>
             </div>
-
             <div class="subtle-card stack compact-card">
               <div class="field-grid compact">
-                <label>
-                  <span>Plataforma</span>
-                  <select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'kick' }))}>
-                    <option value="twitch">Twitch</option>
-                    <option value="kick">Kick</option>
-                  </select>
-                </label>
-                <label>
-                  <span>Canal</span>
-                  <input placeholder="nome-do-canal" value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} />
-                </label>
+                <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'kick' }))}><option value="twitch">Twitch</option><option value="kick">Kick</option></select></label>
+                <label><span>Canal</span><input placeholder="nome-do-canal" value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
               </div>
-              <label>
-                <span>Titulo</span>
-                <input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} />
-              </label>
-              <label>
-                <span>Endpoint de status opcional</span>
-                <input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} />
-              </label>
-              <button class="primary-button" type="button" onClick={addEmbed}>Adicionar embed</button>
+              <label><span>Titulo</span><input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
+              <label><span>Endpoint de status opcional</span><input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} /></label>
+              <button class="primary-button" type="button" onClick={addEmbed}>Adicionar feed</button>
             </div>
           </div>
-
-          <div class="embed-grid">
+          <div class="feed-chip-grid">
             {embeds.map((item) => {
               const status = statusMap[item.channel.toLowerCase()]
-              return (
-                <article class="embed-card" key={item.id}>
-                  <div class="embed-header">
-                    <div>
-                      <p class="section-tag">{item.platform}</p>
-                      <h3>{item.title}</h3>
-                    </div>
-                    <button class="ghost-button compact" type="button" onClick={() => setEmbeds((current) => current.filter((entry) => entry.id !== item.id))}>
-                      Remover
-                    </button>
-                  </div>
-                  <div class="status-row">
-                    <span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span>
-                    <small>{status?.detail || 'Consultando status...'}</small>
-                  </div>
-                  <div class="embed-frame">
-                    <iframe
-                      allow="autoplay; fullscreen"
-                      loading="lazy"
-                      src={item.platform === 'twitch' ? buildTwitchEmbedUrl(item.channel) : buildKickEmbedUrl(item.channel)}
-                      title={item.title}
-                    />
-                  </div>
-                  <p class="helper-copy">Ultima atualizacao {relativeTime(status?.updatedAt)}.</p>
-                </article>
-              )
+              return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown')}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
             })}
           </div>
         </section>
