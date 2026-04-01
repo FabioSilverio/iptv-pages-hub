@@ -1,6 +1,7 @@
 import type Hls from 'hls.js'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
+  buildProxyUrl,
   buildTwitchAuthUrl,
   type Channel,
   fetchCustomStatus,
@@ -39,6 +40,7 @@ interface NewsLink {
   note: string
   source: string
   embedUrl?: string
+  streamUrl?: string
 }
 
 interface AppSettings {
@@ -90,24 +92,25 @@ const newsLinks: NewsLink[] = [
     id: 'sky-news',
     name: 'Sky News',
     href: 'https://news.sky.com/watch-live',
-    note: 'Stream oficial ao vivo da Sky News.',
+    note: 'Feed HLS oficial da Sky News tocando direto no player do site.',
     source: 'Sky News',
-    embedUrl: 'https://news.sky.com/iframe/widget/video/6066507',
+    streamUrl: 'https://nnaa-skynews-61cza.fast.nbcuni.com/live/master.m3u8',
   },
   {
     id: 'nbc-news-now',
     name: 'NBC News NOW',
     href: 'https://www.nbcnews.com/now',
-    note: 'Canal de noticias 24/7 da NBC News. A propria NBC bloqueia embed fora dos dominios deles.',
+    note: 'Feed HLS oficial da NBC News NOW tocando direto no player do site.',
     source: 'NBC News',
+    streamUrl: 'https://nnaa-nbcnn-lzaj01.fast.nbcuni.com/live/master.m3u8',
   },
   {
     id: 'cbs-news-247',
     name: 'CBS News 24/7',
     href: 'https://www.cbsnews.com/video/live-cbsnews/',
-    note: 'Feed oficial da CBS News 24/7.',
+    note: 'Feed oficial da CBS News 24/7 tocando direto no player do site.',
     source: 'CBS News',
-    embedUrl: 'https://www.cbsnews.com/video/live-cbsnews/?embed=1&ftag=CNM-00-10aag7j',
+    streamUrl: 'https://news20e7hhcb.airspace-cdn.cbsivideo.com/index.m3u8',
   },
 ]
 
@@ -350,6 +353,21 @@ export function App() {
     () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
     [selectedNewsId],
   )
+  const selectedNewsPlayback = useMemo<Channel | null>(() => {
+    if (!selectedNewsLink.streamUrl) return null
+
+    return {
+      id: `news:${selectedNewsLink.id}`,
+      name: selectedNewsLink.name,
+      group: 'Noticias',
+      streamUrl: buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, selectedNewsLink.streamUrl),
+    }
+  }, [selectedNewsLink])
+  const selectedPlaybackChannel = useMemo<Channel | null>(() => {
+    if (activeSurface === 'iptv') return selectedChannel
+    if (activeSurface === 'news') return selectedNewsPlayback
+    return null
+  }, [activeSurface, selectedChannel, selectedNewsPlayback])
   const dashboardTimes = useMemo(() => {
     const now = new Date(clockTick)
     const zones = [
@@ -377,7 +395,8 @@ export function App() {
   }, [playlist?.id, groupFilter, searchTerm])
 
   useEffect(() => {
-    const interval = window.setInterval(() => setClockTick(Date.now()), 60000)
+    setClockTick(Date.now())
+    const interval = window.setInterval(() => setClockTick(Date.now()), 1000)
     return () => window.clearInterval(interval)
   }, [])
 
@@ -455,12 +474,12 @@ export function App() {
 
   useEffect(() => {
     const video = videoRef.current
-    if (!video || !selectedChannel || activeSurface !== 'iptv') return
+    if (!video || !selectedPlaybackChannel) return
     const media: HTMLVideoElement = video
 
     let cancelled = false
     let suppressMediaError = false
-    const playbackSources = buildPlaybackSources(selectedChannel)
+    const playbackSources = buildPlaybackSources(selectedPlaybackChannel)
     let sourceAttempt = 0
     let successLocked = false
     let fallbackTimer = 0
@@ -707,7 +726,7 @@ export function App() {
       media.removeEventListener('error', onError)
       cleanupPlayers()
     }
-  }, [activeSurface, selectedChannel?.id])
+  }, [selectedPlaybackChannel?.id])
 
   useEffect(() => {
     let isActive = true
@@ -965,7 +984,7 @@ export function App() {
         {newsLinks.map((item) => (
           <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
             <span>{item.name}</span>
-            <strong>{item.embedUrl ? 'PLAY' : 'LINK'}</strong>
+            <strong>{item.streamUrl || item.embedUrl ? 'PLAY' : 'LINK'}</strong>
           </button>
         ))}
       </div>
@@ -1109,7 +1128,16 @@ export function App() {
                 <div><p class="section-tag">Noticias ao vivo</p><h2>{selectedNewsLink.name}</h2></div>
                 <div class="pill-row"><span class="pill">{selectedNewsLink.source}</span><a class="ghost-button compact" href={selectedNewsLink.href} rel="noreferrer" target="_blank">Abrir transmissao</a></div>
               </div>
-              {selectedNewsLink.embedUrl ? (
+              {selectedNewsPlayback ? (
+                <>
+                  <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
+                  <div class="player-meta">
+                    <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">Feed de noticias rodando no mesmo player leve usado no site, via proxy HLS para abrir liso no browser.</p></div>
+                  </div>
+                  {playerError ? <p class="alert error">{playerError}</p> : null}
+                </>
+              ) : selectedNewsLink.embedUrl ? (
                 <>
                   <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsLink.embedUrl} title={selectedNewsLink.name} /></div>
                   <div class="player-meta">
