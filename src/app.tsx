@@ -183,7 +183,7 @@ const newsLinks: NewsLink[] = [
     href: 'https://www.comunicazione.va/en/servizi/live.html',
     note: 'Embed oficial do Vatican Media Live, o mesmo usado na pagina oficial do Vaticano.',
     source: 'Vatican Media',
-    embedUrl: 'https://www.youtube.com/embed/03pYP2Nmreo?enablejsapi=1&rel=0&modestbranding=1',
+    embedUrl: 'https://www.youtube.com/embed/03pYP2Nmreo?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1',
   },
 ]
 
@@ -545,7 +545,7 @@ function buildPlaybackSources(channel: Channel) {
   }))
 }
 
-async function attemptPlayback(video: HTMLVideoElement, stateOnBlocked: string) {
+async function attemptPlayback(video: HTMLMediaElement, stateOnBlocked: string) {
   try {
     await video.play()
     return 'Ao vivo'
@@ -600,7 +600,7 @@ export function App() {
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
   const [radioDelaySeconds, setRadioDelaySeconds] = useState(0)
   const [radioReplay, setRadioReplay] = useState<RadioReplayState | null>(null)
-  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const videoRef = useRef<HTMLMediaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -1072,7 +1072,7 @@ export function App() {
   useEffect(() => {
     const video = videoRef.current
     if (!video || !selectedPlaybackChannel) return
-    const media: HTMLVideoElement = video
+    const media: HTMLMediaElement = video
 
     if (activeSurface === 'iptv' && media.dataset.initialMuteApplied !== 'true') {
       media.defaultMuted = true
@@ -1466,8 +1466,19 @@ export function App() {
       const end = video.seekable.end(index)
       const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : end
 
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        setRadioSeekWindowSeconds(0)
+        setRadioDelaySeconds(0)
+        return
+      }
+
+      const normalizedCurrentTime =
+        Number.isFinite(currentTime) && currentTime >= start && currentTime <= end
+          ? currentTime
+          : end
+
       setRadioSeekWindowSeconds(Math.max(0, end - start))
-      setRadioDelaySeconds(Math.max(0, end - currentTime))
+      setRadioDelaySeconds(Math.max(0, end - normalizedCurrentTime))
     }
 
     updateSeekWindow()
@@ -2085,7 +2096,7 @@ export function App() {
                 <div><p class="section-tag">IPTV ao vivo</p><h2>{selectedChannel?.name || 'Selecione um canal'}</h2></div>
                 <div class="pill-row">{selectedChannel ? <button class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'} type="button" onClick={() => toggleFavorite(selectedChannel.id)}>{favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}</button> : null}<span class="pill">{selectedChannel?.group || 'Sem grupo'}</span></div>
               </div>
-              <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
+              <div class="player-frame"><video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} /></div>
               <div class="player-meta">
                 <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">A sidebar fica focada em navegacao e o palco central abre um feed por vez.</p></div>
                 <div class="subtle-card compact-card"><p class="section-tag">URL da stream</p><h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao de canal'}</h3></div>
@@ -2100,7 +2111,7 @@ export function App() {
               </div>
               {selectedNewsPlayback ? (
                 <>
-                  <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
+                  <div class="player-frame"><video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} /></div>
                   <div class="player-meta">
                     <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
                     <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">Feed de noticias rodando no mesmo player leve usado no site, via HLS/DASH oficial quando disponivel.</p></div>
@@ -2161,7 +2172,21 @@ export function App() {
                   <strong>{radioPlaybackBadge}</strong>
                   <span>{radioPlaybackDetail}</span>
                 </div>
-                <video controls playsInline preload="auto" ref={videoRef} />
+                <div class="radio-stage-visual">
+                  <div class="radio-stage-logo">
+                    <img alt={selectedRadioStation.name} loading="lazy" src={selectedRadioStation.logo} />
+                  </div>
+                  <div class="radio-stage-copy">
+                    <p class="section-tag">Radio no palco</p>
+                    <h3>{selectedRadioStation.name}</h3>
+                    <p class="helper-copy">
+                      {radioReplay
+                        ? `Replay oficial carregado: ${radioReplay.title}.`
+                        : selectedRadioStation.note}
+                    </p>
+                  </div>
+                </div>
+                <audio autoPlay controls preload="auto" ref={(node) => { videoRef.current = node }} />
               </div>
               <div class="player-meta">
                 <div class="subtle-card compact-card radio-summary-card">
