@@ -373,8 +373,11 @@ export function App() {
   const [showTwitchPanel, setShowTwitchPanel] = useState(true)
   const [showKickPanel, setShowKickPanel] = useState(true)
   const [showNewsPanel, setShowNewsPanel] = useState(true)
+  const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
+  const [newsStripRightReady, setNewsStripRightReady] = useState(false)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const newsStripRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const mpegtsRef = useRef<{
     attachMediaElement: (mediaElement: HTMLMediaElement) => void
@@ -512,6 +515,31 @@ export function App() {
   const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
 
+  function syncNewsStripState() {
+    const node = newsStripRef.current
+
+    if (!node || activeSurface !== 'news') {
+      setNewsStripLeftReady(false)
+      setNewsStripRightReady(false)
+      return
+    }
+
+    const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth)
+    const canScroll = maxScroll > 8
+    setNewsStripLeftReady(canScroll && node.scrollLeft > 8)
+    setNewsStripRightReady(canScroll && node.scrollLeft < maxScroll - 8)
+  }
+
+  function scrollNewsStrip(direction: 'left' | 'right') {
+    const node = newsStripRef.current
+    if (!node) return
+
+    node.scrollBy({
+      left: (direction === 'right' ? 1 : -1) * Math.max(220, node.clientWidth * 0.68),
+      behavior: 'smooth',
+    })
+  }
+
   useEffect(() => {
     setVisibleCount(INITIAL_CHANNEL_BATCH)
   }, [playlist?.id, groupFilter, searchTerm])
@@ -629,6 +657,33 @@ export function App() {
   useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
   useEffect(() => saveJson(ACTIVE_SURFACE_KEY, activeSurface), [activeSurface])
   useEffect(() => saveJson(SHOW_LIVE_NOW_KEY, showLiveNowPanel), [showLiveNowPanel])
+  useEffect(() => {
+    if (activeSurface !== 'news') {
+      syncNewsStripState()
+      return
+    }
+
+    const node = newsStripRef.current
+    if (!node) {
+      syncNewsStripState()
+      return
+    }
+
+    const handleScroll = () => syncNewsStripState()
+    const handleResize = () => syncNewsStripState()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
+
+    node.addEventListener('scroll', handleScroll, { passive: true })
+    observer?.observe(node)
+    window.addEventListener('resize', handleResize)
+    window.requestAnimationFrame(syncNewsStripState)
+
+    return () => {
+      node.removeEventListener('scroll', handleScroll)
+      observer?.disconnect()
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [activeSurface, selectedNewsId])
   useEffect(() => {
     saveJson<PersistedFormState>(FORM_STATE_KEY, { sourceTab, xtream, m3u })
   }, [m3u, sourceTab, xtream])
@@ -1383,33 +1438,45 @@ export function App() {
         </aside>
 
         <section class="panel stage-panel">
-          <div class="feed-strip stage-feed-strip">
-            {activeSurface === 'iptv' ? (
-              <>
-                <span class="feed-pill active">{groupFilter}</span>
-                <span class="feed-pill">{favorites.length} favoritos</span>
-                <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
-                <span class="feed-pill soft">{playerState}</span>
-              </>
-            ) : activeSurface === 'news' ? (
-              newsLinks.map((item) => (
-                <button class={selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
-                  <span>{item.name}</span>
-                  <strong>LIVE</strong>
-                </button>
-              ))
-            ) : (
-              activeFeedItems.map((item) => {
-                const status = statusMap[item.channel.toLowerCase()]
-                return (
-                  <button class={feedPillTone(item.platform, activeEmbed?.id === item.id)} key={item.id} type="button" onClick={() => activateEmbed(item)}>
-                    <span>{item.channel}</span>
-                    <strong>{status?.label || 'OFF'}</strong>
+          {activeSurface === 'news' ? (
+            <div class="feed-strip-shell stage-feed-strip">
+              <button aria-label="Ver canais anteriores" class="feed-strip-nav" disabled={!newsStripLeftReady} type="button" onClick={() => scrollNewsStrip('left')}>
+                <span aria-hidden="true">‹</span>
+              </button>
+              <div class="feed-strip feed-strip-scroll" ref={newsStripRef}>
+                {newsLinks.map((item) => (
+                  <button class={selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
+                    <span>{item.name}</span>
+                    <strong>LIVE</strong>
                   </button>
-                )
-              })
-            )}
-          </div>
+                ))}
+              </div>
+              <button aria-label="Ver mais canais" class="feed-strip-nav" disabled={!newsStripRightReady} type="button" onClick={() => scrollNewsStrip('right')}>
+                <span aria-hidden="true">›</span>
+              </button>
+            </div>
+          ) : (
+            <div class="feed-strip stage-feed-strip">
+              {activeSurface === 'iptv' ? (
+                <>
+                  <span class="feed-pill active">{groupFilter}</span>
+                  <span class="feed-pill">{favorites.length} favoritos</span>
+                  <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
+                  <span class="feed-pill soft">{playerState}</span>
+                </>
+              ) : (
+                activeFeedItems.map((item) => {
+                  const status = statusMap[item.channel.toLowerCase()]
+                  return (
+                    <button class={feedPillTone(item.platform, activeEmbed?.id === item.id)} key={item.id} type="button" onClick={() => activateEmbed(item)}>
+                      <span>{item.channel}</span>
+                      <strong>{status?.label || 'OFF'}</strong>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+          )}
 
           {activeSurface === 'iptv' ? (
             <>
