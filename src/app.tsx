@@ -101,6 +101,20 @@ interface ConnectionTransferBundle {
   m3u: M3UCredentials
 }
 
+interface SiteTransferBundle {
+  version: 1
+  sourceTab: 'xtream' | 'm3u'
+  xtream: XtreamCredentials
+  m3u: M3UCredentials
+  settings: AppSettings
+  embeds: EmbedStream[]
+  favorites: string[]
+  activeSurface: MediaSurface
+  selectedEmbedId: string | null
+  selectedRadioId: string
+  showLiveNowPanel: boolean
+}
+
 declare global {
   interface Window {
     Twitch?: {
@@ -579,6 +593,31 @@ function mergeM3U(credentials?: Partial<M3UCredentials> | null) {
   return { ...defaultM3U, ...(credentials || {}) }
 }
 
+function normalizeEmbeds(value: unknown) {
+  if (!Array.isArray(value)) return embedDefaults
+
+  const normalized: EmbedStream[] = []
+
+  value.forEach((item, index) => {
+    if (!item || typeof item !== 'object') return
+    const candidate = item as Partial<EmbedStream>
+    const platform = candidate.platform === 'kick' ? 'kick' : candidate.platform === 'twitch' ? 'twitch' : null
+    const channel = String(candidate.channel || '').trim()
+    if (!platform || !channel) return
+
+    const statusEndpoint = String(candidate.statusEndpoint || '').trim()
+    normalized.push({
+      id: String(candidate.id || `${platform}:${channel}:${index}`),
+      platform,
+      channel,
+      title: String(candidate.title || channel).trim() || channel,
+      ...(statusEndpoint ? { statusEndpoint } : {}),
+    })
+  })
+
+  return normalized
+}
+
 function isReadyXtream(credentials: XtreamCredentials) {
   return Boolean(credentials.serverUrl.trim() && credentials.username.trim() && credentials.password.trim())
 }
@@ -865,6 +904,7 @@ export function App() {
   const [radioGuideState, setRadioGuideState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
   const videoRef = useRef<HTMLMediaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const siteBackupInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
   const twitchPlayerHostRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -2167,6 +2207,34 @@ export function App() {
     setTransferMessage('Configuracao exportada. Leve esse arquivo para o PC do trabalho e importe la.')
   }
 
+  function exportSiteBundle() {
+    const payload: SiteTransferBundle = {
+      version: 1,
+      sourceTab,
+      xtream,
+      m3u,
+      settings,
+      embeds,
+      favorites,
+      activeSurface,
+      selectedEmbedId,
+      selectedRadioId,
+      showLiveNowPanel,
+    }
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json;charset=utf-8',
+    })
+    const objectUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = objectUrl
+    link.download = 'iptv-pages-hub-site-backup.json'
+    link.click()
+    URL.revokeObjectURL(objectUrl)
+    setLoadError('')
+    setTransferMessage('Backup completo do site exportado. Esse arquivo leva APIs, feeds, favoritos e preferencias para outro PC.')
+  }
+
   async function importConnectionBundle(event: Event) {
     const input = event.currentTarget as HTMLInputElement
     const file = input.files?.[0]
@@ -2192,6 +2260,83 @@ export function App() {
     } catch {
       setTransferMessage('')
       setLoadError('Nao consegui importar esse arquivo. Use um backup gerado pelo botao Exportar.')
+    } finally {
+      input.value = ''
+    }
+  }
+
+  async function importSiteBundle(event: Event) {
+    const input = event.currentTarget as HTMLInputElement
+    const file = input.files?.[0]
+    if (!file) return
+
+    try {
+      const rawText = await file.text()
+      const payload = JSON.parse(rawText) as Partial<SiteTransferBundle>
+      const nextSourceTab = payload.sourceTab === 'm3u' ? 'm3u' : 'xtream'
+      const nextXtream = withDefaultProxy(payload.xtream ? payload.xtream as XtreamCredentials : defaultXtream)
+      const nextM3U = mergeM3U(payload.m3u)
+      const nextSettings = mergeSettings(payload.settings)
+      const nextEmbeds = normalizeEmbeds(payload.embeds)
+      const nextFavorites = Array.isArray(payload.favorites)
+        ? payload.favorites.map((item) => String(item || '').trim()).filter(Boolean)
+        : []
+      const nextActiveSurface = payload.activeSurface === 'twitch'
+        || payload.activeSurface === 'kick'
+        || payload.activeSurface === 'news'
+        || payload.activeSurface === 'radio'
+        || payload.activeSurface === 'iptv'
+        ? payload.activeSurface
+        : 'iptv'
+      const nextSelectedEmbedId = payload.selectedEmbedId ? String(payload.selectedEmbedId) : null
+      const nextSelectedRadioId = payload.selectedRadioId && radioStations.some((item) => item.id === payload.selectedRadioId)
+        ? payload.selectedRadioId
+        : (radioStations[0]?.id || '')
+      const nextShowLiveNowPanel = Boolean(payload.showLiveNowPanel)
+
+      setSourceTab(nextSourceTab)
+      setXtream(nextXtream)
+      setM3U(nextM3U)
+      setSettings(nextSettings)
+      setEmbeds(nextEmbeds)
+      setFavorites(nextFavorites)
+      setActiveSurface(nextActiveSurface)
+      setSelectedEmbedId(nextSelectedEmbedId)
+      setSelectedRadioId(nextSelectedRadioId)
+      setShowLiveNowPanel(nextShowLiveNowPanel)
+
+      saveJson<PersistedFormState>(FORM_STATE_KEY, {
+        sourceTab: nextSourceTab,
+        xtream: nextXtream,
+        m3u: nextM3U,
+      })
+      saveJson<AppSettings>(SETTINGS_KEY, nextSettings)
+      saveJson<EmbedStream[]>(EMBEDS_KEY, nextEmbeds)
+      saveJson<string[]>(FAVORITES_KEY, nextFavorites)
+      saveJson<MediaSurface>(ACTIVE_SURFACE_KEY, nextActiveSurface)
+      saveJson<boolean>(SHOW_LIVE_NOW_KEY, nextShowLiveNowPanel)
+      saveJson<PersistedConnection>(CONNECTION_KEY, {
+        kind: nextSourceTab,
+        remember: nextSettings.rememberConnection,
+        xtream: nextXtream,
+        m3u: nextM3U,
+      })
+
+      if (nextSelectedEmbedId) {
+        window.localStorage.setItem(SELECTED_EMBED_KEY, nextSelectedEmbedId)
+      } else {
+        window.localStorage.removeItem(SELECTED_EMBED_KEY)
+      }
+
+      if (nextSelectedRadioId) {
+        window.localStorage.setItem(SELECTED_RADIO_KEY, nextSelectedRadioId)
+      }
+
+      setLoadError('')
+      setTransferMessage('Backup completo importado. APIs, feeds, favoritos e preferencias ja ficaram salvos neste navegador.')
+    } catch {
+      setTransferMessage('')
+      setLoadError('Nao consegui importar esse backup completo. Use um arquivo gerado pelo botao Exportar site.')
     } finally {
       input.value = ''
     }
@@ -2281,11 +2426,12 @@ export function App() {
                       <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Lendo playlist...' : 'Abrir M3U'}</button>
                     </form>
                   )}
-                  <div class="subtle-card stack compact-card">
-                    <label class="check-row"><input checked={settings.rememberConnection} type="checkbox" onChange={(event) => setSettings((current) => ({ ...current, rememberConnection: (event.currentTarget as HTMLInputElement).checked }))} /><span>Lembrar neste navegador</span></label>
-                    <div class="button-row"><button class="ghost-button" type="button" onClick={exportConnectionBundle}>Exportar conexao</button><button class="ghost-button" type="button" onClick={() => fileInputRef.current?.click()}>Importar conexao</button><input ref={fileInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importConnectionBundle} /></div>
-                    {transferMessage ? <p class="helper-copy">{transferMessage}</p> : null}
-                  </div>
+                    <div class="subtle-card stack compact-card">
+                      <label class="check-row"><input checked={settings.rememberConnection} type="checkbox" onChange={(event) => setSettings((current) => ({ ...current, rememberConnection: (event.currentTarget as HTMLInputElement).checked }))} /><span>Lembrar neste navegador</span></label>
+                      <div class="button-row"><button class="ghost-button" type="button" onClick={exportConnectionBundle}>Exportar conexao</button><button class="ghost-button" type="button" onClick={() => fileInputRef.current?.click()}>Importar conexao</button><input ref={fileInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importConnectionBundle} /></div>
+                      <div class="button-row"><button class="ghost-button" type="button" onClick={exportSiteBundle}>Exportar site</button><button class="ghost-button" type="button" onClick={() => siteBackupInputRef.current?.click()}>Importar site</button><input ref={siteBackupInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importSiteBundle} /></div>
+                      {transferMessage ? <p class="helper-copy">{transferMessage}</p> : null}
+                    </div>
                   {loadError ? <p class="alert error">{loadError}</p> : null}
                 </div>
               ) : null}
