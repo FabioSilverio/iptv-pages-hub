@@ -46,6 +46,7 @@ interface NewsLink {
   source: string
   embedUrl?: string
   streamUrl?: string
+  playbackEngine?: 'dash'
 }
 
 interface MarketQuote {
@@ -130,6 +131,15 @@ const newsLinks: NewsLink[] = [
     note: 'Feed HLS oficial da NBC News NOW tocando direto no player do site.',
     source: 'NBC News',
     streamUrl: 'https://nnaa-nbcnn-lzaj01.fast.nbcuni.com/live/master.m3u8',
+  },
+  {
+    id: 'nbc-east',
+    name: 'NBC East',
+    href: 'https://www.nbc.com/live?brand=nbc&callsign=WXIA',
+    note: 'Feed DASH oficial da NBC East capturado do player autenticado da NBC e reproduzido direto no browser.',
+    source: 'NBC / WXIA',
+    streamUrl: 'https://g001-live-us-cmaf-prd-cf.pcdn03.cssott.com/Content/CMAF_OL2-CTR-4s/Live/channel(WXIA)/master.mpd?audio=all&subtitle=all&forcedNarrative=true',
+    playbackEngine: 'dash',
   },
   {
     id: 'cbs-news-247',
@@ -286,6 +296,10 @@ function isLikelyTsStream(streamUrl: string) {
   return extractTargetStreamUrl(streamUrl).toLowerCase().includes('.ts')
 }
 
+function isLikelyDashStream(streamUrl: string) {
+  return extractTargetStreamUrl(streamUrl).toLowerCase().includes('.mpd')
+}
+
 function replaceStreamExtension(streamUrl: string, nextExtension: 'm3u8' | 'ts') {
   try {
     const url = new URL(streamUrl)
@@ -304,6 +318,10 @@ function replaceStreamExtension(streamUrl: string, nextExtension: 'm3u8' | 'ts')
 }
 
 function buildPlaybackSources(channel: Channel) {
+  if (isLikelyDashStream(channel.streamUrl)) {
+    return [{ url: channel.streamUrl, engine: 'dash' as const }]
+  }
+
   const primaryIsHls = isLikelyHlsStream(channel.streamUrl)
   const fallbackIsTs = Boolean(channel.fallbackStreamUrl && isLikelyTsStream(channel.fallbackStreamUrl))
   const orderedSources = primaryIsHls && fallbackIsTs
@@ -324,7 +342,7 @@ function buildPlaybackSources(channel: Channel) {
 
   return Array.from(new Set(sources)).map((url) => ({
     url,
-    engine: isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
+    engine: isLikelyDashStream(url) ? 'dash' : isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
   }))
 }
 
@@ -379,6 +397,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const dashRef = useRef<{ reset: () => void } | null>(null)
   const mpegtsRef = useRef<{
     attachMediaElement: (mediaElement: HTMLMediaElement) => void
     detachMediaElement: () => void
@@ -478,12 +497,15 @@ export function App() {
   )
   const selectedNewsPlayback = useMemo<Channel | null>(() => {
     if (!selectedNewsLink.streamUrl) return null
+    const streamUrl = selectedNewsLink.playbackEngine === 'dash'
+      ? selectedNewsLink.streamUrl
+      : buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, selectedNewsLink.streamUrl)
 
     return {
       id: `news:${selectedNewsLink.id}`,
       name: selectedNewsLink.name,
       group: 'Noticias',
-      streamUrl: buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, selectedNewsLink.streamUrl),
+      streamUrl,
     }
   }, [selectedNewsLink])
   const selectedPlaybackChannel = useMemo<Channel | null>(() => {
@@ -751,6 +773,10 @@ export function App() {
       hlsRef.current.destroy()
       hlsRef.current = null
     }
+    if (dashRef.current) {
+      dashRef.current.reset()
+      dashRef.current = null
+    }
     if (mpegtsRef.current) {
       mpegtsRef.current.pause()
       mpegtsRef.current.unload()
@@ -796,6 +822,10 @@ export function App() {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
+      if (dashRef.current) {
+        dashRef.current.reset()
+        dashRef.current = null
+      }
       if (mpegtsRef.current) {
         mpegtsRef.current.pause()
         mpegtsRef.current.unload()
@@ -833,6 +863,11 @@ export function App() {
       if (cancelled) return
 
       setPlayerState(
+        source.engine === 'dash'
+          ? sourceIndex === 0
+            ? 'Abrindo DASH oficial da NBC...'
+            : 'Tentando DASH novamente...'
+          :
         source.engine === 'hls'
           ? sourceIndex === 0
             ? 'Abrindo HLS otimizado...'
@@ -850,7 +885,94 @@ export function App() {
           sourceIndex + 1,
           'O provedor nao respondeu a tempo no formato atual. Tentando outro formato...',
         )
-      }, source.engine === 'mpegts' ? 14000 : 12000)
+      }, source.engine === 'mpegts' ? 14000 : source.engine === 'dash' ? 16000 : 12000)
+
+      if (source.engine === 'dash') {
+        const imported = await import('dashjs')
+        const dashModule = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
+        const dashApi = dashModule as {
+          MediaPlayer?: () => {
+            create: () => {
+              initialize: (mediaElement: HTMLMediaElement, source: string, autoPlay?: boolean) => void
+              updateSettings: (settings: Record<string, unknown>) => void
+              setMute: (value: boolean) => void
+              on: (event: string, listener: (...args: unknown[]) => void) => void
+              reset: () => void
+            }
+          }
+        }
+        const dashEvents = dashModule as {
+          MediaPlayer?: {
+            events?: {
+              ERROR?: string
+              STREAM_INITIALIZED?: string
+              PLAYBACK_PLAYING?: string
+            }
+          }
+        }
+
+        if (!dashApi.MediaPlayer) {
+          void trySource(sourceIndex + 1, 'DASH nao disponivel neste navegador.')
+          return
+        }
+
+        const player = dashApi.MediaPlayer().create()
+        dashRef.current = player
+        player.updateSettings({
+          streaming: {
+            delay: { liveDelay: 14 },
+            buffer: {
+              fastSwitchEnabled: false,
+              stableBufferTime: 12,
+              bufferTimeAtTopQuality: 18,
+              bufferTimeAtTopQualityLongForm: 24,
+            },
+            retryIntervals: {
+              MPD: 1200,
+              MediaSegment: 1200,
+            },
+            retryAttempts: {
+              MPD: 4,
+              MediaSegment: 4,
+            },
+            text: {
+              defaultEnabled: false,
+            },
+          },
+        })
+
+        const events = dashEvents.MediaPlayer?.events
+        if (events?.STREAM_INITIALIZED) {
+          player.on(events.STREAM_INITIALIZED, async () => {
+            window.clearTimeout(fallbackTimer)
+            successLocked = true
+            const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
+            if (!cancelled) setPlayerState(nextState)
+          })
+        }
+
+        if (events?.PLAYBACK_PLAYING) {
+          player.on(events.PLAYBACK_PLAYING, () => {
+            window.clearTimeout(fallbackTimer)
+            successLocked = true
+            if (!cancelled) setPlayerState('Ao vivo')
+          })
+        }
+
+        if (events?.ERROR) {
+          player.on(events.ERROR, async (...args) => {
+            const payload = args[0] as { error?: { message?: string }; event?: { message?: string } } | undefined
+            if (cancelled || successLocked) return
+            void trySource(
+              sourceIndex + 1,
+              payload?.error?.message || payload?.event?.message || 'DASH recusado pela origem da NBC.',
+            )
+          })
+        }
+
+        player.initialize(media, source.url, false)
+        return
+      }
 
       if (source.engine === 'hls') {
         const { default: HlsClient } = await import('hls.js')
@@ -1502,7 +1624,7 @@ export function App() {
                   <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
                   <div class="player-meta">
                     <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
-                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">Feed de noticias rodando no mesmo player leve usado no site, via proxy HLS para abrir liso no browser.</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">{selectedNewsLink.playbackEngine === 'dash' ? 'Feed oficial da NBC East em DASH, tocando direto no browser com player adaptado para essa origem.' : 'Feed de noticias rodando no mesmo player leve usado no site, via proxy HLS para abrir liso no browser.'}</p></div>
                   </div>
                   {playerError ? <p class="alert error">{playerError}</p> : null}
                 </>

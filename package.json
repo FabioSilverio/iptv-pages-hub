@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "dashjs": "^5.1.1",
     "hls.js": "^1.6.15",
     "mpegts.js": "^1.8.0",
     "preact": "^10.29.0"

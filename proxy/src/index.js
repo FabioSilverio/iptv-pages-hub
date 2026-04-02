@@ -42,7 +42,7 @@ export default {
 
     const upstream = await fetch(targetUrl.toString(), {
       method: isHeadRequest ? 'GET' : request.method,
-      headers: filterRequestHeaders(request.headers),
+      headers: buildUpstreamHeaders(request.headers, targetUrl),
       body: canHaveBody(request.method) ? request.body : undefined,
       redirect: 'follow',
     })
@@ -52,6 +52,9 @@ export default {
       contentType.includes('application/vnd.apple.mpegurl') ||
       contentType.includes('application/x-mpegurl') ||
       targetUrl.pathname.endsWith('.m3u8')
+    const isDashManifest =
+      contentType.includes('application/dash+xml') ||
+      targetUrl.pathname.endsWith('.mpd')
 
     if (isManifest) {
       const rawManifest = await upstream.text()
@@ -60,6 +63,18 @@ export default {
         status: upstream.status,
         headers: responseHeaders(request, {
           'content-type': 'application/vnd.apple.mpegurl',
+          'cache-control': 'no-store',
+        }, upstream.headers),
+      })
+    }
+
+    if (isDashManifest) {
+      const rawManifest = await upstream.text()
+      const manifest = rewriteDashManifest(rawManifest, targetUrl, url.origin)
+      return new Response(manifest, {
+        status: upstream.status,
+        headers: responseHeaders(request, {
+          'content-type': 'application/dash+xml; charset=utf-8',
           'cache-control': 'no-store',
         }, upstream.headers),
       })
@@ -189,6 +204,26 @@ function filterRequestHeaders(headers) {
   return next
 }
 
+function buildUpstreamHeaders(headers, targetUrl) {
+  const next = filterRequestHeaders(headers)
+
+  if (requiresNbcHeaders(targetUrl)) {
+    next.set('origin', 'https://www.nbc.com')
+    next.set('referer', 'https://www.nbc.com/')
+    next.set('accept', '*/*')
+    next.set(
+      'user-agent',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+    )
+  }
+
+  return next
+}
+
+function requiresNbcHeaders(targetUrl) {
+  return /(^|\.)cssott\.com$/i.test(targetUrl.hostname)
+}
+
 function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
   const lines = rawManifest.split(/\r?\n/)
 
@@ -210,8 +245,23 @@ function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
     .join('\n')
 }
 
+function rewriteDashManifest(rawManifest, targetUrl, proxyOrigin) {
+  let manifest = rawManifest.replace(/<BaseURL>([^<]+)<\/BaseURL>/g, (_, baseValue) => {
+    const absoluteUrl = new URL(baseValue.trim(), targetUrl).toString()
+    return `<BaseURL>${buildProxyUrl(proxyOrigin, absoluteUrl)}</BaseURL>`
+  })
+
+  manifest = manifest.replace(/\b(media|initialization|sourceURL|index)="([^"]+)"/g, (_, attribute, value) => {
+    const absoluteUrl = new URL(value, targetUrl).toString()
+    return `${attribute}="${buildProxyUrl(proxyOrigin, absoluteUrl)}"`
+  })
+
+  return manifest
+}
+
 function buildProxyUrl(proxyOrigin, targetUrl) {
-  return `${proxyOrigin}/proxy?url=${encodeURIComponent(targetUrl)}`
+  const encodedTarget = encodeURIComponent(targetUrl).replace(/%24/g, '$')
+  return `${proxyOrigin}/proxy?url=${encodedTarget}`
 }
 
 function responseHeaders(request, extra = {}, upstreamHeaders) {
