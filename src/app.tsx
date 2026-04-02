@@ -101,6 +101,28 @@ interface ConnectionTransferBundle {
   m3u: M3UCredentials
 }
 
+declare global {
+  interface Window {
+    Twitch?: {
+      Embed?: {
+        VIDEO_READY?: string
+      }
+      Player?: new (
+        element: HTMLElement | string,
+        options: Record<string, unknown>,
+      ) => {
+        addEventListener?: (event: string, listener: () => void) => void
+        destroy?: () => void
+        pause?: () => void
+        play?: () => void
+        setMuted?: (muted: boolean) => void
+        setVolume?: (volume: number) => void
+      }
+    }
+    __iptvPagesHubTwitchScript?: Promise<void>
+  }
+}
+
 const defaultXtream: XtreamCredentials = {
   serverUrl: '',
   username: '',
@@ -253,9 +275,31 @@ function buildKickEmbedUrl(channel: string) {
   return `https://player.kick.com/${channel}?autoplay=true&muted=true`
 }
 
-function buildTwitchEmbedUrl(channel: string) {
-  const parent = window.location.hostname || 'localhost'
-  return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&autoplay=true&muted=true`
+async function ensureTwitchPlayerScript() {
+  if (window.Twitch?.Player) return
+  if (window.__iptvPagesHubTwitchScript) {
+    await window.__iptvPagesHubTwitchScript
+    return
+  }
+
+  window.__iptvPagesHubTwitchScript = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>('script[data-twitch-player-script="true"]')
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true })
+      existing.addEventListener('error', () => reject(new Error('Falha ao carregar o player da Twitch.')), { once: true })
+      return
+    }
+
+    const script = document.createElement('script')
+    script.src = 'https://player.twitch.tv/js/embed/v1.js'
+    script.async = true
+    script.dataset.twitchPlayerScript = 'true'
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Falha ao carregar o player da Twitch.'))
+    document.head.appendChild(script)
+  })
+
+  await window.__iptvPagesHubTwitchScript
 }
 
 function formatMarketValue(value: number, digits: number) {
@@ -822,7 +866,15 @@ export function App() {
   const videoRef = useRef<HTMLMediaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
+  const twitchPlayerHostRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const twitchPlayerRef = useRef<{
+    destroy?: () => void
+    pause?: () => void
+    play?: () => void
+    setMuted?: (muted: boolean) => void
+    setVolume?: (volume: number) => void
+  } | null>(null)
   const dashRef = useRef<{ reset: () => Promise<unknown> | unknown } | null>(null)
   const mpegtsRef = useRef<{
     attachMediaElement: (mediaElement: HTMLMediaElement) => void
@@ -1835,6 +1887,82 @@ export function App() {
     settings.twitchClientId,
   ])
 
+  useEffect(() => {
+    const destroyTwitchPlayer = () => {
+      try {
+        twitchPlayerRef.current?.pause?.()
+      } catch {
+        // Ignore pause failures while unmounting.
+      }
+      try {
+        twitchPlayerRef.current?.destroy?.()
+      } catch {
+        // Ignore destroy failures while unmounting.
+      }
+      twitchPlayerRef.current = null
+      if (twitchPlayerHostRef.current) {
+        twitchPlayerHostRef.current.innerHTML = ''
+      }
+    }
+
+    if (activeSurface !== 'twitch' || !activeEmbed || !twitchPlayerHostRef.current) {
+      destroyTwitchPlayer()
+      return
+    }
+
+    let cancelled = false
+    setPlayerError('')
+    setPlayerState('Abrindo Twitch...')
+
+    const boot = async () => {
+      try {
+        await ensureTwitchPlayerScript()
+        if (cancelled || !twitchPlayerHostRef.current || !window.Twitch?.Player) return
+
+        destroyTwitchPlayer()
+
+        const player = new window.Twitch.Player(twitchPlayerHostRef.current, {
+          channel: activeEmbed.channel,
+          parent: [window.location.hostname || 'localhost'],
+          autoplay: true,
+          muted: true,
+          width: '100%',
+          height: '100%',
+        })
+
+        twitchPlayerRef.current = player
+
+        const startPlayback = () => {
+          if (cancelled) return
+          try {
+            player.setMuted?.(true)
+            player.setVolume?.(0)
+            player.play?.()
+          } catch {
+            // Twitch player may reject play until ready; keep quiet and let the UI continue.
+          }
+          setPlayerState('Twitch ao vivo')
+        }
+
+        const readyEvent = window.Twitch.Embed?.VIDEO_READY || 'ready'
+        player.addEventListener?.(readyEvent, startPlayback)
+        window.setTimeout(startPlayback, 450)
+      } catch (error) {
+        if (!cancelled) {
+          setPlayerError(error instanceof Error ? error.message : 'Falha ao abrir a Twitch agora.')
+          setPlayerState('Falha ao abrir Twitch')
+        }
+      }
+    }
+
+    void boot()
+
+    return () => {
+      cancelled = true
+      destroyTwitchPlayer()
+    }
+  }, [activeEmbed, activeSurface])
+
   async function connectXtream(credentials = xtream, persist = true) {
     const controller = new AbortController()
     const nextCredentials = withDefaultProxy(credentials)
@@ -2488,7 +2616,11 @@ export function App() {
                 <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
                 <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
               </div>
-              <div class="player-frame embed-stage-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={activeSurface === 'twitch' ? buildTwitchEmbedUrl(activeEmbed.channel) : buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} /></div>
+              <div class="player-frame embed-stage-frame">
+                {activeSurface === 'twitch'
+                  ? <div class="twitch-player-host" ref={twitchPlayerHostRef} />
+                  : <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} />}
+              </div>
               <div class="player-meta">
                 <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{activeEmbed.channel}</h3><p class="helper-copy">{statusMap[activeEmbed.channel.toLowerCase()]?.detail || 'Feed ativo no palco principal.'}</p></div>
                 <div class="subtle-card compact-card"><p class="section-tag">Audio</p><h3>Autoplay com mute inicial</h3><p class="helper-copy">Ao clicar no feed, o embed ja entra tocando. O mute inicial ajuda o navegador a liberar autoplay sem travar o palco.</p></div>
