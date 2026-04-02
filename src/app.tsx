@@ -46,6 +46,8 @@ interface NewsLink {
   source: string
   embedUrl?: string
   streamUrl?: string
+  mirrorChannelKey?: string
+  mirrorServers?: string[]
   playbackEngine?: 'dash'
 }
 
@@ -107,6 +109,8 @@ const embedDefaults: EmbedStream[] = [
   { id: 'default:kick:sneako', platform: 'kick', channel: 'sneako', title: 'sneako' },
   { id: 'default:kick:imreallyimportant', platform: 'kick', channel: 'imreallyimportant', title: 'imreallyimportant' },
 ]
+const mirroredNewsServers = ['sec.ai-hls.site', 'chevy.soyspace.cyou']
+const mirroredNewsCache = new Map<string, { streamUrl: string; expiresAt: number }>()
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -136,16 +140,20 @@ const newsLinks: NewsLink[] = [
     id: 'nbc-east',
     name: 'NBC East',
     href: 'https://www.nbc.com/live?brand=nbc&callsign=WXIA',
-    note: 'Embed alternativo do NBC East/WXIA usado como fallback porque a origem oficial da NBC recusou o playback fora do nbc.com.',
-    source: 'NBC / WXIA fallback',
+    note: 'Feed HLS extraido do embed do NBC East/WXIA, tocando no player leve do proprio site para ficar mais agil.',
+    source: 'NBC East / mirror HLS',
+    mirrorChannelKey: 'premium53',
+    mirrorServers: mirroredNewsServers,
     embedUrl: 'https://dlstreams.top/stream/stream-53.php',
   },
   {
     id: 'abc-east',
     name: 'ABC East',
     href: 'https://dlstreams.top/stream/stream-51.php',
-    note: 'Embed alternativo do ABC East usando a fonte que voce mandou para manter o canal dentro do site.',
-    source: 'ABC fallback',
+    note: 'Feed HLS extraido do embed do ABC East para manter o canal no player leve, sem o peso do iframe.',
+    source: 'ABC East / mirror HLS',
+    mirrorChannelKey: 'premium51',
+    mirrorServers: mirroredNewsServers,
     embedUrl: 'https://dlstreams.top/stream/stream-51.php',
   },
   {
@@ -160,8 +168,10 @@ const newsLinks: NewsLink[] = [
     id: 'cbs-east',
     name: 'CBS East',
     href: 'https://dlstreams.top/stream/stream-51.php',
-    note: 'Embed alternativo do CBS East usando a fonte que voce mandou para manter o canal dentro do site.',
-    source: 'CBS fallback',
+    note: 'Feed HLS extraido do embed do CBS East para abrir no player leve do site e reduzir atraso.',
+    source: 'CBS East / mirror HLS',
+    mirrorChannelKey: 'premium51',
+    mirrorServers: mirroredNewsServers,
     embedUrl: 'https://dlstreams.top/stream/stream-51.php',
   },
   {
@@ -254,6 +264,40 @@ function hasHttpUrl(value: string) {
 
 function toHttpsUrl(value: string) {
   return value.trim().replace(/^http:\/\//i, 'https://')
+}
+
+async function resolveMirroredNewsStream(channelKey: string, servers: string[]) {
+  const cached = mirroredNewsCache.get(channelKey)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.streamUrl
+  }
+
+  for (const domain of servers) {
+    try {
+      const response = await fetch(`https://${domain}/server_lookup?channel_id=${encodeURIComponent(channelKey)}`)
+      if (!response.ok) {
+        continue
+      }
+
+      const payload = (await response.json()) as { server_key?: string }
+      const serverKey = String(payload.server_key || '').trim()
+      if (!serverKey) {
+        continue
+      }
+
+      const route = serverKey === 'top1/cdn' ? 'top1/cdn' : serverKey
+      const streamUrl = `https://${domain}/proxy/${route}/${channelKey}/mono.m3u8`
+      mirroredNewsCache.set(channelKey, {
+        streamUrl,
+        expiresAt: Date.now() + 5 * 60_000,
+      })
+      return streamUrl
+    } catch {
+      // Try the next mirror host.
+    }
+  }
+
+  throw new Error('Nao consegui resolver o feed espelhado agora.')
 }
 
 function formatXtreamError(error: unknown, serverUrl: string) {
@@ -395,6 +439,9 @@ export function App() {
     () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
   )
   const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
+  const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
+  const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
+  const [newsMirrorError, setNewsMirrorError] = useState('')
   const [selectedEmbedId, setSelectedEmbedId] = useState<string | null>(
     () => window.localStorage.getItem(SELECTED_EMBED_KEY),
   )
@@ -511,10 +558,11 @@ export function App() {
     [selectedNewsId],
   )
   const selectedNewsPlayback = useMemo<Channel | null>(() => {
-    if (!selectedNewsLink.streamUrl) return null
+    const resolvedStream = resolvedNewsStreamUrl || selectedNewsLink.streamUrl
+    if (!resolvedStream) return null
     const streamUrl = selectedNewsLink.playbackEngine === 'dash'
-      ? selectedNewsLink.streamUrl
-      : buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, selectedNewsLink.streamUrl)
+      ? resolvedStream
+      : buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, resolvedStream)
 
     return {
       id: `news:${selectedNewsLink.id}`,
@@ -522,7 +570,7 @@ export function App() {
       group: 'Noticias',
       streamUrl,
     }
-  }, [selectedNewsLink])
+  }, [resolvedNewsStreamUrl, selectedNewsLink])
   const selectedPlaybackChannel = useMemo<Channel | null>(() => {
     if (activeSurface === 'iptv') return selectedChannel
     if (activeSurface === 'news') return selectedNewsPlayback
@@ -580,6 +628,47 @@ export function App() {
   useEffect(() => {
     setVisibleCount(INITIAL_CHANNEL_BATCH)
   }, [playlist?.id, groupFilter, searchTerm])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const resolveNews = async () => {
+      setNewsMirrorError('')
+
+      if (selectedNewsLink.mirrorChannelKey) {
+        setResolvedNewsStreamUrl('')
+        setNewsMirrorState('resolving')
+
+        try {
+          const streamUrl = await resolveMirroredNewsStream(
+            selectedNewsLink.mirrorChannelKey,
+            selectedNewsLink.mirrorServers || mirroredNewsServers,
+          )
+
+          if (!cancelled) {
+            setResolvedNewsStreamUrl(streamUrl)
+            setNewsMirrorState('ready')
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setResolvedNewsStreamUrl('')
+            setNewsMirrorState('failed')
+            setNewsMirrorError(error instanceof Error ? error.message : 'Falha ao resolver o feed espelhado.')
+          }
+        }
+        return
+      }
+
+      setResolvedNewsStreamUrl(selectedNewsLink.streamUrl || '')
+      setNewsMirrorState(selectedNewsLink.streamUrl ? 'ready' : 'idle')
+    }
+
+    void resolveNews()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedNewsLink])
 
   useEffect(() => {
     setClockTick(Date.now())
@@ -1621,16 +1710,21 @@ export function App() {
                   <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
                   <div class="player-meta">
                     <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
-                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">{selectedNewsLink.playbackEngine === 'dash' ? 'Feed oficial da NBC East em DASH, tocando direto no browser com player adaptado para essa origem.' : 'Feed de noticias rodando no mesmo player leve usado no site, via proxy HLS para abrir liso no browser.'}</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">{selectedNewsLink.mirrorChannelKey ? 'Feed espelhado resolvido do embed e reproduzido no player leve do site, sem carregar iframe pesado.' : selectedNewsLink.playbackEngine === 'dash' ? 'Feed oficial da NBC East em DASH, tocando direto no browser com player adaptado para essa origem.' : 'Feed de noticias rodando no mesmo player leve usado no site, via proxy HLS para abrir liso no browser.'}</p></div>
                   </div>
                   {playerError ? <p class="alert error">{playerError}</p> : null}
                 </>
+              ) : newsMirrorState === 'resolving' ? (
+                <div class="subtle-card compact-card news-stage-card">
+                  <h3>Preparando {selectedNewsLink.name}</h3>
+                  <p class="helper-copy">Resolvendo o feed leve desse canal para evitar o iframe pesado e abrir mais rapido no palco.</p>
+                </div>
               ) : selectedNewsLink.embedUrl ? (
                 <>
                   <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsLink.embedUrl} title={selectedNewsLink.name} /></div>
                   <div class="player-meta">
                     <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
-                    <div class="subtle-card compact-card"><p class="section-tag">Origem</p><h3>{selectedNewsLink.source}</h3><p class="helper-copy">Se o embed for bloqueado pela emissora ou pela sua regiao, use o botao para abrir a transmissao original.</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Origem</p><h3>{selectedNewsLink.source}</h3><p class="helper-copy">{newsMirrorError || 'Se o embed for bloqueado pela emissora ou pela sua regiao, use o botao para abrir a transmissao original.'}</p></div>
                   </div>
                 </>
               ) : (
