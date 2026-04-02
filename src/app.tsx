@@ -131,6 +131,14 @@ const newsLinks: NewsLink[] = [
     source: 'CBS News',
     streamUrl: 'https://news20e7hhcb.airspace-cdn.cbsivideo.com/index.m3u8',
   },
+  {
+    id: 'al-jazeera-english',
+    name: 'Al Jazeera English',
+    href: 'https://www.aljazeera.com/video/live',
+    note: 'Feed ao vivo da Al Jazeera English tocando no player leve do site.',
+    source: 'Al Jazeera',
+    streamUrl: 'https://live-hls-web-aje-fa.getaj.net/AJE/index.m3u8',
+  },
 ]
 
 function readJson<T>(key: string, fallback: T) {
