@@ -37,6 +37,8 @@ const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
+const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
+const PT_BR_COLLATOR = new Intl.Collator('pt-BR')
 
 type MediaSurface = 'iptv' | 'twitch' | 'kick' | 'news' | 'radio'
 
@@ -251,6 +253,26 @@ function formatMarketValue(value: number, digits: number) {
 function formatMarketPercent(value: number) {
   const signal = value > 0 ? '+' : value < 0 ? '' : ''
   return `${signal}${value.toFixed(2)}%`
+}
+
+function buildDashboardTimes(now: Date) {
+  const zones = [
+    ['Brasil', 'America/Sao_Paulo'],
+    ['Londres', 'Europe/London'],
+    ['Chicago', 'America/Chicago'],
+    ['Paris', 'Europe/Paris'],
+    ['LA', 'America/Los_Angeles'],
+    ['NY', 'America/New_York'],
+  ] as const
+
+  return zones.map(([label, timeZone]) => ({
+    label,
+    value: new Intl.DateTimeFormat('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone,
+    }).format(now),
+  }))
 }
 
 function formatWindowLabel(seconds: number) {
@@ -554,6 +576,121 @@ async function attemptPlayback(video: HTMLMediaElement, stateOnBlocked: string) 
   }
 }
 
+function LiveDashboardMeta() {
+  const [clockTick, setClockTick] = useState(() => Date.now())
+  const [marketQuotes, setMarketQuotes] = useState<MarketQuote[]>([])
+
+  const dashboardTimes = useMemo(
+    () => buildDashboardTimes(new Date(clockTick)),
+    [clockTick],
+  )
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockTick(Date.now()), 1000)
+    return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    let isActive = true
+
+    const loadMarketQuotes = async () => {
+      try {
+        const targetUrl =
+          'https://query1.finance.yahoo.com/v7/finance/spark?symbols=BRL%3DX,%5EBVSP,%5EDJI,%5EIXIC,%5EVIX,%5EFTSE,%5EGDAXI,%5EFCHI&range=1d&interval=5m'
+        const requestUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, targetUrl)
+        const response = await fetch(requestUrl, {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error('Falha ao carregar painel de mercado.')
+        }
+
+        const payload = (await response.json()) as {
+          spark?: {
+            result?: Array<{
+              symbol?: string
+              response?: Array<{
+                meta?: {
+                  regularMarketPrice?: number
+                  previousClose?: number
+                }
+              }>
+            }>
+          }
+        }
+
+        const bySymbol = new Map(
+          (payload.spark?.result || []).map((entry) => [entry.symbol || '', entry.response?.[0]?.meta || {}]),
+        )
+
+        const nextQuotes = marketItems.reduce<MarketQuote[]>((items, item) => {
+          const meta = bySymbol.get(item.symbol)
+          const price = Number(meta?.regularMarketPrice)
+          const previous = Number(meta?.previousClose)
+
+          if (!Number.isFinite(price) || !Number.isFinite(previous) || previous === 0) {
+            return items
+          }
+
+          const percent = ((price - previous) / previous) * 100
+          items.push({
+            id: item.id,
+            label: item.label,
+            value: formatMarketValue(price, item.digits),
+            change: formatMarketPercent(percent),
+            trend: percent > 0.02 ? 'up' as const : percent < -0.02 ? 'down' as const : 'flat' as const,
+          })
+          return items
+        }, [])
+
+        if (isActive) {
+          setMarketQuotes(nextQuotes)
+        }
+      } catch {
+        if (isActive) {
+          setMarketQuotes([])
+        }
+      }
+    }
+
+    void loadMarketQuotes()
+    const interval = window.setInterval(() => void loadMarketQuotes(), 300000)
+
+    return () => {
+      isActive = false
+      window.clearInterval(interval)
+    }
+  }, [])
+
+  return (
+    <div class="topbar-meta">
+      {marketQuotes.length ? (
+        <div class="market-strip" aria-label="Painel sutil de mercado">
+          {marketQuotes.map((item) => (
+            <div class={`market-pill ${item.trend}`} key={item.id}>
+              <span>{item.label}</span>
+              <strong>{item.value}</strong>
+              <small>{item.change}</small>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div class="topbar-stats">
+        {dashboardTimes.map((entry) => (
+          <div class="stat-card time-card" key={entry.label}>
+            <span>{entry.label}</span>
+            <strong>{entry.value}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export function App() {
   const [sourceTab, setSourceTab] = useState<'xtream' | 'm3u'>('xtream')
   const [xtream, setXtream] = useState<XtreamCredentials>(defaultXtream)
@@ -573,8 +710,6 @@ export function App() {
   const [playerError, setPlayerError] = useState('')
   const [playerState, setPlayerState] = useState('Pronto para tocar')
   const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
-  const [clockTick, setClockTick] = useState(() => Date.now())
-  const [marketQuotes, setMarketQuotes] = useState<MarketQuote[]>([])
   const [activeSurface, setActiveSurface] = useState<MediaSurface>(
     () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
   )
@@ -598,7 +733,6 @@ export function App() {
   const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
-  const [radioDelaySeconds, setRadioDelaySeconds] = useState(0)
   const [radioReplay, setRadioReplay] = useState<RadioReplayState | null>(null)
   const videoRef = useRef<HTMLMediaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -618,28 +752,28 @@ export function App() {
 
   const channels = playlist?.channels ?? []
   const favoriteIds = useMemo(() => new Set(favorites), [favorites])
+  const normalizedSearch = searchTerm.trim().toLowerCase()
   const visibleChannels = useMemo(
     () =>
       channels
         .filter((channel) => {
           const matchesGroup = groupFilter === 'Todos' || channel.group === groupFilter
-          const search = searchTerm.trim().toLowerCase()
           const matchesSearch =
-            !search ||
-            channel.name.toLowerCase().includes(search) ||
-            channel.group.toLowerCase().includes(search) ||
-            channel.tvgId?.toLowerCase().includes(search)
+            !normalizedSearch ||
+            channel.name.toLowerCase().includes(normalizedSearch) ||
+            channel.group.toLowerCase().includes(normalizedSearch) ||
+            channel.tvgId?.toLowerCase().includes(normalizedSearch)
           return matchesGroup && matchesSearch
         })
         .sort((left, right) => {
           const leftFavorite = favoriteIds.has(left.id) ? 1 : 0
           const rightFavorite = favoriteIds.has(right.id) ? 1 : 0
           if (leftFavorite !== rightFavorite) return rightFavorite - leftFavorite
-          const groupCompare = left.group.localeCompare(right.group, 'pt-BR')
+          const groupCompare = PT_BR_COLLATOR.compare(left.group, right.group)
           if (groupCompare !== 0) return groupCompare
-          return left.name.localeCompare(right.name, 'pt-BR')
+          return PT_BR_COLLATOR.compare(left.name, right.name)
         }),
-    [channels, favoriteIds, groupFilter, searchTerm],
+    [channels, favoriteIds, groupFilter, normalizedSearch],
   )
   const displayedChannels = useMemo(
     () => visibleChannels.slice(0, visibleCount),
@@ -753,17 +887,13 @@ export function App() {
     () => (radioSeekWindowSeconds >= 60 ? formatWindowLabel(radioSeekWindowSeconds) : ''),
     [radioSeekWindowSeconds],
   )
-  const radioDelayLabel = useMemo(() => {
-    if (radioDelaySeconds < 10) return 'Ao vivo'
-    return `${formatWindowLabel(radioDelaySeconds)} atras`
-  }, [radioDelaySeconds])
   const radioPlaybackBadge = useMemo(() => {
     if (radioReplay) {
       return `Replay ${formatWindowLabel(radioReplay.targetOffsetSeconds)} atras`
     }
 
-    return radioDelayLabel
-  }, [radioDelayLabel, radioReplay])
+    return 'Ao vivo'
+  }, [radioReplay])
   const radioPlaybackDetail = useMemo(() => {
     if (!radioReplay) {
       return radioWindowLabel ? `Janela ao vivo ${radioWindowLabel}` : 'Ao vivo oficial'
@@ -783,26 +913,6 @@ export function App() {
       ? `${radioReplay.title} · ${startedLabel}`
       : radioReplay.title
   }, [radioReplay, radioWindowLabel])
-  const dashboardTimes = useMemo(() => {
-    const now = new Date(clockTick)
-    const zones = [
-      ['Brasil', 'America/Sao_Paulo'],
-      ['Londres', 'Europe/London'],
-      ['Chicago', 'America/Chicago'],
-      ['Paris', 'Europe/Paris'],
-      ['LA', 'America/Los_Angeles'],
-      ['NY', 'America/New_York'],
-    ] as const
-
-    return zones.map(([label, timeZone]) => ({
-      label,
-      value: new Intl.DateTimeFormat('pt-BR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone,
-      }).format(now),
-    }))
-  }, [clockTick])
   const hasMoreChannels = displayedChannels.length < visibleChannels.length
   const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
@@ -876,88 +986,6 @@ export function App() {
       cancelled = true
     }
   }, [selectedNewsLink])
-
-  useEffect(() => {
-    setClockTick(Date.now())
-    const interval = window.setInterval(() => setClockTick(Date.now()), 1000)
-    return () => window.clearInterval(interval)
-  }, [])
-
-  useEffect(() => {
-    let isActive = true
-
-    const loadMarketQuotes = async () => {
-      try {
-        const targetUrl =
-          'https://query1.finance.yahoo.com/v7/finance/spark?symbols=BRL%3DX,%5EBVSP,%5EDJI,%5EIXIC,%5EVIX,%5EFTSE,%5EGDAXI,%5EFCHI&range=1d&interval=5m'
-        const requestUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, targetUrl)
-        const response = await fetch(requestUrl, {
-          headers: {
-            Accept: 'application/json',
-            'User-Agent': 'Mozilla/5.0',
-          },
-        })
-
-        if (!response.ok) {
-          throw new Error('Falha ao carregar painel de mercado.')
-        }
-
-        const payload = (await response.json()) as {
-          spark?: {
-            result?: Array<{
-              symbol?: string
-              response?: Array<{
-                meta?: {
-                  regularMarketPrice?: number
-                  previousClose?: number
-                }
-              }>
-            }>
-          }
-        }
-
-        const bySymbol = new Map(
-          (payload.spark?.result || []).map((entry) => [entry.symbol || '', entry.response?.[0]?.meta || {}]),
-        )
-
-        const nextQuotes = marketItems.reduce<MarketQuote[]>((items, item) => {
-            const meta = bySymbol.get(item.symbol)
-            const price = Number(meta?.regularMarketPrice)
-            const previous = Number(meta?.previousClose)
-
-            if (!Number.isFinite(price) || !Number.isFinite(previous) || previous === 0) {
-              return items
-            }
-
-            const percent = ((price - previous) / previous) * 100
-            items.push({
-              id: item.id,
-              label: item.label,
-              value: formatMarketValue(price, item.digits),
-              change: formatMarketPercent(percent),
-              trend: percent > 0.02 ? 'up' as const : percent < -0.02 ? 'down' as const : 'flat' as const,
-            })
-            return items
-          }, [])
-
-        if (isActive) {
-          setMarketQuotes(nextQuotes)
-        }
-      } catch {
-        if (isActive) {
-          setMarketQuotes([])
-        }
-      }
-    }
-
-    void loadMarketQuotes()
-    const interval = window.setInterval(() => void loadMarketQuotes(), 300000)
-
-    return () => {
-      isActive = false
-      window.clearInterval(interval)
-    }
-  }, [])
 
   useEffect(() => {
     const hashToken = takeTwitchTokenFromHash()
@@ -1078,6 +1106,9 @@ export function App() {
       media.defaultMuted = true
       media.muted = true
       media.dataset.initialMuteApplied = 'true'
+    } else if (activeSurface !== 'iptv') {
+      media.defaultMuted = false
+      media.muted = false
     }
 
     let cancelled = false
@@ -1454,41 +1485,26 @@ export function App() {
 
     if (!video || activeSurface !== 'radio') {
       setRadioSeekWindowSeconds(0)
-      setRadioDelaySeconds(0)
       return
     }
 
     const updateSeekWindow = () => {
-      if (radioReplay) {
-        setRadioSeekWindowSeconds(0)
-        setRadioDelaySeconds(radioReplay.targetOffsetSeconds)
-        return
-      }
-
       if (!video.seekable.length) {
         setRadioSeekWindowSeconds(0)
-        setRadioDelaySeconds(0)
         return
       }
 
       const index = video.seekable.length - 1
       const start = video.seekable.start(index)
       const end = video.seekable.end(index)
-      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : end
 
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
         setRadioSeekWindowSeconds(0)
-        setRadioDelaySeconds(0)
         return
       }
 
-      const normalizedCurrentTime =
-        Number.isFinite(currentTime) && currentTime >= start && currentTime <= end
-          ? currentTime
-          : end
-
       setRadioSeekWindowSeconds(Math.max(0, end - start))
-      setRadioDelaySeconds(Math.max(0, end - normalizedCurrentTime))
+
     }
 
     updateSeekWindow()
@@ -1718,7 +1734,6 @@ export function App() {
         setRadioReplay(null)
         video.currentTime = Math.max(start, end - secondsBack)
         void video.play().catch(() => {})
-        setRadioDelaySeconds(secondsBack)
         setPlayerState(`Replay ${formatWindowLabel(secondsBack)} atras`)
         return
       }
@@ -1735,7 +1750,6 @@ export function App() {
           DEFAULT_XTREAM_PROXY_URL,
         )
         setRadioReplay(replay)
-        setRadioDelaySeconds(secondsBack)
         setPlayerState(`Replay ${formatWindowLabel(secondsBack)} atras`)
         return
       } catch (error) {
@@ -1752,7 +1766,6 @@ export function App() {
     if (radioReplay) {
       setRadioReplay(null)
       setPlayerError('')
-      setRadioDelaySeconds(0)
       setPlayerState('Voltando ao vivo...')
       return
     }
@@ -1865,27 +1878,7 @@ export function App() {
             <p class="eyebrow">IPTV Pages Hub</p>
             <h1>links e canais ao vivo num painel rapido e limpo</h1>
             <p class="hero-subcopy">Horario no Brasil, em Londres, em Chicago, em Paris, em LA e em NY no topo. IPTV, noticias e agora radios entram no mesmo palco leve para manter a navegacao agil.</p>
-            <div class="topbar-meta">
-              {marketQuotes.length ? (
-                <div class="market-strip" aria-label="Painel sutil de mercado">
-                  {marketQuotes.map((item) => (
-                    <div class={`market-pill ${item.trend}`} key={item.id}>
-                      <span>{item.label}</span>
-                      <strong>{item.value}</strong>
-                      <small>{item.change}</small>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              <div class="topbar-stats">
-                {dashboardTimes.map((entry) => (
-                  <div class="stat-card time-card" key={entry.label}>
-                    <span>{entry.label}</span>
-                    <strong>{entry.value}</strong>
-                  </div>
-                ))}
-              </div>
-            </div>
+            <LiveDashboardMeta />
           </div>
           <div class="surface-switch hero-surface-switch">
             <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
@@ -1975,7 +1968,7 @@ export function App() {
             <div class={activeSurface === 'iptv' ? 'sidebar-section active' : 'sidebar-section'}>
               <button class={showIptvPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowIptvPanel((current) => !current)}>
                 <span>Lista IPTV</span>
-                <small>{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} canais</small>
+                <small>{PT_BR_NUMBER.format(visibleChannels.length)} canais</small>
               </button>
               {showIptvPanel ? (
                 <div class="sidebar-content stack">
@@ -2076,7 +2069,7 @@ export function App() {
                 <>
                   <span class="feed-pill active">{groupFilter}</span>
                   <span class="feed-pill">{favorites.length} favoritos</span>
-                  <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
+                  <span class="feed-pill">{PT_BR_NUMBER.format(visibleChannels.length)} visiveis</span>
                   <span class="feed-pill soft">{playerState}</span>
                 </>
               ) : activeSurface === 'radio' ? (
@@ -2178,7 +2171,7 @@ export function App() {
                 </div>
               </div>
               <div class="player-frame radio-player-frame">
-                <div class={radioReplay ? 'radio-playback-badge replay' : radioDelaySeconds >= 10 ? 'radio-playback-badge delayed' : 'radio-playback-badge live'}>
+                <div class={radioReplay ? 'radio-playback-badge replay' : 'radio-playback-badge live'}>
                   <strong>{radioPlaybackBadge}</strong>
                   <span>{radioPlaybackDetail}</span>
                 </div>
