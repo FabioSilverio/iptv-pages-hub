@@ -270,37 +270,30 @@ async function loadLbcGuide(proxyBase: string) {
 
 function appendJsonpCallback(url: string, callbackName: string) {
   const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}callback=${encodeURIComponent(callbackName)}`
+  return `${url}${separator}callback=${callbackName}`
 }
 
-async function fetchJsonp<T>(url: string, callbackPrefix: string) {
-  return new Promise<T>((resolve, reject) => {
-    const callbackName = `__iptv_pages_hub_${callbackPrefix}_${Date.now()}_${Math.random().toString(36).slice(2)}`
-    const script = document.createElement('script')
-    const timeout = window.setTimeout(() => {
-      cleanup()
-      reject(new Error('A fonte oficial demorou demais para responder.'))
-    }, 10_000)
-
-    const cleanup = () => {
-      window.clearTimeout(timeout)
-      script.remove()
-      delete window[callbackName]
-    }
-
-    window[callbackName] = (payload: T) => {
-      cleanup()
-      resolve(payload)
-    }
-
-    script.async = true
-    script.onerror = () => {
-      cleanup()
-      reject(new Error('A fonte oficial recusou o JSONP agora.'))
-    }
-    script.src = appendJsonpCallback(url, callbackName)
-    document.head.appendChild(script)
+async function fetchJsonpViaProxy<T>(url: string, callbackPrefix: string, proxyBase: string) {
+  const callbackName = `iptvPagesHub_${callbackPrefix}`
+  const response = await fetch(buildProxyUrl(proxyBase, appendJsonpCallback(url, callbackName)), {
+    headers: {
+      Accept: 'application/javascript, text/javascript, */*',
+      'User-Agent': 'Mozilla/5.0',
+    },
   })
+
+  if (!response.ok) {
+    throw new Error('A fonte oficial nao respondeu ao pedido da grade.')
+  }
+
+  const payload = (await response.text()).trim()
+  const match = payload.match(/^[^(]+\(([\s\S]*)\)\s*;?\s*$/)
+
+  if (!match) {
+    throw new Error('A fonte oficial devolveu um formato de grade invalido.')
+  }
+
+  return JSON.parse(match[1]) as T
 }
 
 function normaliseTimesEntry(entry: TimesScheduleResult): RadioGuideEntry {
@@ -313,12 +306,12 @@ function normaliseTimesEntry(entry: TimesScheduleResult): RadioGuideEntry {
   }
 }
 
-async function loadTimesGuide() {
+async function loadTimesGuide(proxyBase: string) {
   const rpId = '521'
   const baseUrl = 'https://np.radioplayer.co.uk/qp/'
   const [eventsPayload, schedulePayload] = await Promise.all([
-    fetchJsonp<{ results?: TimesNowPlayingResult }>(`${baseUrl}v4/events/?rpId=${rpId}`, 'times_events'),
-    fetchJsonp<{ results?: TimesScheduleResult[] }>(`${baseUrl}v4/schedule?rpId=${rpId}`, 'times_schedule'),
+    fetchJsonpViaProxy<{ results?: TimesNowPlayingResult }>(`${baseUrl}v4/events/?rpId=${rpId}`, 'times_events', proxyBase),
+    fetchJsonpViaProxy<{ results?: TimesScheduleResult[] }>(`${baseUrl}v4/schedule?rpId=${rpId}`, 'times_schedule', proxyBase),
   ])
 
   const scheduleEntries = Array.isArray(schedulePayload.results)
@@ -374,7 +367,7 @@ export async function loadRadioGuide(station: RadioStation, proxyBase: string) {
   } else if (station.id === 'lbc-uk') {
     snapshot = await loadLbcGuide(proxyBase)
   } else if (station.id === 'times-radio') {
-    snapshot = await loadTimesGuide()
+    snapshot = await loadTimesGuide(proxyBase)
   } else {
     throw new Error('Essa radio ainda nao tem grade oficial ligada no app.')
   }

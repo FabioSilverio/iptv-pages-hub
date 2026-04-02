@@ -42,6 +42,7 @@ const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
+const LIVE_STATUS_REFRESH_MS = 60_000
 const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
 const PT_BR_COLLATOR = new Intl.Collator('pt-BR')
 
@@ -54,6 +55,7 @@ interface NewsLink {
   note: string
   source: string
   embedUrl?: string
+  embedResolver?: 'nasa-live'
   streamUrl?: string
   mirrorChannelKey?: string
   mirrorServers?: string[]
@@ -192,6 +194,14 @@ const newsLinks: NewsLink[] = [
     source: 'Vatican Media',
     embedUrl: 'https://www.youtube.com/embed/03pYP2Nmreo?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1',
   },
+  {
+    id: 'nasa-live',
+    name: 'NASA TV',
+    href: 'https://www.nasa.gov/live/',
+    note: 'Embed oficial atual da pagina NASA Live, resolvido automaticamente para abrir no palco sem sair do site.',
+    source: 'NASA',
+    embedResolver: 'nasa-live',
+  },
 ]
 
 const marketItems = [
@@ -240,12 +250,12 @@ function isTokenFresh(expiresAt?: string) {
 }
 
 function buildKickEmbedUrl(channel: string) {
-  return `https://player.kick.com/${channel}?autoplay=false&muted=false`
+  return `https://player.kick.com/${channel}?autoplay=true&muted=true`
 }
 
 function buildTwitchEmbedUrl(channel: string) {
   const parent = window.location.hostname || 'localhost'
-  return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&muted=false`
+  return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&autoplay=true&muted=true`
 }
 
 function formatMarketValue(value: number, digits: number) {
@@ -341,6 +351,29 @@ async function resolveMirroredNewsStream(channelKey: string, servers: string[]) 
   }
 
   throw new Error('Nao consegui resolver o feed espelhado agora.')
+}
+
+async function resolveOfficialNasaEmbed(proxyBase: string) {
+  const response = await fetch(buildProxyUrl(proxyBase, 'https://www.nasa.gov/live/'), {
+    headers: {
+      Accept: 'text/html',
+      'User-Agent': 'Mozilla/5.0',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error('A pagina oficial da NASA nao respondeu agora.')
+  }
+
+  const html = await response.text()
+  const matches = [...html.matchAll(/https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})/g)]
+  const videoId = matches[0]?.[1]
+
+  if (!videoId) {
+    throw new Error('Nao consegui identificar o embed oficial atual da NASA.')
+  }
+
+  return `https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1`
 }
 
 function extractNextDataJson(html: string) {
@@ -757,6 +790,7 @@ export function App() {
   const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
   const [selectedRadioId, setSelectedRadioId] = useState<string>(() => readJson<string>(SELECTED_RADIO_KEY, radioStations[0]?.id || ''))
   const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
+  const [resolvedNewsEmbedUrl, setResolvedNewsEmbedUrl] = useState('')
   const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
   const [newsMirrorError, setNewsMirrorError] = useState('')
   const [selectedEmbedId, setSelectedEmbedId] = useState<string | null>(
@@ -905,6 +939,10 @@ export function App() {
       streamUrl,
     }
   }, [resolvedNewsStreamUrl, selectedNewsLink])
+  const selectedNewsEmbedUrl = useMemo(
+    () => resolvedNewsEmbedUrl || selectedNewsLink.embedUrl || '',
+    [resolvedNewsEmbedUrl, selectedNewsLink.embedUrl],
+  )
   const selectedRadioPlayback = useMemo<Channel | null>(() => {
     if (!selectedRadioStation) return null
 
@@ -1008,6 +1046,7 @@ export function App() {
 
     const resolveNews = async () => {
       setNewsMirrorError('')
+      setResolvedNewsEmbedUrl('')
 
       if (selectedNewsLink.mirrorChannelKey) {
         setResolvedNewsStreamUrl('')
@@ -1033,8 +1072,27 @@ export function App() {
         return
       }
 
+      if (selectedNewsLink.embedResolver === 'nasa-live') {
+        setResolvedNewsStreamUrl('')
+        setNewsMirrorState('resolving')
+
+        try {
+          const embedUrl = await resolveOfficialNasaEmbed(DEFAULT_XTREAM_PROXY_URL)
+          if (!cancelled) {
+            setResolvedNewsEmbedUrl(embedUrl)
+            setNewsMirrorState('ready')
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setNewsMirrorState('failed')
+            setNewsMirrorError(error instanceof Error ? error.message : 'Falha ao resolver o embed oficial da NASA.')
+          }
+        }
+        return
+      }
+
       setResolvedNewsStreamUrl(selectedNewsLink.streamUrl || '')
-      setNewsMirrorState(selectedNewsLink.streamUrl ? 'ready' : 'idle')
+      setNewsMirrorState(selectedNewsLink.streamUrl || selectedNewsLink.embedUrl ? 'ready' : 'idle')
     }
 
     void resolveNews()
@@ -1632,11 +1690,19 @@ export function App() {
     let isActive = true
 
     const refresh = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        return
+      }
+
       const nextStatus: Record<string, EmbedStatus> = {}
-      const twitchChannels = embeds
-        .filter((item) => item.platform === 'twitch')
-        .map((item) => item.channel.trim().toLowerCase())
-        .filter(Boolean)
+      const twitchChannels = Array.from(
+        new Set(
+          embeds
+            .filter((item) => item.platform === 'twitch')
+            .map((item) => item.channel.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      )
 
       if (twitchChannels.length && settings.twitchClientId && settings.twitchAccessToken) {
         try {
@@ -1653,10 +1719,14 @@ export function App() {
         })
       }
 
-      const kickChannels = embeds
-        .filter((item) => item.platform === 'kick')
-        .map((item) => item.channel.trim().toLowerCase())
-        .filter(Boolean)
+      const kickChannels = Array.from(
+        new Set(
+          embeds
+            .filter((item) => item.platform === 'kick')
+            .map((item) => item.channel.trim().toLowerCase())
+            .filter(Boolean),
+        ),
+      )
 
       if (kickChannels.length && settings.kickClientId && settings.kickClientSecret) {
         try {
@@ -1734,12 +1804,28 @@ export function App() {
     }
 
     void refresh()
-    const interval = window.setInterval(() => void refresh(), 300000)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void refresh()
+      }
+    }
+
+    const interval = window.setInterval(() => void refresh(), LIVE_STATUS_REFRESH_MS)
+    document.addEventListener('visibilitychange', onVisibilityChange)
     return () => {
       isActive = false
       window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [embeds, settings.twitchAccessToken, settings.twitchClientId])
+  }, [
+    embeds,
+    settings.kickAppAccessToken,
+    settings.kickAppTokenExpiresAt,
+    settings.kickClientId,
+    settings.kickClientSecret,
+    settings.twitchAccessToken,
+    settings.twitchClientId,
+  ])
 
   async function connectXtream(credentials = xtream, persist = true) {
     const controller = new AbortController()
@@ -2230,9 +2316,9 @@ export function App() {
                   <h3>Preparando {selectedNewsLink.name}</h3>
                   <p class="helper-copy">Resolvendo o feed leve desse canal para evitar o iframe pesado e abrir mais rapido no palco.</p>
                 </div>
-              ) : selectedNewsLink.embedUrl ? (
+              ) : selectedNewsEmbedUrl ? (
                 <>
-                  <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsLink.embedUrl} title={selectedNewsLink.name} /></div>
+                  <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsEmbedUrl} title={selectedNewsLink.name} /></div>
                   <div class="player-meta">
                     <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
                     <div class="subtle-card compact-card"><p class="section-tag">Origem</p><h3>{selectedNewsLink.source}</h3><p class="helper-copy">{newsMirrorError || 'Se o embed for bloqueado pela emissora ou pela sua regiao, use o botao para abrir a transmissao original.'}</p></div>
@@ -2369,7 +2455,7 @@ export function App() {
               <div class="player-frame embed-stage-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={activeSurface === 'twitch' ? buildTwitchEmbedUrl(activeEmbed.channel) : buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} /></div>
               <div class="player-meta">
                 <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{activeEmbed.channel}</h3><p class="helper-copy">{statusMap[activeEmbed.channel.toLowerCase()]?.detail || 'Feed ativo no palco principal.'}</p></div>
-                <div class="subtle-card compact-card"><p class="section-tag">Audio</p><h3>{activeSurface === 'kick' ? 'Kick sem mute forcado' : 'Feed focado'}</h3><p class="helper-copy">{activeSurface === 'kick' ? 'Removi o muted=true do embed. Se o navegador ainda segurar audio, use Abrir original.' : 'Ao abrir Twitch, a secao Kick fica recolhida automaticamente.'}</p></div>
+                <div class="subtle-card compact-card"><p class="section-tag">Audio</p><h3>Autoplay com mute inicial</h3><p class="helper-copy">Ao clicar no feed, o embed ja entra tocando. O mute inicial ajuda o navegador a liberar autoplay sem travar o palco.</p></div>
               </div>
             </>
           ) : <div class="empty-stage"><strong>Nenhum feed selecionado.</strong><span>Escolha um canal ou feed na sidebar.</span></div>}
