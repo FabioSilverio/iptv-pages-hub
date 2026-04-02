@@ -139,42 +139,12 @@ const newsLinks: NewsLink[] = [
     streamUrl: 'https://nnaa-nbcnn-lzaj01.fast.nbcuni.com/live/master.m3u8',
   },
   {
-    id: 'nbc-east',
-    name: 'NBC East',
-    href: 'https://www.nbc.com/live?brand=nbc&callsign=WXIA',
-    note: 'Feed HLS extraido do embed do NBC East/WXIA, tocando no player leve do proprio site para ficar mais agil.',
-    source: 'NBC East / mirror HLS',
-    mirrorChannelKey: 'premium53',
-    mirrorServers: mirroredNewsServers,
-    embedUrl: 'https://dlstreams.top/stream/stream-53.php',
-  },
-  {
-    id: 'abc-east',
-    name: 'ABC East',
-    href: 'https://dlstreams.top/stream/stream-51.php',
-    note: 'Feed HLS extraido do embed do ABC East para manter o canal no player leve, sem o peso do iframe.',
-    source: 'ABC East / mirror HLS',
-    mirrorChannelKey: 'premium51',
-    mirrorServers: mirroredNewsServers,
-    embedUrl: 'https://dlstreams.top/stream/stream-51.php',
-  },
-  {
     id: 'cbs-news-247',
     name: 'CBS News 24/7',
     href: 'https://www.cbsnews.com/video/live-cbsnews/',
     note: 'Feed oficial da CBS News 24/7 tocando direto no player do site.',
     source: 'CBS News',
     streamUrl: 'https://news20e7hhcb.airspace-cdn.cbsivideo.com/index.m3u8',
-  },
-  {
-    id: 'cbs-east',
-    name: 'CBS East',
-    href: 'https://dlstreams.top/stream/stream-51.php',
-    note: 'Feed HLS extraido do embed do CBS East para abrir no player leve do site e reduzir atraso.',
-    source: 'CBS East / mirror HLS',
-    mirrorChannelKey: 'premium51',
-    mirrorServers: mirroredNewsServers,
-    embedUrl: 'https://dlstreams.top/stream/stream-51.php',
   },
   {
     id: 'al-jazeera-english',
@@ -1876,7 +1846,7 @@ export function App() {
                   <div class="player-frame"><video controls playsInline preload="auto" ref={videoRef} /></div>
                   <div class="player-meta">
                     <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
-                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">{selectedNewsLink.mirrorChannelKey ? 'Feed espelhado resolvido do embed e reproduzido no player leve do site, sem carregar iframe pesado.' : selectedNewsLink.playbackEngine === 'dash' ? 'Feed oficial da NBC East em DASH, tocando direto no browser com player adaptado para essa origem.' : 'Feed de noticias rodando no mesmo player leve usado no site, via proxy HLS para abrir liso no browser.'}</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">Feed de noticias rodando no mesmo player leve usado no site, via HLS/DASH oficial quando disponivel.</p></div>
                   </div>
                   {playerError ? <p class="alert error">{playerError}</p> : null}
                 </>
