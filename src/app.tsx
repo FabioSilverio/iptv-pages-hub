@@ -136,10 +136,9 @@ const newsLinks: NewsLink[] = [
     id: 'nbc-east',
     name: 'NBC East',
     href: 'https://www.nbc.com/live?brand=nbc&callsign=WXIA',
-    note: 'Feed DASH oficial da NBC East capturado do player autenticado da NBC e reproduzido direto no browser.',
-    source: 'NBC / WXIA',
-    streamUrl: 'https://g001-live-us-cmaf-prd-cf.pcdn03.cssott.com/Content/CMAF_OL2-CTR-4s/Live/channel(WXIA)/master.mpd?audio=all&subtitle=all&forcedNarrative=true',
-    playbackEngine: 'dash',
+    note: 'Embed alternativo do NBC East/WXIA usado como fallback porque a origem oficial da NBC recusou o playback fora do nbc.com.',
+    source: 'NBC / WXIA fallback',
+    embedUrl: 'https://dlstreams.top/stream/stream-53.php',
   },
   {
     id: 'cbs-news-247',
