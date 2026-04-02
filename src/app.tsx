@@ -141,12 +141,28 @@ const newsLinks: NewsLink[] = [
     embedUrl: 'https://dlstreams.top/stream/stream-53.php',
   },
   {
+    id: 'abc-east',
+    name: 'ABC East',
+    href: 'https://dlstreams.top/stream/stream-51.php',
+    note: 'Embed alternativo do ABC East usando a fonte que voce mandou para manter o canal dentro do site.',
+    source: 'ABC fallback',
+    embedUrl: 'https://dlstreams.top/stream/stream-51.php',
+  },
+  {
     id: 'cbs-news-247',
     name: 'CBS News 24/7',
     href: 'https://www.cbsnews.com/video/live-cbsnews/',
     note: 'Feed oficial da CBS News 24/7 tocando direto no player do site.',
     source: 'CBS News',
     streamUrl: 'https://news20e7hhcb.airspace-cdn.cbsivideo.com/index.m3u8',
+  },
+  {
+    id: 'cbs-east',
+    name: 'CBS East',
+    href: 'https://dlstreams.top/stream/stream-51.php',
+    note: 'Embed alternativo do CBS East usando a fonte que voce mandou para manter o canal dentro do site.',
+    source: 'CBS fallback',
+    embedUrl: 'https://dlstreams.top/stream/stream-51.php',
   },
   {
     id: 'al-jazeera-english',
