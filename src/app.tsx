@@ -48,6 +48,14 @@ interface NewsLink {
   streamUrl?: string
 }
 
+interface MarketQuote {
+  id: string
+  label: string
+  value: string
+  change: string
+  trend: 'up' | 'down' | 'flat'
+}
+
 interface AppSettings {
   rememberConnection: boolean
   twitchClientId: string
@@ -139,7 +147,26 @@ const newsLinks: NewsLink[] = [
     source: 'Al Jazeera',
     streamUrl: 'https://live-hls-web-aje-fa.getaj.net/AJE/index.m3u8',
   },
+  {
+    id: 'bloomberg-us',
+    name: 'Bloomberg US',
+    href: 'https://www.bloomberg.com/live',
+    note: 'Feed oficial ao vivo da Bloomberg Television US.',
+    source: 'Bloomberg',
+    streamUrl: 'https://www.bloomberg.com/media-manifest/streams/phoenix-us.m3u8',
+  },
 ]
+
+const marketItems = [
+  { symbol: 'BRL=X', id: 'usd-brl', label: 'USD/BRL', digits: 4 },
+  { symbol: '^BVSP', id: 'ibov', label: 'Ibov', digits: 0 },
+  { symbol: '^DJI', id: 'dow', label: 'Dow', digits: 0 },
+  { symbol: '^IXIC', id: 'nasdaq', label: 'Nasdaq', digits: 0 },
+  { symbol: '^VIX', id: 'vix', label: 'VIX', digits: 2 },
+  { symbol: '^FTSE', id: 'ftse', label: 'FTSE', digits: 0 },
+  { symbol: '^GDAXI', id: 'dax', label: 'DAX', digits: 0 },
+  { symbol: '^FCHI', id: 'cac', label: 'CAC', digits: 0 },
+] as const
 
 function readJson<T>(key: string, fallback: T) {
   try {
@@ -182,6 +209,18 @@ function buildKickEmbedUrl(channel: string) {
 function buildTwitchEmbedUrl(channel: string) {
   const parent = window.location.hostname || 'localhost'
   return `https://player.twitch.tv/?channel=${channel}&parent=${parent}&muted=false`
+}
+
+function formatMarketValue(value: number, digits: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value)
+}
+
+function formatMarketPercent(value: number) {
+  const signal = value > 0 ? '+' : value < 0 ? '' : ''
+  return `${signal}${value.toFixed(2)}%`
 }
 
 function hasHttpUrl(value: string) {
@@ -318,6 +357,7 @@ export function App() {
   const [playerState, setPlayerState] = useState('Pronto para tocar')
   const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
   const [clockTick, setClockTick] = useState(() => Date.now())
+  const [marketQuotes, setMarketQuotes] = useState<MarketQuote[]>([])
   const [activeSurface, setActiveSurface] = useState<MediaSurface>(
     () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
   )
@@ -478,6 +518,82 @@ export function App() {
     setClockTick(Date.now())
     const interval = window.setInterval(() => setClockTick(Date.now()), 1000)
     return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    let isActive = true
+
+    const loadMarketQuotes = async () => {
+      try {
+        const targetUrl =
+          'https://query1.finance.yahoo.com/v7/finance/spark?symbols=BRL%3DX,%5EBVSP,%5EDJI,%5EIXIC,%5EVIX,%5EFTSE,%5EGDAXI,%5EFCHI&range=1d&interval=5m'
+        const requestUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, targetUrl)
+        const response = await fetch(requestUrl, {
+          headers: {
+            Accept: 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error('Falha ao carregar painel de mercado.')
+        }
+
+        const payload = (await response.json()) as {
+          spark?: {
+            result?: Array<{
+              symbol?: string
+              response?: Array<{
+                meta?: {
+                  regularMarketPrice?: number
+                  previousClose?: number
+                }
+              }>
+            }>
+          }
+        }
+
+        const bySymbol = new Map(
+          (payload.spark?.result || []).map((entry) => [entry.symbol || '', entry.response?.[0]?.meta || {}]),
+        )
+
+        const nextQuotes = marketItems.reduce<MarketQuote[]>((items, item) => {
+            const meta = bySymbol.get(item.symbol)
+            const price = Number(meta?.regularMarketPrice)
+            const previous = Number(meta?.previousClose)
+
+            if (!Number.isFinite(price) || !Number.isFinite(previous) || previous === 0) {
+              return items
+            }
+
+            const percent = ((price - previous) / previous) * 100
+            items.push({
+              id: item.id,
+              label: item.label,
+              value: formatMarketValue(price, item.digits),
+              change: formatMarketPercent(percent),
+              trend: percent > 0.02 ? 'up' as const : percent < -0.02 ? 'down' as const : 'flat' as const,
+            })
+            return items
+          }, [])
+
+        if (isActive) {
+          setMarketQuotes(nextQuotes)
+        }
+      } catch {
+        if (isActive) {
+          setMarketQuotes([])
+        }
+      }
+    }
+
+    void loadMarketQuotes()
+    const interval = window.setInterval(() => void loadMarketQuotes(), 300000)
+
+    return () => {
+      isActive = false
+      window.clearInterval(interval)
+    }
   }, [])
 
   useEffect(() => {
@@ -1100,22 +1216,35 @@ export function App() {
 
   return (
     <div class="app-shell">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">IPTV Pages Hub</p>
-          <h1>links e canais ao vivo num painel rapido e limpo</h1>
-          <p class="hero-subcopy">Horario no Brasil, em Londres, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
-        </div>
-        <div class="topbar-stats">
-          {dashboardTimes.map((entry) => (
-            <div class="stat-card time-card" key={entry.label}>
-              <span>{entry.label}</span>
-              <strong>{entry.value}</strong>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">IPTV Pages Hub</p>
+            <h1>links e canais ao vivo num painel rapido e limpo</h1>
+            <p class="hero-subcopy">Horario no Brasil, em Londres, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
+          </div>
+          <div class="topbar-aside">
+            <div class="topbar-stats">
+              {dashboardTimes.map((entry) => (
+                <div class="stat-card time-card" key={entry.label}>
+                  <span>{entry.label}</span>
+                  <strong>{entry.value}</strong>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div class="surface-switch hero-surface-switch">
-          <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+            {marketQuotes.length ? (
+              <div class="market-strip" aria-label="Painel sutil de mercado">
+                {marketQuotes.map((item) => (
+                  <div class={`market-pill ${item.trend}`} key={item.id}>
+                    <span>{item.label}</span>
+                    <strong>{item.value}</strong>
+                    <small>{item.change}</small>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+          <div class="surface-switch hero-surface-switch">
+            <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
           <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
           <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
           <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
