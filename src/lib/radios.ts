@@ -11,6 +11,8 @@ export interface RadioStation {
   catchupHref?: string
   catchupIndexHref?: string
   catchupMode?: 'global'
+  scheduleHref?: string
+  scheduleLabel?: string
 }
 
 const BBC_DASH_BASE =
@@ -204,6 +206,8 @@ export const radioStations: RadioStation[] = [
     catchupHref: 'https://www.globalplayer.com/catchup/lbc/uk/',
     catchupIndexHref: 'https://www.globalplayer.com/catchup/lbc/uk/',
     catchupMode: 'global',
+    scheduleHref: 'https://www.lbc.co.uk/radio/schedule/lbc/',
+    scheduleLabel: 'Abrir grade LBC',
     streamUrl: 'https://hls.thisisdax.com/hls/LBCUK/master.m3u8',
     note: 'Feed HLS oficial da Global Player. Para ouvir programas passados, use o Catch Up oficial ao lado.',
   },
@@ -227,6 +231,8 @@ export const radioStations: RadioStation[] = [
     category: 'UK Talk',
     logo: 'https://assets.radioplayer.org/826/826521/600/600/m5miedqv.jpeg',
     href: 'https://www.thetimes.com/radio/player',
+    scheduleHref: 'https://www.thetimes.com/radio/player',
+    scheduleLabel: 'Abrir Times Radio',
     streamUrl: 'https://timesradio.wireless.radio/stream?aw_0_1st.platform=website&aw_0_1st.playerid=web-timesradio',
     note: 'Feed oficial do player da Times Radio extraido do player web oficial. Rewind depende da plataforma deles.',
   },

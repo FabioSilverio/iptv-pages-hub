@@ -366,8 +366,15 @@ async function resolveOfficialNasaEmbed(proxyBase: string) {
   }
 
   const html = await response.text()
+  const iframeMatch = html.match(/<iframe[^>]+src="https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})[^"]*"/i)
+  const iframeVideoId = iframeMatch?.[1]
+
+  if (iframeVideoId) {
+    return `https://www.youtube.com/embed/${iframeVideoId}?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1`
+  }
+
   const matches = [...html.matchAll(/https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})/g)]
-  const videoId = matches[0]?.[1]
+  const videoId = (matches.length ? matches[matches.length - 1]?.[1] : '') || matches[0]?.[1]
 
   if (!videoId) {
     throw new Error('Nao consegui identificar o embed oficial atual da NASA.')
@@ -918,6 +925,7 @@ export function App() {
     () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
     [selectedRadioId],
   )
+  const selectedRadioScheduleHref = selectedRadioStation?.scheduleHref || selectedRadioStation?.href || ''
   const canShowRadioGuide = useMemo(
     () => hasOfficialRadioGuide(selectedRadioStation),
     [selectedRadioStation],
@@ -2468,19 +2476,20 @@ export function App() {
               <span class="pill">{selectedRadioStation.source}</span>
             </div>
             <div class="feed-chip-grid">
-              <article class="feed-chip-card">
-                <div>
-                  <p class="section-tag">Categoria</p>
-                  <h3>{selectedRadioStation.category}</h3>
-                  <p class="helper-copy">{selectedRadioStation.note}</p>
-                </div>
-                <div class="feed-chip-actions">
-                  <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">BBC/Global oficial</a>
-                  {selectedRadioStation.catchupHref ? <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">Abrir catch up</a> : null}
-                </div>
-              </article>
-              {canShowRadioGuide ? (
-                <article class="feed-chip-card radio-guide-card">
+                <article class="feed-chip-card">
+                  <div>
+                    <p class="section-tag">Categoria</p>
+                    <h3>{selectedRadioStation.category}</h3>
+                    <p class="helper-copy">{selectedRadioStation.note}</p>
+                  </div>
+                  <div class="feed-chip-actions">
+                    <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">BBC/Global oficial</a>
+                    {selectedRadioStation.scheduleHref ? <a class="ghost-button compact" href={selectedRadioStation.scheduleHref} rel="noreferrer" target="_blank">{selectedRadioStation.scheduleLabel || 'Abrir grade'}</a> : null}
+                    {selectedRadioStation.catchupHref ? <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">Abrir catch up</a> : null}
+                  </div>
+                </article>
+                {canShowRadioGuide ? (
+                  <article class="feed-chip-card radio-guide-card">
                   <div>
                     <p class="section-tag">No ar agora</p>
                     <h3>{radioGuide?.now?.title || (radioGuideState === 'loading' ? 'Carregando grade...' : 'Grade indisponivel agora')}</h3>
@@ -2491,13 +2500,14 @@ export function App() {
                           ? 'Lendo a fonte oficial dessa emissora.'
                           : radioGuideError || 'Nao consegui puxar a programacao oficial agora.')}
                     </p>
-                  </div>
-                  <div class="feed-chip-actions">
-                    {radioGuide?.now?.timeLabel ? <span class="pill">{radioGuide.now.timeLabel}</span> : null}
-                    {radioGuideUpdatedLabel ? <span class="pill soft">Atualizado {radioGuideUpdatedLabel} UK</span> : null}
-                  </div>
-                </article>
-              ) : null}
+                    </div>
+                    <div class="feed-chip-actions">
+                      {radioGuide?.now?.timeLabel ? <span class="pill">{radioGuide.now.timeLabel}</span> : null}
+                      {radioGuideUpdatedLabel ? <span class="pill soft">Atualizado {radioGuideUpdatedLabel} UK</span> : null}
+                      {!radioGuide?.now && radioGuideState === 'failed' && selectedRadioScheduleHref ? <a class="ghost-button compact" href={selectedRadioScheduleHref} rel="noreferrer" target="_blank">{selectedRadioStation?.scheduleLabel || 'Ver grade oficial'}</a> : null}
+                    </div>
+                  </article>
+                ) : null}
               <article class="feed-chip-card">
                 <div>
                   <p class="section-tag">Rewind no palco</p>
@@ -2534,6 +2544,10 @@ export function App() {
                           <span>{entry.title}</span>
                         </div>
                       ))}
+                    </div>
+                  ) : selectedRadioScheduleHref ? (
+                    <div class="feed-chip-actions">
+                      <a class="ghost-button compact" href={selectedRadioScheduleHref} rel="noreferrer" target="_blank">{selectedRadioStation?.scheduleLabel || 'Abrir grade oficial'}</a>
                     </div>
                   ) : null}
                 </article>
