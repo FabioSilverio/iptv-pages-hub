@@ -585,6 +585,12 @@ export function App() {
     const onWaiting = () => setPlayerState('Aguardando buffer...')
     const onPlaying = () => setPlayerState('Ao vivo')
     const onStalled = () => setPlayerState('Reconectando...')
+    const onLoadedMetadata = () => {
+      if (activeSurface !== 'news') return
+      for (const track of Array.from(media.textTracks || [])) {
+        track.mode = 'disabled'
+      }
+    }
     const onCanPlay = () => {
       window.clearTimeout(fallbackTimer)
       successLocked = true
@@ -598,6 +604,7 @@ export function App() {
     media.addEventListener('waiting', onWaiting)
     media.addEventListener('playing', onPlaying)
     media.addEventListener('stalled', onStalled)
+    media.addEventListener('loadedmetadata', onLoadedMetadata)
     media.addEventListener('canplay', onCanPlay)
     media.addEventListener('error', onError)
 
@@ -801,11 +808,12 @@ export function App() {
       media.removeEventListener('waiting', onWaiting)
       media.removeEventListener('playing', onPlaying)
       media.removeEventListener('stalled', onStalled)
+      media.removeEventListener('loadedmetadata', onLoadedMetadata)
       media.removeEventListener('canplay', onCanPlay)
       media.removeEventListener('error', onError)
       cleanupPlayers()
     }
-  }, [selectedPlaybackChannel?.id])
+  }, [activeSurface, selectedPlaybackChannel?.id])
 
   useEffect(() => {
     let isActive = true
@@ -913,7 +921,7 @@ export function App() {
     }
 
     void refresh()
-    const interval = window.setInterval(() => void refresh(), 120000)
+    const interval = window.setInterval(() => void refresh(), 300000)
     return () => {
       isActive = false
       window.clearInterval(interval)
