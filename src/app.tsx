@@ -397,7 +397,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
-  const dashRef = useRef<{ reset: () => void } | null>(null)
+  const dashRef = useRef<{ reset: () => Promise<unknown> | unknown } | null>(null)
   const mpegtsRef = useRef<{
     attachMediaElement: (mediaElement: HTMLMediaElement) => void
     detachMediaElement: () => void
@@ -774,7 +774,7 @@ export function App() {
       hlsRef.current = null
     }
     if (dashRef.current) {
-      dashRef.current.reset()
+      void dashRef.current.reset()
       dashRef.current = null
     }
     if (mpegtsRef.current) {
@@ -823,7 +823,7 @@ export function App() {
         hlsRef.current = null
       }
       if (dashRef.current) {
-        dashRef.current.reset()
+        void dashRef.current.reset()
         dashRef.current = null
       }
       if (mpegtsRef.current) {
@@ -888,89 +888,71 @@ export function App() {
       }, source.engine === 'mpegts' ? 14000 : source.engine === 'dash' ? 16000 : 12000)
 
       if (source.engine === 'dash') {
-        const imported = await import('dashjs')
-        const dashModule = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
-        const dashApi = dashModule as {
-          MediaPlayer?: () => {
-            create: () => {
-              initialize: (mediaElement: HTMLMediaElement, source: string, autoPlay?: boolean) => void
-              updateSettings: (settings: Record<string, unknown>) => void
-              setMute: (value: boolean) => void
-              on: (event: string, listener: (...args: unknown[]) => void) => void
-              reset: () => void
-            }
-          }
-        }
-        const dashEvents = dashModule as {
-          MediaPlayer?: {
-            events?: {
-              ERROR?: string
-              STREAM_INITIALIZED?: string
-              PLAYBACK_PLAYING?: string
-            }
+        const imported = await import('shaka-player')
+        const shakaModule = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
+        const shakaApi = shakaModule as {
+          polyfill?: { installAll?: () => void }
+          Player?: new (mediaElement?: HTMLMediaElement) => {
+            configure: (settings: Record<string, unknown>) => void
+            addEventListener: (event: string, listener: (event: unknown) => void) => void
+            load: (source: string) => Promise<void>
+            destroy: () => Promise<void>
           }
         }
 
-        if (!dashApi.MediaPlayer) {
+        shakaApi.polyfill?.installAll?.()
+
+        if (!shakaApi.Player) {
           void trySource(sourceIndex + 1, 'DASH nao disponivel neste navegador.')
           return
         }
 
-        const player = dashApi.MediaPlayer().create()
-        dashRef.current = player
-        player.updateSettings({
+        const player = new shakaApi.Player(media)
+        dashRef.current = { reset: () => player.destroy() }
+        player.configure({
           streaming: {
-            delay: { liveDelay: 14 },
-            buffer: {
-              fastSwitchEnabled: false,
-              stableBufferTime: 12,
-              bufferTimeAtTopQuality: 18,
-              bufferTimeAtTopQualityLongForm: 24,
+            lowLatencyMode: false,
+            bufferingGoal: 18,
+            rebufferingGoal: 4,
+            retryParameters: {
+              maxAttempts: 5,
+              baseDelay: 1000,
+              backoffFactor: 2,
+              fuzzFactor: 0.35,
+              timeout: 20000,
             },
-            retryIntervals: {
-              MPD: 1200,
-              MediaSegment: 1200,
+          },
+          manifest: {
+            dash: {
+              ignoreMinBufferTime: true,
             },
-            retryAttempts: {
-              MPD: 4,
-              MediaSegment: 4,
-            },
-            text: {
-              defaultEnabled: false,
-            },
+          },
+          abr: {
+            enabled: true,
           },
         })
 
-        const events = dashEvents.MediaPlayer?.events
-        if (events?.STREAM_INITIALIZED) {
-          player.on(events.STREAM_INITIALIZED, async () => {
-            window.clearTimeout(fallbackTimer)
-            successLocked = true
-            const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
-            if (!cancelled) setPlayerState(nextState)
-          })
+        player.addEventListener('error', (event) => {
+          const payload = event as { detail?: { message?: string; severity?: number } } | undefined
+          if (cancelled || successLocked) return
+          void trySource(
+            sourceIndex + 1,
+            payload?.detail?.message || 'DASH recusado pela origem da NBC.',
+          )
+        })
+
+        try {
+          await player.load(source.url)
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : 'DASH recusado pela origem da NBC.'
+          void trySource(sourceIndex + 1, detail)
+          return
         }
 
-        if (events?.PLAYBACK_PLAYING) {
-          player.on(events.PLAYBACK_PLAYING, () => {
-            window.clearTimeout(fallbackTimer)
-            successLocked = true
-            if (!cancelled) setPlayerState('Ao vivo')
-          })
-        }
-
-        if (events?.ERROR) {
-          player.on(events.ERROR, async (...args) => {
-            const payload = args[0] as { error?: { message?: string }; event?: { message?: string } } | undefined
-            if (cancelled || successLocked) return
-            void trySource(
-              sourceIndex + 1,
-              payload?.error?.message || payload?.event?.message || 'DASH recusado pela origem da NBC.',
-            )
-          })
-        }
-
-        player.initialize(media, source.url, false)
+        window.clearTimeout(fallbackTimer)
+        successLocked = true
+        const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
+        if (!cancelled) setPlayerState(nextState)
         return
       }
 
