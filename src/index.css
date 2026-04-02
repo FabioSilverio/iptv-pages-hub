@@ -313,11 +313,51 @@ input:focus, select:focus {
 .player-frame video { object-fit: contain; background: #000; }
 .player-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
 .radio-player-frame {
+  position: relative;
   aspect-ratio: 21 / 9;
   background:
     radial-gradient(circle at top, rgba(250, 204, 21, 0.08), transparent 28%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
     #06080d;
+}
+
+.radio-playback-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: grid;
+  gap: 3px;
+  min-width: 152px;
+  max-width: min(58%, 320px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 18, 0.8);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.24);
+}
+
+.radio-playback-badge strong {
+  font-size: 0.84rem;
+  line-height: 1.15;
+}
+
+.radio-playback-badge span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.radio-playback-badge.live {
+  border-color: rgba(74, 222, 128, 0.22);
+  background: rgba(5, 46, 22, 0.66);
+}
+
+.radio-playback-badge.delayed,
+.radio-playback-badge.replay {
+  border-color: rgba(250, 204, 21, 0.24);
+  background: rgba(68, 52, 8, 0.72);
 }
 
 .radio-summary-head {

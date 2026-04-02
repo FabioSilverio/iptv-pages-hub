@@ -9,6 +9,8 @@ export interface RadioStation {
   note: string
   rewindHours?: number
   catchupHref?: string
+  catchupIndexHref?: string
+  catchupMode?: 'global'
 }
 
 const BBC_DASH_BASE =
@@ -200,6 +202,8 @@ export const radioStations: RadioStation[] = [
     logo: 'https://herald.musicradio.com/media/5a8b3e18-6682-4024-a0f3-d94fcffe1abe.png',
     href: 'https://www.globalplayer.com/live/lbc/uk/',
     catchupHref: 'https://www.globalplayer.com/catchup/lbc/uk/',
+    catchupIndexHref: 'https://www.globalplayer.com/catchup/lbc/uk/',
+    catchupMode: 'global',
     streamUrl: 'https://hls.thisisdax.com/hls/LBCUK/master.m3u8',
     note: 'Feed HLS oficial da Global Player. Para ouvir programas passados, use o Catch Up oficial ao lado.',
   },
@@ -211,7 +215,19 @@ export const radioStations: RadioStation[] = [
     logo: 'https://herald.musicradio.com/media/2e05011a-7517-435e-bac7-0f1cc979ee99.png',
     href: 'https://www.globalplayer.com/live/radiox/uk/',
     catchupHref: 'https://www.globalplayer.com/catchup/radiox/uk/',
+    catchupIndexHref: 'https://www.globalplayer.com/catchup/radiox/uk/',
+    catchupMode: 'global',
     streamUrl: 'https://hls.thisisdax.com/hls/RadioXUK/master.m3u8',
     note: 'Feed HLS oficial da Global Player com playback leve. O replay mais longo fica no Catch Up oficial.',
+  },
+  {
+    id: 'times-radio',
+    name: 'Times Radio',
+    source: 'The Times / Radioplayer',
+    category: 'UK Talk',
+    logo: 'https://assets.radioplayer.org/826/826521/600/600/m5miedqv.jpeg',
+    href: 'https://www.thetimes.com/radio/player',
+    streamUrl: 'https://timesradio.wireless.radio/stream?aw_0_1st.platform=website&aw_0_1st.playerid=web-timesradio',
+    note: 'Feed oficial do player da Times Radio extraido do player web oficial. Rewind depende da plataforma deles.',
   },
 ]

@@ -61,6 +61,14 @@ interface MarketQuote {
   trend: 'up' | 'down' | 'flat'
 }
 
+interface RadioReplayState {
+  streamUrl: string
+  title: string
+  startedAt: string
+  targetOffsetSeconds: number
+  source: string
+}
+
 interface AppSettings {
   rememberConnection: boolean
   twitchClientId: string
@@ -113,6 +121,13 @@ const embedDefaults: EmbedStream[] = [
 ]
 const mirroredNewsServers = ['sec.ai-hls.site', 'chevy.soyspace.cyou']
 const mirroredNewsCache = new Map<string, { streamUrl: string; expiresAt: number }>()
+const globalCatchupCache = new Map<string, Array<{
+  title: string
+  streamUrl: string
+  startedAt: string
+  durationSeconds: number
+  source: string
+}>>()
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -161,6 +176,14 @@ const newsLinks: NewsLink[] = [
     note: 'Feed oficial ao vivo da Bloomberg Television US.',
     source: 'Bloomberg',
     streamUrl: 'https://www.bloomberg.com/media-manifest/streams/phoenix-us.m3u8',
+  },
+  {
+    id: 'vatican-news',
+    name: 'Vatican News',
+    href: 'https://www.comunicazione.va/en/servizi/live.html',
+    note: 'Embed oficial do Vatican Media Live, o mesmo usado na pagina oficial do Vaticano.',
+    source: 'Vatican Media',
+    embedUrl: 'https://www.youtube.com/embed/03pYP2Nmreo?enablejsapi=1&rel=0&modestbranding=1',
   },
 ]
 
@@ -239,6 +262,18 @@ function formatWindowLabel(seconds: number) {
   return minutes ? `${hours}h ${minutes}m` : `${hours}h`
 }
 
+function parseDurationToSeconds(value: string) {
+  const normalized = String(value || '').trim()
+  if (!normalized) return 0
+
+  const parts = normalized.split(':').map((part) => Number(part))
+  if (parts.some((part) => !Number.isFinite(part))) return 0
+
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  if (parts.length === 2) return parts[0] * 60 + parts[1]
+  return parts[0]
+}
+
 function hasHttpUrl(value: string) {
   return value.trim().toLowerCase().startsWith('http://')
 }
@@ -279,6 +314,130 @@ async function resolveMirroredNewsStream(channelKey: string, servers: string[]) 
   }
 
   throw new Error('Nao consegui resolver o feed espelhado agora.')
+}
+
+function extractNextDataJson(html: string) {
+  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i)
+  if (!match) {
+    throw new Error('Nao consegui ler os dados oficiais dessa pagina.')
+  }
+
+  return JSON.parse(match[1]) as {
+    props?: {
+      pageProps?: Record<string, unknown>
+    }
+  }
+}
+
+async function fetchGlobalCatchupEpisodes(
+  catchupIndexHref: string,
+  proxyUrl: string,
+) {
+  const cached = globalCatchupCache.get(catchupIndexHref)
+  if (cached) return cached
+
+  const indexResponse = await fetch(buildProxyUrl(proxyUrl, catchupIndexHref), {
+    headers: { Accept: 'text/html' },
+  })
+
+  if (!indexResponse.ok) {
+    throw new Error('Nao consegui abrir o catch up oficial agora.')
+  }
+
+  const indexHtml = await indexResponse.text()
+  const indexData = extractNextDataJson(indexHtml)
+  const pageProps = indexData.props?.pageProps as { catchupInfo?: Array<{ id?: string; title?: string }> } | undefined
+  const shows = Array.isArray(pageProps?.catchupInfo) ? pageProps!.catchupInfo : []
+  const showIds = shows
+    .map((show) => String(show.id || '').trim())
+    .filter(Boolean)
+    .slice(0, 24)
+
+  const episodeGroups = await Promise.all(
+    showIds.map(async (showId) => {
+      const showHref = catchupIndexHref.endsWith('/') ? `${catchupIndexHref}${showId}/` : `${catchupIndexHref}/${showId}/`
+      const response = await fetch(buildProxyUrl(proxyUrl, showHref), {
+        headers: { Accept: 'text/html' },
+      })
+
+      if (!response.ok) return []
+
+      const html = await response.text()
+      const data = extractNextDataJson(html)
+      const showProps = data.props?.pageProps as {
+        catchupInfo?: {
+          title?: string
+          episodes?: Array<{
+            title?: string
+            streamUrl?: string
+            startDate?: string
+            duration?: string
+          }>
+        }
+      } | undefined
+
+      const sourceTitle = String(showProps?.catchupInfo?.title || '').trim()
+
+      return (showProps?.catchupInfo?.episodes || [])
+        .map((episode) => ({
+          title: String(episode.title || sourceTitle || 'Programa recente').trim(),
+          streamUrl: String(episode.streamUrl || '').trim(),
+          startedAt: String(episode.startDate || '').trim(),
+          durationSeconds: parseDurationToSeconds(String(episode.duration || '')),
+          source: sourceTitle,
+        }))
+        .filter((episode) => episode.streamUrl && episode.startedAt && episode.durationSeconds > 0)
+    }),
+  )
+
+  const episodes = episodeGroups.flat().sort(
+    (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
+  )
+
+  globalCatchupCache.set(catchupIndexHref, episodes)
+  return episodes
+}
+
+async function resolveGlobalCatchupReplay(
+  station: RadioStation,
+  secondsBack: number,
+  proxyUrl: string,
+) {
+  if (!station.catchupIndexHref) {
+    throw new Error('Essa radio nao tem catch up oficial configurado.')
+  }
+
+  const episodes = await fetchGlobalCatchupEpisodes(station.catchupIndexHref, proxyUrl)
+  const targetTime = Date.now() - secondsBack * 1000
+
+  const containingEpisode = episodes.find((episode) => {
+    const start = Date.parse(episode.startedAt)
+    const end = start + episode.durationSeconds * 1000
+    return Number.isFinite(start) && targetTime >= start && targetTime <= end
+  })
+
+  if (containingEpisode) {
+    return {
+      streamUrl: containingEpisode.streamUrl,
+      title: containingEpisode.title,
+      startedAt: containingEpisode.startedAt,
+      targetOffsetSeconds: secondsBack,
+      source: containingEpisode.source || station.name,
+    }
+  }
+
+  const closestEpisode = episodes.find((episode) => Date.parse(episode.startedAt) <= targetTime) || episodes[0]
+  if (!closestEpisode) {
+    throw new Error('Nao achei um programa recente para esse horario.')
+  }
+
+  return {
+    streamUrl: closestEpisode.streamUrl,
+    title: closestEpisode.title,
+    startedAt: closestEpisode.startedAt,
+    targetOffsetSeconds: secondsBack,
+    source: closestEpisode.source || station.name,
+  }
 }
 
 function formatXtreamError(error: unknown, serverUrl: string) {
@@ -440,6 +599,7 @@ export function App() {
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
   const [radioDelaySeconds, setRadioDelaySeconds] = useState(0)
+  const [radioReplay, setRadioReplay] = useState<RadioReplayState | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
@@ -567,12 +727,14 @@ export function App() {
     if (!selectedRadioStation) return null
 
     return {
-      id: `radio:${selectedRadioStation.id}`,
-      name: selectedRadioStation.name,
+      id: radioReplay
+        ? `radio:${selectedRadioStation.id}:replay:${radioReplay.startedAt}:${radioReplay.targetOffsetSeconds}`
+        : `radio:${selectedRadioStation.id}:live`,
+      name: radioReplay ? `${selectedRadioStation.name} · ${radioReplay.title}` : selectedRadioStation.name,
       group: 'Radios',
-      streamUrl: selectedRadioStation.streamUrl,
+      streamUrl: radioReplay?.streamUrl || selectedRadioStation.streamUrl,
     }
-  }, [selectedRadioStation])
+  }, [radioReplay, selectedRadioStation])
   const selectedPlaybackChannel = useMemo<Channel | null>(() => {
     if (activeSurface === 'iptv') return selectedChannel
     if (activeSurface === 'news') return selectedNewsPlayback
@@ -595,6 +757,32 @@ export function App() {
     if (radioDelaySeconds < 10) return 'Ao vivo'
     return `${formatWindowLabel(radioDelaySeconds)} atras`
   }, [radioDelaySeconds])
+  const radioPlaybackBadge = useMemo(() => {
+    if (radioReplay) {
+      return `Replay ${formatWindowLabel(radioReplay.targetOffsetSeconds)} atras`
+    }
+
+    return radioDelayLabel
+  }, [radioDelayLabel, radioReplay])
+  const radioPlaybackDetail = useMemo(() => {
+    if (!radioReplay) {
+      return radioWindowLabel ? `Janela ao vivo ${radioWindowLabel}` : 'Ao vivo oficial'
+    }
+
+    const startedAt = Date.parse(radioReplay.startedAt)
+    const startedLabel = Number.isFinite(startedAt)
+      ? new Intl.DateTimeFormat('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        }).format(new Date(startedAt))
+      : ''
+
+    return startedLabel
+      ? `${radioReplay.title} · ${startedLabel}`
+      : radioReplay.title
+  }, [radioReplay, radioWindowLabel])
   const dashboardTimes = useMemo(() => {
     const now = new Date(clockTick)
     const zones = [
@@ -922,8 +1110,8 @@ export function App() {
     media.removeAttribute('src')
     media.load()
 
-    const onWaiting = () => setPlayerState('Aguardando buffer...')
-    const onPlaying = () => setPlayerState('Ao vivo')
+    const onWaiting = () => setPlayerState(activeSurface === 'radio' && radioReplay ? 'Carregando replay...' : 'Aguardando buffer...')
+    const onPlaying = () => setPlayerState(activeSurface === 'radio' ? radioPlaybackBadge : 'Ao vivo')
     const onStalled = () => setPlayerState('Reconectando...')
     const onLoadedMetadata = () => {
       if (activeSurface !== 'news') return
@@ -934,7 +1122,7 @@ export function App() {
     const onCanPlay = () => {
       window.clearTimeout(fallbackTimer)
       successLocked = true
-      setPlayerState((current) => (current === 'Ao vivo' ? current : 'Stream pronta'))
+      setPlayerState((current) => (current === 'Ao vivo' || current === radioPlaybackBadge ? current : 'Stream pronta'))
     }
     const onError = () => {
       if (suppressMediaError || cancelled) return
@@ -1084,7 +1272,10 @@ export function App() {
 
         window.clearTimeout(fallbackTimer)
         successLocked = true
-        const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
+        const nextState = await attemptPlayback(
+          media,
+          activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+        )
         if (!cancelled) setPlayerState(nextState)
         return
       }
@@ -1121,7 +1312,10 @@ export function App() {
         hls.on(HlsClient.Events.MANIFEST_PARSED, async () => {
           window.clearTimeout(fallbackTimer)
           successLocked = true
-          const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
+          const nextState = await attemptPlayback(
+            media,
+            activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+          )
           if (!cancelled) setPlayerState(nextState)
         })
         hls.on(HlsClient.Events.ERROR, async (_, data) => {
@@ -1201,16 +1395,28 @@ export function App() {
         })
         window.clearTimeout(fallbackTimer)
         successLocked = true
-        const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
+        const nextState = await attemptPlayback(
+          media,
+          activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+        )
         if (!cancelled) setPlayerState(nextState)
         return
       }
 
-      if (media.canPlayType('application/vnd.apple.mpegurl') || media.canPlayType('video/mp2t')) {
+      if (
+        media.canPlayType('application/vnd.apple.mpegurl') ||
+        media.canPlayType('video/mp2t') ||
+        media.canPlayType('audio/mpeg') ||
+        media.canPlayType('audio/mp4') ||
+        media.canPlayType('audio/x-m4a')
+      ) {
         media.src = source.url
         window.clearTimeout(fallbackTimer)
         successLocked = true
-        const nextState = await attemptPlayback(media, 'Clique em play para iniciar')
+        const nextState = await attemptPlayback(
+          media,
+          activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+        )
         if (!cancelled) setPlayerState(nextState)
         return
       }
@@ -1231,7 +1437,7 @@ export function App() {
       media.removeEventListener('error', onError)
       cleanupPlayers()
     }
-  }, [activeSurface, selectedPlaybackChannel?.id, selectedPlaybackChannel?.streamUrl])
+  }, [activeSurface, radioPlaybackBadge, radioReplay, selectedPlaybackChannel?.id, selectedPlaybackChannel?.streamUrl])
 
   useEffect(() => {
     const video = videoRef.current
@@ -1243,6 +1449,12 @@ export function App() {
     }
 
     const updateSeekWindow = () => {
+      if (radioReplay) {
+        setRadioSeekWindowSeconds(0)
+        setRadioDelaySeconds(radioReplay.targetOffsetSeconds)
+        return
+      }
+
       if (!video.seekable.length) {
         setRadioSeekWindowSeconds(0)
         setRadioDelaySeconds(0)
@@ -1273,7 +1485,7 @@ export function App() {
       video.removeEventListener('progress', updateSeekWindow)
       video.removeEventListener('seeked', updateSeekWindow)
     }
-  }, [activeSurface, selectedRadioStation?.id])
+  }, [activeSurface, radioReplay, selectedRadioStation?.id])
 
   useEffect(() => {
     let isActive = true
@@ -1465,23 +1677,65 @@ export function App() {
 
   function activateRadio(radioId?: string) {
     if (radioId) setSelectedRadioId(radioId)
+    setRadioReplay(null)
     setSurface('radio')
     setPlayerError('')
     setPlayerState('Radio em foco')
   }
 
-  function seekRadioBack(secondsBack: number) {
+  async function seekRadioBack(secondsBack: number) {
     const video = videoRef.current
-    if (!video || !video.seekable.length) return
+    setPlayerError('')
 
-    const rangeIndex = video.seekable.length - 1
-    const start = video.seekable.start(rangeIndex)
-    const end = video.seekable.end(rangeIndex)
-    video.currentTime = Math.max(start, end - secondsBack)
-    setPlayerState(`Rewind ${formatWindowLabel(secondsBack)}`)
+    if (video && video.seekable.length) {
+      const rangeIndex = video.seekable.length - 1
+      const start = video.seekable.start(rangeIndex)
+      const end = video.seekable.end(rangeIndex)
+      const availableWindow = Math.max(0, end - start)
+
+      if (availableWindow >= secondsBack) {
+        setRadioReplay(null)
+        video.currentTime = Math.max(start, end - secondsBack)
+        void video.play().catch(() => {})
+        setRadioDelaySeconds(secondsBack)
+        setPlayerState(`Replay ${formatWindowLabel(secondsBack)} atras`)
+        return
+      }
+    }
+
+    if (!selectedRadioStation) return
+
+    if (selectedRadioStation.catchupMode === 'global' && selectedRadioStation.catchupIndexHref) {
+      try {
+        setPlayerState(`Buscando replay oficial ${formatWindowLabel(secondsBack)}...`)
+        const replay = await resolveGlobalCatchupReplay(
+          selectedRadioStation,
+          secondsBack,
+          DEFAULT_XTREAM_PROXY_URL,
+        )
+        setRadioReplay(replay)
+        setRadioDelaySeconds(secondsBack)
+        setPlayerState(`Replay ${formatWindowLabel(secondsBack)} atras`)
+        return
+      } catch (error) {
+        setPlayerError(error instanceof Error ? error.message : 'Falha ao abrir o replay oficial agora.')
+        setPlayerState('Falha no replay')
+        return
+      }
+    }
+
+    setPlayerError('Essa radio nao expoe rewind direto no feed atual. Use o catch up oficial quando estiver disponivel.')
   }
 
   function jumpRadioToLive() {
+    if (radioReplay) {
+      setRadioReplay(null)
+      setPlayerError('')
+      setRadioDelaySeconds(0)
+      setPlayerState('Voltando ao vivo...')
+      return
+    }
+
     const video = videoRef.current
     if (!video || !video.seekable.length) return
 
@@ -1809,7 +2063,7 @@ export function App() {
                   <span class="feed-pill active">{selectedRadioStation?.source || 'Radio'}</span>
                   <span class="feed-pill">{radioStations.length} radios</span>
                   <span class="feed-pill">{selectedRadioStation?.category || 'Ao vivo'}</span>
-                  <span class="feed-pill soft">{radioWindowLabel ? `Rewind ${radioWindowLabel}` : playerState}</span>
+                  <span class="feed-pill soft">{radioPlaybackBadge}</span>
                 </>
               ) : (
                 activeFeedItems.map((item) => {
@@ -1898,11 +2152,15 @@ export function App() {
                 </div>
                 <div class="pill-row">
                   <span class="pill">{selectedRadioStation.source}</span>
-                  <span class="pill">{radioDelayLabel}</span>
+                  <span class="pill">{radioPlaybackBadge}</span>
                   <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">Abrir oficial</a>
                 </div>
               </div>
               <div class="player-frame radio-player-frame">
+                <div class={radioReplay ? 'radio-playback-badge replay' : radioDelaySeconds >= 10 ? 'radio-playback-badge delayed' : 'radio-playback-badge live'}>
+                  <strong>{radioPlaybackBadge}</strong>
+                  <span>{radioPlaybackDetail}</span>
+                </div>
                 <video controls playsInline preload="auto" ref={videoRef} />
               </div>
               <div class="player-meta">
@@ -1922,9 +2180,13 @@ export function App() {
                   <p class="section-tag">Rewind</p>
                   <h3>{radioWindowLabel ? `Janela disponivel ${radioWindowLabel}` : 'Ao vivo direto'}</h3>
                   <p class="helper-copy">
-                    {selectedRadioStation.rewindHours
-                      ? 'As radios da BBC entram em DASH oficial com janela longa. LBC e Radio X usam o live oficial e mantem o catch-up separado.'
-                      : 'Essa radio esta em live oficial. Se quiser ouvir programas anteriores, use o link de catch-up oficial.'}
+                    {radioReplay
+                      ? `${radioReplay.title} entrou pelo catch up oficial de ${radioReplay.source || selectedRadioStation.source}.`
+                      : selectedRadioStation.rewindHours
+                        ? 'As radios da BBC entram em DASH oficial com janela longa. Quando a live nao expuser isso, o catch up oficial entra como fallback.'
+                        : selectedRadioStation.catchupHref
+                          ? 'Se a live nao expuser a janela de rewind, o site abre automaticamente o replay oficial quando voce clicar em voltar.'
+                          : 'Essa radio esta em live oficial. Se quiser ouvir programas anteriores, use o link de catch-up oficial.'}
                   </p>
                 </div>
               </div>
@@ -1944,7 +2206,7 @@ export function App() {
                   {[900, 1800, 3600, 7200, 10800, 21600].map((seconds) => (
                     <button
                       class="ghost-button compact"
-                      disabled={radioSeekWindowSeconds < seconds}
+                      disabled={radioSeekWindowSeconds < seconds && selectedRadioStation.catchupMode !== 'global'}
                       key={seconds}
                       type="button"
                       onClick={() => seekRadioBack(seconds)}
@@ -1958,7 +2220,9 @@ export function App() {
                 </div>
                 {!radioSeekWindowSeconds ? (
                   <p class="helper-copy">
-                    Esse feed nao expoe rewind direto no manifesto. Quando isso acontecer, o botao de voltar fica liberado; senao, use o link oficial de catch up.
+                    {selectedRadioStation.catchupMode === 'global'
+                      ? 'Essa radio nao expoe rewind direto na live. Quando voce clicar em voltar, o player troca para o replay oficial da propria emissora.'
+                      : 'Esse feed nao expoe rewind direto no manifesto. Quando isso acontecer, use o link oficial de catch up.'}
                   </p>
                 ) : null}
               </div>
@@ -2008,7 +2272,7 @@ export function App() {
                   </p>
                 </div>
                 <div class="feed-chip-actions">
-                  <span class="pill">{radioDelayLabel}</span>
+                  <span class="pill">{radioPlaybackBadge}</span>
                   {radioWindowLabel ? <span class="pill">Janela {radioWindowLabel}</span> : null}
                 </div>
               </article>
