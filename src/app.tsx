@@ -22,6 +22,7 @@ import {
   type PlaylistSession,
   type XtreamCredentials,
 } from './lib/iptv'
+import { radioStations, type RadioStation } from './lib/radios'
 
 const CONNECTION_KEY = 'iptv-pages-hub.connection'
 const EMBEDS_KEY = 'iptv-pages-hub.embeds'
@@ -31,12 +32,13 @@ const FAVORITES_KEY = 'iptv-pages-hub.favorites'
 const FORM_STATE_KEY = 'iptv-pages-hub.form-state'
 const ACTIVE_SURFACE_KEY = 'iptv-pages-hub.active-surface'
 const SELECTED_EMBED_KEY = 'iptv-pages-hub.selected-embed'
+const SELECTED_RADIO_KEY = 'iptv-pages-hub.selected-radio'
 const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
 
-type MediaSurface = 'iptv' | 'twitch' | 'kick' | 'news'
+type MediaSurface = 'iptv' | 'twitch' | 'kick' | 'news' | 'radio'
 
 interface NewsLink {
   id: string
@@ -258,6 +260,15 @@ function formatMarketPercent(value: number) {
   return `${signal}${value.toFixed(2)}%`
 }
 
+function formatWindowLabel(seconds: number) {
+  if (seconds < 60) return `${Math.max(0, Math.round(seconds))}s`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.round((seconds % 3600) / 60)
+  return minutes ? `${hours}h ${minutes}m` : `${hours}h`
+}
+
 function hasHttpUrl(value: string) {
   return value.trim().toLowerCase().startsWith('http://')
 }
@@ -439,6 +450,7 @@ export function App() {
     () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
   )
   const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
+  const [selectedRadioId, setSelectedRadioId] = useState<string>(() => readJson<string>(SELECTED_RADIO_KEY, radioStations[0]?.id || ''))
   const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
   const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
   const [newsMirrorError, setNewsMirrorError] = useState('')
@@ -453,8 +465,11 @@ export function App() {
   const [showTwitchPanel, setShowTwitchPanel] = useState(true)
   const [showKickPanel, setShowKickPanel] = useState(true)
   const [showNewsPanel, setShowNewsPanel] = useState(true)
+  const [showRadioPanel, setShowRadioPanel] = useState(true)
   const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
+  const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
+  const [radioDelaySeconds, setRadioDelaySeconds] = useState(0)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
@@ -557,6 +572,10 @@ export function App() {
     () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
     [selectedNewsId],
   )
+  const selectedRadioStation = useMemo<RadioStation | null>(
+    () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
+    [selectedRadioId],
+  )
   const selectedNewsPlayback = useMemo<Channel | null>(() => {
     const resolvedStream = resolvedNewsStreamUrl || selectedNewsLink.streamUrl
     if (!resolvedStream) return null
@@ -571,11 +590,38 @@ export function App() {
       streamUrl,
     }
   }, [resolvedNewsStreamUrl, selectedNewsLink])
+  const selectedRadioPlayback = useMemo<Channel | null>(() => {
+    if (!selectedRadioStation) return null
+
+    return {
+      id: `radio:${selectedRadioStation.id}`,
+      name: selectedRadioStation.name,
+      group: 'Radios',
+      streamUrl: selectedRadioStation.streamUrl,
+    }
+  }, [selectedRadioStation])
   const selectedPlaybackChannel = useMemo<Channel | null>(() => {
     if (activeSurface === 'iptv') return selectedChannel
     if (activeSurface === 'news') return selectedNewsPlayback
+    if (activeSurface === 'radio') return selectedRadioPlayback
     return null
-  }, [activeSurface, selectedChannel, selectedNewsPlayback])
+  }, [activeSurface, selectedChannel, selectedNewsPlayback, selectedRadioPlayback])
+  const radioCategoryCounts = useMemo(
+    () =>
+      radioStations.reduce<Record<string, number>>((groups, station) => {
+        groups[station.category] = (groups[station.category] || 0) + 1
+        return groups
+      }, {}),
+    [],
+  )
+  const radioWindowLabel = useMemo(
+    () => (radioSeekWindowSeconds >= 60 ? formatWindowLabel(radioSeekWindowSeconds) : ''),
+    [radioSeekWindowSeconds],
+  )
+  const radioDelayLabel = useMemo(() => {
+    if (radioDelaySeconds < 10) return 'Ao vivo'
+    return `${formatWindowLabel(radioDelaySeconds)} atras`
+  }, [radioDelaySeconds])
   const dashboardTimes = useMemo(() => {
     const now = new Date(clockTick)
     const zones = [
@@ -825,6 +871,9 @@ export function App() {
 
     window.localStorage.removeItem(SELECTED_EMBED_KEY)
   }, [selectedEmbedId])
+  useEffect(() => {
+    if (selectedRadioId) window.localStorage.setItem(SELECTED_RADIO_KEY, selectedRadioId)
+  }, [selectedRadioId])
 
   useEffect(() => {
     if (activeSurface === 'twitch' && !twitchEmbeds.length) {
@@ -851,6 +900,13 @@ export function App() {
       setSelectedEmbedId(activeEmbed.id)
     }
   }, [activeEmbed, activeSurface, kickEmbeds, twitchEmbeds])
+
+  useEffect(() => {
+    if (activeSurface !== 'radio') return
+    if (!selectedRadioStation && radioStations.length) {
+      setSelectedRadioId(radioStations[0].id)
+    }
+  }, [activeSurface, selectedRadioStation])
 
   useEffect(() => {
     const video = videoRef.current
@@ -969,7 +1025,7 @@ export function App() {
       setPlayerState(
         source.engine === 'dash'
           ? sourceIndex === 0
-            ? 'Abrindo DASH oficial da NBC...'
+            ? 'Abrindo DASH oficial...'
             : 'Tentando DASH novamente...'
           :
         source.engine === 'hls'
@@ -1041,14 +1097,14 @@ export function App() {
           if (cancelled || successLocked) return
           void trySource(
             sourceIndex + 1,
-            payload?.detail?.message || 'DASH recusado pela origem da NBC.',
+            payload?.detail?.message || 'DASH recusado pela origem da stream.',
           )
         })
 
         try {
           await player.load(source.url)
         } catch (error) {
-          const detail = error instanceof Error ? error.message : 'DASH recusado pela origem da NBC.'
+          const detail = error instanceof Error ? error.message : 'DASH recusado pela origem da stream.'
           void trySource(sourceIndex + 1, detail)
           return
         }
@@ -1203,6 +1259,48 @@ export function App() {
       cleanupPlayers()
     }
   }, [activeSurface, selectedPlaybackChannel?.id])
+
+  useEffect(() => {
+    const video = videoRef.current
+
+    if (!video || activeSurface !== 'radio') {
+      setRadioSeekWindowSeconds(0)
+      setRadioDelaySeconds(0)
+      return
+    }
+
+    const updateSeekWindow = () => {
+      if (!video.seekable.length) {
+        setRadioSeekWindowSeconds(0)
+        setRadioDelaySeconds(0)
+        return
+      }
+
+      const index = video.seekable.length - 1
+      const start = video.seekable.start(index)
+      const end = video.seekable.end(index)
+      const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : end
+
+      setRadioSeekWindowSeconds(Math.max(0, end - start))
+      setRadioDelaySeconds(Math.max(0, end - currentTime))
+    }
+
+    updateSeekWindow()
+
+    const interval = window.setInterval(updateSeekWindow, 15000)
+    video.addEventListener('loadedmetadata', updateSeekWindow)
+    video.addEventListener('durationchange', updateSeekWindow)
+    video.addEventListener('progress', updateSeekWindow)
+    video.addEventListener('seeked', updateSeekWindow)
+
+    return () => {
+      window.clearInterval(interval)
+      video.removeEventListener('loadedmetadata', updateSeekWindow)
+      video.removeEventListener('durationchange', updateSeekWindow)
+      video.removeEventListener('progress', updateSeekWindow)
+      video.removeEventListener('seeked', updateSeekWindow)
+    }
+  }, [activeSurface, selectedRadioStation?.id])
 
   useEffect(() => {
     let isActive = true
@@ -1374,6 +1472,10 @@ export function App() {
       setSelectedEmbedId((current) => current && kickEmbeds.some((item) => item.id === current) ? current : (kickEmbeds[0]?.id ?? null))
       return
     }
+
+    if (surface === 'radio') {
+      setSelectedRadioId((current) => current && radioStations.some((item) => item.id === current) ? current : (radioStations[0]?.id ?? ''))
+    }
   }
 
   function activateIPTV(channelId?: string) {
@@ -1386,6 +1488,35 @@ export function App() {
     setSurface(embed.platform)
     setPlayerError('')
     setPlayerState(embed.platform === 'twitch' ? 'Twitch em foco' : 'Kick em foco')
+  }
+
+  function activateRadio(radioId?: string) {
+    if (radioId) setSelectedRadioId(radioId)
+    setSurface('radio')
+    setPlayerError('')
+    setPlayerState('Radio em foco')
+  }
+
+  function seekRadioBack(secondsBack: number) {
+    const video = videoRef.current
+    if (!video || !video.seekable.length) return
+
+    const rangeIndex = video.seekable.length - 1
+    const start = video.seekable.start(rangeIndex)
+    const end = video.seekable.end(rangeIndex)
+    video.currentTime = Math.max(start, end - secondsBack)
+    setPlayerState(`Rewind ${formatWindowLabel(secondsBack)}`)
+  }
+
+  function jumpRadioToLive() {
+    const video = videoRef.current
+    if (!video || !video.seekable.length) return
+
+    const rangeIndex = video.seekable.length - 1
+    const end = video.seekable.end(rangeIndex)
+    video.currentTime = Math.max(0, end - 2)
+    void video.play().catch(() => {})
+    setPlayerState('Voltando ao vivo...')
   }
 
   function addEmbed() {
@@ -1485,7 +1616,7 @@ export function App() {
           <div>
             <p class="eyebrow">IPTV Pages Hub</p>
             <h1>links e canais ao vivo num painel rapido e limpo</h1>
-            <p class="hero-subcopy">Horario no Brasil, em Londres, em Chicago, em Paris, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
+            <p class="hero-subcopy">Horario no Brasil, em Londres, em Chicago, em Paris, em LA e em NY no topo. IPTV, noticias e agora radios entram no mesmo palco leve para manter a navegacao agil.</p>
             <div class="topbar-meta">
               {marketQuotes.length ? (
                 <div class="market-strip" aria-label="Painel sutil de mercado">
@@ -1510,10 +1641,11 @@ export function App() {
           </div>
           <div class="surface-switch hero-surface-switch">
             <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
-          <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
-          <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
-          <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
-        </div>
+            <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
+            <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
+            <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
+            <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
+          </div>
       </header>
 
       <div class="news-shortcuts">
@@ -1642,6 +1774,33 @@ export function App() {
               </button>
               {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{newsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
             </div>
+
+            <div class={activeSurface === 'radio' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={showRadioPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowRadioPanel((current) => !current)}>
+                <span>Radios</span>
+                <small>{radioStations.length} emissoras</small>
+              </button>
+              {showRadioPanel ? (
+                <div class="sidebar-content stack">
+                  <div class="group-summary">
+                    <span class="pill active-group">{selectedRadioStation?.source || 'Ao vivo'}</span>
+                    <span class="helper-copy">{Object.keys(radioCategoryCounts).length} grupos</span>
+                  </div>
+                  <div class="sidebar-list">
+                    {radioStations.map((item) => (
+                      <button key={item.id} class={selectedRadioStation?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateRadio(item.id)}>
+                        <div class="list-row-art">{item.logo ? <img alt={item.name} loading="lazy" src={item.logo} /> : <span>{item.name.slice(0, 2).toUpperCase()}</span>}</div>
+                        <div class="list-row-copy">
+                          <strong>{item.name}</strong>
+                          <span>{item.category} · {item.source}</span>
+                        </div>
+                        <span class="status-chip unknown">{item.rewindHours ? `${item.rewindHours}h` : 'Live'}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         </aside>
 
@@ -1671,6 +1830,13 @@ export function App() {
                   <span class="feed-pill">{favorites.length} favoritos</span>
                   <span class="feed-pill">{new Intl.NumberFormat('pt-BR').format(visibleChannels.length)} visiveis</span>
                   <span class="feed-pill soft">{playerState}</span>
+                </>
+              ) : activeSurface === 'radio' ? (
+                <>
+                  <span class="feed-pill active">{selectedRadioStation?.source || 'Radio'}</span>
+                  <span class="feed-pill">{radioStations.length} radios</span>
+                  <span class="feed-pill">{selectedRadioStation?.category || 'Ao vivo'}</span>
+                  <span class="feed-pill soft">{radioWindowLabel ? `Rewind ${radioWindowLabel}` : playerState}</span>
                 </>
               ) : (
                 activeFeedItems.map((item) => {
@@ -1750,6 +1916,76 @@ export function App() {
                 ))}
               </div>
             </>
+          ) : activeSurface === 'radio' && selectedRadioStation ? (
+            <>
+              <div class="panel-heading">
+                <div>
+                  <p class="section-tag">Radios ao vivo</p>
+                  <h2>{selectedRadioStation.name}</h2>
+                </div>
+                <div class="pill-row">
+                  <span class="pill">{selectedRadioStation.source}</span>
+                  <span class="pill">{radioDelayLabel}</span>
+                  <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">Abrir oficial</a>
+                </div>
+              </div>
+              <div class="player-frame radio-player-frame">
+                <video controls playsInline preload="auto" ref={videoRef} />
+              </div>
+              <div class="player-meta">
+                <div class="subtle-card compact-card radio-summary-card">
+                  <div class="radio-summary-head">
+                    <div class="radio-summary-logo">
+                      <img alt={selectedRadioStation.name} loading="lazy" src={selectedRadioStation.logo} />
+                    </div>
+                    <div>
+                      <p class="section-tag">Fonte</p>
+                      <h3>{selectedRadioStation.name}</h3>
+                      <p class="helper-copy">{selectedRadioStation.note}</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="subtle-card compact-card">
+                  <p class="section-tag">Rewind</p>
+                  <h3>{radioWindowLabel ? `Janela disponivel ${radioWindowLabel}` : 'Ao vivo direto'}</h3>
+                  <p class="helper-copy">
+                    {selectedRadioStation.rewindHours
+                      ? 'As radios da BBC entram em DASH oficial com janela longa. LBC e Radio X usam o live oficial e mantem o catch-up separado.'
+                      : 'Essa radio esta em live oficial. Se quiser ouvir programas anteriores, use o link de catch-up oficial.'}
+                  </p>
+                </div>
+              </div>
+              <div class="subtle-card radio-rewind-panel">
+                <div class="panel-heading">
+                  <div>
+                    <p class="section-tag">Controles rapidos</p>
+                    <h3>Recuar sem sair do palco</h3>
+                  </div>
+                  {selectedRadioStation.catchupHref ? (
+                    <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">
+                      Catch Up oficial
+                    </a>
+                  ) : null}
+                </div>
+                <div class="rewind-grid">
+                  {[900, 1800, 3600, 10800, 21600].map((seconds) => (
+                    <button
+                      class="ghost-button compact"
+                      disabled={radioSeekWindowSeconds < seconds}
+                      key={seconds}
+                      type="button"
+                      onClick={() => seekRadioBack(seconds)}
+                    >
+                      -{formatWindowLabel(seconds)}
+                    </button>
+                  ))}
+                  <button class="primary-button rewind-live-button" type="button" onClick={jumpRadioToLive}>
+                    Ao vivo
+                  </button>
+                </div>
+              </div>
+              {playerError ? <p class="alert error">{playerError}</p> : null}
+            </>
           ) : activeEmbed ? (
             <>
               <div class="panel-heading">
@@ -1765,41 +2001,92 @@ export function App() {
           ) : <div class="empty-stage"><strong>Nenhum feed selecionado.</strong><span>Escolha um canal ou feed na sidebar.</span></div>}
         </section>
 
-        <section class="panel manager-panel">
-          <div class="panel-heading">
-            <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch e Kick</h2></div>
-            <span class="pill">{embeds.length} feeds cadastrados</span>
-          </div>
-          <div class="embed-tools">
-            <div class="subtle-card stack compact-card">
-              <div class="field-grid compact">
-                <label><span>Twitch Client ID</span><input placeholder="Para status oficial da Twitch" value={settings.twitchClientId} onInput={(event) => setSettings((current) => ({ ...current, twitchClientId: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                <label><span>Twitch token</span><input placeholder="Preenchido via OAuth" value={settings.twitchAccessToken} onInput={(event) => setSettings((current) => ({ ...current, twitchAccessToken: (event.currentTarget as HTMLInputElement).value }))} /></label>
-              </div>
-              <div class="field-grid compact">
-                <label><span>Kick Client ID</span><input placeholder="App da Kick para status oficial" value={settings.kickClientId} onInput={(event) => setSettings((current) => ({ ...current, kickClientId: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
-                <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
-              </div>
-              <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
-              <p class="helper-copy">Twitch usa OAuth do navegador. Na Kick, o site ja consulta o status oficial pelo worker do app; esses campos ficam como override manual caso voce queira testar outra credencial.</p>
+        {activeSurface === 'radio' && selectedRadioStation ? (
+          <section class="panel manager-panel radio-side-panel">
+            <div class="panel-heading">
+              <div><p class="section-tag">Biblioteca de radios</p><h2>{selectedRadioStation.name}</h2></div>
+              <span class="pill">{selectedRadioStation.source}</span>
             </div>
-            <div class="subtle-card stack compact-card">
-              <div class="field-grid compact">
-                <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'kick' }))}><option value="twitch">Twitch</option><option value="kick">Kick</option></select></label>
-                <label><span>Canal</span><input placeholder="nome-do-canal" value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
-              </div>
-              <label><span>Titulo</span><input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
-              <label><span>Endpoint de status opcional</span><input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} /></label>
-              <button class="primary-button" type="button" onClick={addEmbed}>Adicionar feed</button>
+            <div class="feed-chip-grid">
+              <article class="feed-chip-card">
+                <div>
+                  <p class="section-tag">Categoria</p>
+                  <h3>{selectedRadioStation.category}</h3>
+                  <p class="helper-copy">{selectedRadioStation.note}</p>
+                </div>
+                <div class="feed-chip-actions">
+                  <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">BBC/Global oficial</a>
+                  {selectedRadioStation.catchupHref ? <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">Abrir catch up</a> : null}
+                </div>
+              </article>
+              <article class="feed-chip-card">
+                <div>
+                  <p class="section-tag">Rewind no palco</p>
+                  <h3>{selectedRadioStation.rewindHours ? `Ate ${selectedRadioStation.rewindHours}h` : 'Live direto'}</h3>
+                  <p class="helper-copy">
+                    {selectedRadioStation.rewindHours
+                      ? 'Quando a BBC expor a janela ao vivo no manifesto, o palco deixa recuar varias horas sem sair do site.'
+                      : 'LBC e Radio X ficam no live oficial leve e usam Catch Up oficial para voltar em programas anteriores.'}
+                  </p>
+                </div>
+                <div class="feed-chip-actions">
+                  <span class="pill">{radioDelayLabel}</span>
+                  {radioWindowLabel ? <span class="pill">Janela {radioWindowLabel}</span> : null}
+                </div>
+              </article>
+              <article class="feed-chip-card">
+                <div>
+                  <p class="section-tag">Outras radios</p>
+                  <h3>{radioStations.length - 1} opcoes a um clique</h3>
+                  <p class="helper-copy">A grade usa logos oficiais da BBC Sounds e da Global Player para manter a lista leve e legivel.</p>
+                </div>
+                <div class="feed-chip-actions">
+                  {radioStations.slice(0, 6).map((item) => (
+                    <button class="ghost-button compact" key={item.id} type="button" onClick={() => activateRadio(item.id)}>
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </article>
             </div>
-          </div>
-          <div class="feed-chip-grid">
-            {embeds.map((item) => {
-              const status = statusMap[item.channel.toLowerCase()]
-              return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
-            })}
-          </div>
-        </section>
+          </section>
+        ) : (
+          <section class="panel manager-panel">
+            <div class="panel-heading">
+              <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch e Kick</h2></div>
+              <span class="pill">{embeds.length} feeds cadastrados</span>
+            </div>
+            <div class="embed-tools">
+              <div class="subtle-card stack compact-card">
+                <div class="field-grid compact">
+                  <label><span>Twitch Client ID</span><input placeholder="Para status oficial da Twitch" value={settings.twitchClientId} onInput={(event) => setSettings((current) => ({ ...current, twitchClientId: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                  <label><span>Twitch token</span><input placeholder="Preenchido via OAuth" value={settings.twitchAccessToken} onInput={(event) => setSettings((current) => ({ ...current, twitchAccessToken: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                </div>
+                <div class="field-grid compact">
+                  <label><span>Kick Client ID</span><input placeholder="App da Kick para status oficial" value={settings.kickClientId} onInput={(event) => setSettings((current) => ({ ...current, kickClientId: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
+                  <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
+                </div>
+                <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
+                <p class="helper-copy">Twitch usa OAuth do navegador. Na Kick, o site ja consulta o status oficial pelo worker do app; esses campos ficam como override manual caso voce queira testar outra credencial.</p>
+              </div>
+              <div class="subtle-card stack compact-card">
+                <div class="field-grid compact">
+                  <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'kick' }))}><option value="twitch">Twitch</option><option value="kick">Kick</option></select></label>
+                  <label><span>Canal</span><input placeholder="nome-do-canal" value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                </div>
+                <label><span>Titulo</span><input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                <label><span>Endpoint de status opcional</span><input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                <button class="primary-button" type="button" onClick={addEmbed}>Adicionar feed</button>
+              </div>
+            </div>
+            <div class="feed-chip-grid">
+              {embeds.map((item) => {
+                const status = statusMap[item.channel.toLowerCase()]
+                return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
+              })}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   )

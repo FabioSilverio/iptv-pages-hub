@@ -312,6 +312,51 @@ input:focus, select:focus {
 
 .player-frame video { object-fit: contain; background: #000; }
 .player-meta { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 14px; }
+.radio-player-frame {
+  aspect-ratio: 21 / 9;
+  background:
+    radial-gradient(circle at top, rgba(250, 204, 21, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    #06080d;
+}
+
+.radio-summary-head {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.radio-summary-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 24px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.radio-summary-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.radio-rewind-panel {
+  margin-top: 14px;
+  display: grid;
+  gap: 14px;
+}
+
+.rewind-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
+  gap: 10px;
+}
+
+.rewind-live-button {
+  min-height: 38px;
+}
 
 .alert {
   margin: 14px 0 0;
@@ -732,12 +777,17 @@ input:focus, select:focus {
 
   .surface-switch {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .surface-switch button,
   .source-switch button {
     width: 100%;
+  }
+
+  .surface-switch button {
+    padding: 0 10px;
+    font-size: 0.8rem;
   }
 
   .list-row {
@@ -1165,6 +1215,16 @@ input:focus, select:focus {
     overflow-x: auto;
     flex-wrap: nowrap;
     padding-bottom: 4px;
+  }
+
+  .radio-summary-head {
+    grid-template-columns: 72px minmax(0, 1fr);
+  }
+
+  .radio-summary-logo {
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
   }
 }
 
