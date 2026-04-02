@@ -364,11 +364,13 @@ input:focus, select:focus {
   max-width: 54ch;
 }
 
-.radio-player-frame audio {
+.radio-player-frame video {
   width: 100%;
   height: 54px;
   align-self: end;
   filter: saturate(1.02);
+  object-fit: contain;
+  background: transparent;
 }
 
 .radio-playback-badge {

@@ -1213,7 +1213,8 @@ export function App() {
         const shakaModule = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
         const shakaApi = shakaModule as {
           polyfill?: { installAll?: () => void }
-          Player?: new (mediaElement?: HTMLMediaElement) => {
+          Player?: new () => {
+            attach?: (mediaElement: HTMLMediaElement) => Promise<void>
             configure: (settings: Record<string, unknown>) => void
             addEventListener: (event: string, listener: (event: unknown) => void) => void
             load: (source: string) => Promise<void>
@@ -1228,8 +1229,17 @@ export function App() {
           return
         }
 
-        const player = new shakaApi.Player(media)
+        const player = new shakaApi.Player()
         dashRef.current = { reset: () => player.destroy() }
+        if (player.attach) {
+          try {
+            await player.attach(media)
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : 'Falha ao acoplar o player DASH.'
+            void trySource(sourceIndex + 1, detail)
+            return
+          }
+        }
         player.configure({
           streaming: {
             lowLatencyMode: false,
@@ -2186,7 +2196,7 @@ export function App() {
                     </p>
                   </div>
                 </div>
-                <audio autoPlay controls preload="auto" ref={(node) => { videoRef.current = node }} />
+                <video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} />
               </div>
               <div class="player-meta">
                 <div class="subtle-card compact-card radio-summary-card">
