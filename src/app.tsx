@@ -2176,13 +2176,41 @@ export function App() {
                   </div>
                   <div class="group-summary"><span class="pill active-group">{groupFilter}</span><span class="helper-copy">{playlist?.groups.length || 0} grupos</span></div>
                   <div class="sidebar-list">
-                    {displayedChannels.length ? displayedChannels.map((channel) => (
-                      <button key={channel.id} class={channel.id === selectedChannel?.id ? 'list-row active' : 'list-row'} type="button" onClick={() => activateIPTV(channel.id)}>
-                        <div class="list-row-art">{channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}</div>
-                        <div class="list-row-copy"><strong>{channel.name}</strong><span>{channel.group}</span></div>
-                        <span class={favorites.includes(channel.id) ? 'favorite-button active' : 'favorite-button'}>{favorites.includes(channel.id) ? 'Salvo' : 'Fav'}</span>
-                      </button>
-                    )) : <div class="empty-state compact-empty"><strong>Nenhum canal encontrado.</strong><span>Ajuste os filtros ou conecte uma playlist.</span></div>}
+                    {displayedChannels.length ? displayedChannels.map((channel) => {
+                      const isFavorite = favorites.includes(channel.id)
+                      const isActive = channel.id === selectedChannel?.id
+
+                      return (
+                        <div
+                          aria-pressed={isActive}
+                          class={isActive ? 'list-row active' : 'list-row'}
+                          key={channel.id}
+                          onClick={() => activateIPTV(channel.id)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              activateIPTV(channel.id)
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <div class="list-row-art">{channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}</div>
+                          <div class="list-row-copy"><strong>{channel.name}</strong><span>{channel.group}</span></div>
+                          <button
+                            aria-label={isFavorite ? `Remover ${channel.name} dos favoritos` : `Salvar ${channel.name} nos favoritos`}
+                            class={isFavorite ? 'favorite-button active' : 'favorite-button'}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              toggleFavorite(channel.id)
+                            }}
+                          >
+                            {isFavorite ? 'Salvo' : 'Fav'}
+                          </button>
+                        </div>
+                      )
+                    }) : <div class="empty-state compact-empty"><strong>Nenhum canal encontrado.</strong><span>Ajuste os filtros ou conecte uma playlist.</span></div>}
                   </div>
                   {hasMoreChannels ? <div class="load-more-row"><button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>Adicionar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)}</button></div> : null}
                 </div>
