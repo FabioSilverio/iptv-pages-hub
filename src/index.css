@@ -440,6 +440,39 @@ input:focus, select:focus {
   gap: 14px;
 }
 
+.radio-guide-card {
+  display: grid;
+  gap: 12px;
+}
+
+.radio-guide-list {
+  display: grid;
+  gap: 8px;
+}
+
+.radio-guide-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 9px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.radio-guide-row strong {
+  font-size: 0.78rem;
+  line-height: 1.25;
+  color: #f8fafc;
+}
+
+.radio-guide-row span {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
 .rewind-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(86px, 1fr));
@@ -1328,6 +1361,10 @@ input:focus, select:focus {
     width: 88px;
     height: 88px;
     border-radius: 22px;
+  }
+
+  .radio-guide-row {
+    grid-template-columns: 78px minmax(0, 1fr);
   }
 }
 

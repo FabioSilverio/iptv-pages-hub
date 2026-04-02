@@ -22,6 +22,11 @@ import {
   type PlaylistSession,
   type XtreamCredentials,
 } from './lib/iptv'
+import {
+  hasOfficialRadioGuide,
+  loadRadioGuide,
+  type RadioGuideSnapshot,
+} from './lib/radio-guide'
 import { radioStations, type RadioStation } from './lib/radios'
 
 const CONNECTION_KEY = 'iptv-pages-hub.connection'
@@ -567,9 +572,45 @@ function buildPlaybackSources(channel: Channel) {
   }))
 }
 
-async function attemptPlayback(video: HTMLMediaElement, stateOnBlocked: string) {
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+async function stabilizeRadioStartup(media: HTMLMediaElement) {
+  if (media.readyState >= 3) {
+    await delay(700)
+    return
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      media.removeEventListener('canplay', finish)
+      media.removeEventListener('loadeddata', finish)
+      resolve()
+    }
+
+    media.addEventListener('canplay', finish, { once: true })
+    media.addEventListener('loadeddata', finish, { once: true })
+    window.setTimeout(finish, 2200)
+  })
+
+  await delay(900)
+}
+
+async function attemptMediaPlayback(
+  media: HTMLMediaElement,
+  stateOnBlocked: string,
+  options?: { stabilizeRadio?: boolean },
+) {
   try {
-    await video.play()
+    if (options?.stabilizeRadio) {
+      await stabilizeRadioStartup(media)
+    }
+
+    await media.play()
     return 'Ao vivo'
   } catch {
     return stateOnBlocked
@@ -734,6 +775,9 @@ export function App() {
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
   const [radioReplay, setRadioReplay] = useState<RadioReplayState | null>(null)
+  const [radioGuide, setRadioGuide] = useState<RadioGuideSnapshot | null>(null)
+  const [radioGuideError, setRadioGuideError] = useState('')
+  const [radioGuideState, setRadioGuideState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
   const videoRef = useRef<HTMLMediaElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
@@ -840,6 +884,10 @@ export function App() {
     () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
     [selectedRadioId],
   )
+  const canShowRadioGuide = useMemo(
+    () => hasOfficialRadioGuide(selectedRadioStation),
+    [selectedRadioStation],
+  )
   const selectedNewsPlayback = useMemo<Channel | null>(() => {
     const resolvedStream = selectedNewsLink.mirrorChannelKey
       ? resolvedNewsStreamUrl
@@ -913,6 +961,15 @@ export function App() {
       ? `${radioReplay.title} · ${startedLabel}`
       : radioReplay.title
   }, [radioReplay, radioWindowLabel])
+  const radioGuideUpdatedLabel = useMemo(() => {
+    if (!radioGuide?.updatedAt) return ''
+
+    return new Intl.DateTimeFormat('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Europe/London',
+    }).format(new Date(radioGuide.updatedAt))
+  }, [radioGuide?.updatedAt])
   const hasMoreChannels = displayedChannels.length < visibleChannels.length
   const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
   const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
@@ -1274,8 +1331,9 @@ export function App() {
         player.configure({
           streaming: {
             lowLatencyMode: false,
-            bufferingGoal: 18,
-            rebufferingGoal: 4,
+            bufferingGoal: activeSurface === 'radio' ? 30 : 18,
+            rebufferingGoal: activeSurface === 'radio' ? 8 : 4,
+            bufferBehind: activeSurface === 'radio' ? 30 : 20,
             retryParameters: {
               maxAttempts: 5,
               baseDelay: 1000,
@@ -1313,9 +1371,10 @@ export function App() {
 
         window.clearTimeout(fallbackTimer)
         successLocked = true
-        const nextState = await attemptPlayback(
+        const nextState = await attemptMediaPlayback(
           media,
           activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+          { stabilizeRadio: activeSurface === 'radio' },
         )
         if (!cancelled) setPlayerState(nextState)
         return
@@ -1334,11 +1393,11 @@ export function App() {
         const hls = new HlsClient({
           enableWorker: true,
           lowLatencyMode: false,
-          backBufferLength: 30,
-          liveSyncDurationCount: 4,
-          liveMaxLatencyDurationCount: 12,
-          maxBufferLength: 30,
-          maxMaxBufferLength: 60,
+          backBufferLength: activeSurface === 'radio' ? 60 : 30,
+          liveSyncDurationCount: activeSurface === 'radio' ? 6 : 4,
+          liveMaxLatencyDurationCount: activeSurface === 'radio' ? 18 : 12,
+          maxBufferLength: activeSurface === 'radio' ? 45 : 30,
+          maxMaxBufferLength: activeSurface === 'radio' ? 90 : 60,
           manifestLoadingTimeOut: 15000,
           levelLoadingTimeOut: 15000,
           fragLoadingTimeOut: 20000,
@@ -1353,9 +1412,10 @@ export function App() {
         hls.on(HlsClient.Events.MANIFEST_PARSED, async () => {
           window.clearTimeout(fallbackTimer)
           successLocked = true
-          const nextState = await attemptPlayback(
+          const nextState = await attemptMediaPlayback(
             media,
             activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+            { stabilizeRadio: activeSurface === 'radio' },
           )
           if (!cancelled) setPlayerState(nextState)
         })
@@ -1436,9 +1496,10 @@ export function App() {
         })
         window.clearTimeout(fallbackTimer)
         successLocked = true
-        const nextState = await attemptPlayback(
+        const nextState = await attemptMediaPlayback(
           media,
           activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+          { stabilizeRadio: activeSurface === 'radio' },
         )
         if (!cancelled) setPlayerState(nextState)
         return
@@ -1454,9 +1515,10 @@ export function App() {
         media.src = source.url
         window.clearTimeout(fallbackTimer)
         successLocked = true
-        const nextState = await attemptPlayback(
+        const nextState = await attemptMediaPlayback(
           media,
           activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
+          { stabilizeRadio: activeSurface === 'radio' },
         )
         if (!cancelled) setPlayerState(nextState)
         return
@@ -1523,6 +1585,48 @@ export function App() {
       video.removeEventListener('seeked', updateSeekWindow)
     }
   }, [activeSurface, radioReplay, selectedRadioStation?.id])
+
+  useEffect(() => {
+    if (activeSurface !== 'radio' || !selectedRadioStation || !canShowRadioGuide) {
+      setRadioGuide(null)
+      setRadioGuideError('')
+      setRadioGuideState('idle')
+      return
+    }
+
+    let cancelled = false
+
+    const refreshGuide = async () => {
+      if (!cancelled) {
+        setRadioGuideState((current) => (current === 'ready' ? current : 'loading'))
+        setRadioGuideError('')
+      }
+
+      try {
+        const snapshot = await loadRadioGuide(selectedRadioStation, DEFAULT_XTREAM_PROXY_URL)
+        if (cancelled) return
+        setRadioGuide(snapshot)
+        setRadioGuideState('ready')
+      } catch (error) {
+        if (cancelled) return
+        setRadioGuide(null)
+        setRadioGuideState('failed')
+        setRadioGuideError(
+          error instanceof Error
+            ? error.message
+            : 'Nao consegui ler a programacao oficial dessa radio agora.',
+        )
+      }
+    }
+
+    void refreshGuide()
+    const interval = window.setInterval(refreshGuide, 5 * 60_000)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [activeSurface, canShowRadioGuide, selectedRadioStation?.id])
 
   useEffect(() => {
     let isActive = true
@@ -2289,6 +2393,25 @@ export function App() {
                   {selectedRadioStation.catchupHref ? <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">Abrir catch up</a> : null}
                 </div>
               </article>
+              {canShowRadioGuide ? (
+                <article class="feed-chip-card radio-guide-card">
+                  <div>
+                    <p class="section-tag">No ar agora</p>
+                    <h3>{radioGuide?.now?.title || (radioGuideState === 'loading' ? 'Carregando grade...' : 'Grade indisponivel agora')}</h3>
+                    <p class="helper-copy">
+                      {radioGuide?.now?.subtitle
+                        || radioGuide?.now?.description
+                        || (radioGuideState === 'loading'
+                          ? 'Lendo a fonte oficial dessa emissora.'
+                          : radioGuideError || 'Nao consegui puxar a programacao oficial agora.')}
+                    </p>
+                  </div>
+                  <div class="feed-chip-actions">
+                    {radioGuide?.now?.timeLabel ? <span class="pill">{radioGuide.now.timeLabel}</span> : null}
+                    {radioGuideUpdatedLabel ? <span class="pill soft">Atualizado {radioGuideUpdatedLabel} UK</span> : null}
+                  </div>
+                </article>
+              ) : null}
               <article class="feed-chip-card">
                 <div>
                   <p class="section-tag">Rewind no palco</p>
@@ -2304,6 +2427,31 @@ export function App() {
                   {radioWindowLabel ? <span class="pill">Janela {radioWindowLabel}</span> : null}
                 </div>
               </article>
+              {canShowRadioGuide ? (
+                <article class="feed-chip-card radio-guide-card">
+                  <div>
+                    <p class="section-tag">Programacao do dia</p>
+                    <h3>{radioGuide?.providerLabel || 'Fonte oficial'}</h3>
+                    <p class="helper-copy">
+                      {radioGuide?.upcoming.length
+                        ? 'Grade discreta, puxada so quando essa radio esta aberta.'
+                        : radioGuideState === 'loading'
+                          ? 'Montando os proximos programas oficiais.'
+                          : 'A fonte oficial nao entregou a grade completa agora.'}
+                    </p>
+                  </div>
+                  {radioGuide?.upcoming.length ? (
+                    <div class="radio-guide-list">
+                      {radioGuide.upcoming.slice(0, 4).map((entry) => (
+                        <div class="radio-guide-row" key={`${entry.timeLabel}-${entry.title}`}>
+                          <strong>{entry.timeLabel}</strong>
+                          <span>{entry.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </article>
+              ) : null}
               <article class="feed-chip-card">
                 <div>
                   <p class="section-tag">Outras radios</p>
