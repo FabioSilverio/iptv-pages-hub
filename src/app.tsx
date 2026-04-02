@@ -93,17 +93,19 @@ function mergeSettings(value?: Partial<AppSettings> | null): AppSettings {
   return { ...defaultSettings, ...(value || {}) }
 }
 const embedDefaults: EmbedStream[] = [
-  { id: crypto.randomUUID(), platform: 'twitch', channel: 'shroud', title: 'Twitch destaque' },
-  { id: crypto.randomUUID(), platform: 'kick', channel: 'xqc', title: 'Kick destaque' },
+  { id: 'default:twitch:destiny', platform: 'twitch', channel: 'destiny', title: 'destiny' },
+  { id: 'default:twitch:anythingelse', platform: 'twitch', channel: 'anythingelse', title: 'anythingelse' },
+  { id: 'default:kick:sneako', platform: 'kick', channel: 'sneako', title: 'sneako' },
+  { id: 'default:kick:imreallyimportant', platform: 'kick', channel: 'imreallyimportant', title: 'imreallyimportant' },
 ]
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
     name: 'BBC News',
-    href: 'https://freeshot.live/live-tv/bbc-news-uk/491',
-    note: 'Fonte alternativa focada em BBC News UK via embed externo.',
-    source: 'FreeShot',
-    embedUrl: 'https://freeshot.live/embed/BBCNewsUK.php',
+    href: 'https://vs-hls-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/t=3840/v=pv14/b=5070016/main.m3u8',
+    note: 'Feed direto da BBC via Akamai, tocando no player leve do proprio site.',
+    source: 'BBC / Akamai',
+    streamUrl: 'https://vs-hls-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/t=3840/v=pv14/b=5070016/main.m3u8',
   },
   {
     id: 'sky-news',
@@ -547,6 +549,12 @@ export function App() {
     const video = videoRef.current
     if (!video || !selectedPlaybackChannel) return
     const media: HTMLVideoElement = video
+
+    if (activeSurface === 'iptv' && media.dataset.initialMuteApplied !== 'true') {
+      media.defaultMuted = true
+      media.muted = true
+      media.dataset.initialMuteApplied = 'true'
+    }
 
     let cancelled = false
     let suppressMediaError = false

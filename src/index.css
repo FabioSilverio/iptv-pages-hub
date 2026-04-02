@@ -615,6 +615,23 @@ input:focus, select:focus {
   max-width: 100%;
 }
 
+.list-row.media-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.list-row.media-row .list-row-copy {
+  width: 100%;
+}
+
+.list-row.media-row .status-chip {
+  align-self: flex-start;
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
 .compact-empty {
   padding: 18px;
 }
@@ -675,6 +692,7 @@ input:focus, select:focus {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  justify-content: flex-start;
 }
 
 @media (max-width: 1240px) {
