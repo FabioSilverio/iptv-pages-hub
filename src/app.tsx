@@ -493,6 +493,8 @@ export function App() {
     const zones = [
       ['Brasil', 'America/Sao_Paulo'],
       ['Londres', 'Europe/London'],
+      ['Chicago', 'America/Chicago'],
+      ['Paris', 'Europe/Paris'],
       ['LA', 'America/Los_Angeles'],
       ['NY', 'America/New_York'],
     ] as const
@@ -1220,28 +1222,28 @@ export function App() {
           <div>
             <p class="eyebrow">IPTV Pages Hub</p>
             <h1>links e canais ao vivo num painel rapido e limpo</h1>
-            <p class="hero-subcopy">Horario no Brasil, em Londres, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
-          </div>
-          <div class="topbar-aside">
-            <div class="topbar-stats">
-              {dashboardTimes.map((entry) => (
-                <div class="stat-card time-card" key={entry.label}>
-                  <span>{entry.label}</span>
-                  <strong>{entry.value}</strong>
+            <p class="hero-subcopy">Horario no Brasil, em Londres, em Chicago, em Paris, em LA e em NY no topo. A area do IPTV continua com o mesmo playback por baixo, so reorganizei a navegacao visual.</p>
+            <div class="topbar-meta">
+              {marketQuotes.length ? (
+                <div class="market-strip" aria-label="Painel sutil de mercado">
+                  {marketQuotes.map((item) => (
+                    <div class={`market-pill ${item.trend}`} key={item.id}>
+                      <span>{item.label}</span>
+                      <strong>{item.value}</strong>
+                      <small>{item.change}</small>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            {marketQuotes.length ? (
-              <div class="market-strip" aria-label="Painel sutil de mercado">
-                {marketQuotes.map((item) => (
-                  <div class={`market-pill ${item.trend}`} key={item.id}>
-                    <span>{item.label}</span>
-                    <strong>{item.value}</strong>
-                    <small>{item.change}</small>
+              ) : null}
+              <div class="topbar-stats">
+                {dashboardTimes.map((entry) => (
+                  <div class="stat-card time-card" key={entry.label}>
+                    <span>{entry.label}</span>
+                    <strong>{entry.value}</strong>
                   </div>
                 ))}
               </div>
-            ) : null}
+            </div>
           </div>
           <div class="surface-switch hero-surface-switch">
             <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
