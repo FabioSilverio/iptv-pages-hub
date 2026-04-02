@@ -547,7 +547,10 @@ export function App() {
     [selectedRadioId],
   )
   const selectedNewsPlayback = useMemo<Channel | null>(() => {
-    const resolvedStream = resolvedNewsStreamUrl || selectedNewsLink.streamUrl
+    const resolvedStream = selectedNewsLink.mirrorChannelKey
+      ? resolvedNewsStreamUrl
+      : selectedNewsLink.streamUrl
+
     if (!resolvedStream) return null
     const streamUrl = selectedNewsLink.playbackEngine === 'dash'
       ? resolvedStream
@@ -1228,7 +1231,7 @@ export function App() {
       media.removeEventListener('error', onError)
       cleanupPlayers()
     }
-  }, [activeSurface, selectedPlaybackChannel?.id])
+  }, [activeSurface, selectedPlaybackChannel?.id, selectedPlaybackChannel?.streamUrl])
 
   useEffect(() => {
     const video = videoRef.current
@@ -1938,7 +1941,7 @@ export function App() {
                   ) : null}
                 </div>
                 <div class="rewind-grid">
-                  {[900, 1800, 3600, 10800, 21600].map((seconds) => (
+                  {[900, 1800, 3600, 7200, 10800, 21600].map((seconds) => (
                     <button
                       class="ghost-button compact"
                       disabled={radioSeekWindowSeconds < seconds}
@@ -1953,6 +1956,11 @@ export function App() {
                     Ao vivo
                   </button>
                 </div>
+                {!radioSeekWindowSeconds ? (
+                  <p class="helper-copy">
+                    Esse feed nao expoe rewind direto no manifesto. Quando isso acontecer, o botao de voltar fica liberado; senao, use o link oficial de catch up.
+                  </p>
+                ) : null}
               </div>
               {playerError ? <p class="alert error">{playerError}</p> : null}
             </>
