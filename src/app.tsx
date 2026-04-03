@@ -69,6 +69,7 @@ interface NewsLink {
   source: string
   embedUrl?: string
   embedResolver?: 'nasa-live'
+  youtubeChannel?: string
   streamUrl?: string
   mirrorChannelKey?: string
   mirrorServers?: string[]
@@ -251,6 +252,14 @@ const newsLinks: NewsLink[] = [
     streamUrl: 'https://www.bloomberg.com/media-manifest/streams/phoenix-us.m3u8',
   },
   {
+    id: 'abc-news-live',
+    name: 'ABC News Live',
+    href: 'https://abcnews.com/live',
+    note: 'ABC News Live oficial, resolvida pelo canal oficial da ABC News no YouTube para abrir rapido no palco.',
+    source: 'ABC News | YouTube',
+    youtubeChannel: '@ABCNews',
+  },
+  {
     id: 'times-brasil-cnbc',
     name: 'Times Brasil CNBC',
     href: 'https://www.youtube.com/@otimesbrasil/live',
@@ -323,6 +332,33 @@ function isTokenFresh(expiresAt?: string) {
 
 function buildKickEmbedUrl(channel: string) {
   return `https://player.kick.com/${channel}?autoplay=true&muted=true`
+}
+
+function withAutoplayEmbedUrl(rawUrl?: string) {
+  if (!rawUrl) return ''
+
+  try {
+    const url = new URL(rawUrl)
+    const hostname = url.hostname.toLowerCase()
+
+    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
+      url.searchParams.set('autoplay', '1')
+      url.searchParams.set('mute', '1')
+      url.searchParams.set('playsinline', '1')
+      url.searchParams.set('enablejsapi', '1')
+      url.searchParams.set('rel', '0')
+      url.searchParams.set('modestbranding', '1')
+    }
+
+    if (hostname.includes('player.kick.com')) {
+      url.searchParams.set('autoplay', 'true')
+      url.searchParams.set('muted', 'true')
+    }
+
+    return url.toString()
+  } catch {
+    return rawUrl
+  }
 }
 
 async function ensureTwitchPlayerScript() {
@@ -1185,7 +1221,7 @@ export function App() {
     }
   }, [resolvedNewsStreamUrl, selectedNewsLink])
   const selectedNewsEmbedUrl = useMemo(
-    () => resolvedNewsEmbedUrl || selectedNewsLink.embedUrl || '',
+    () => withAutoplayEmbedUrl(resolvedNewsEmbedUrl || selectedNewsLink.embedUrl || ''),
     [resolvedNewsEmbedUrl, selectedNewsLink.embedUrl],
   )
   const selectedRadioPlayback = useMemo<Channel | null>(() => {
@@ -1357,6 +1393,39 @@ export function App() {
           if (!cancelled) {
             setNewsMirrorState('failed')
             setNewsMirrorError(error instanceof Error ? error.message : 'Falha ao resolver o embed oficial da NASA.')
+          }
+        }
+        return
+      }
+
+      if (selectedNewsLink.youtubeChannel) {
+        setResolvedNewsStreamUrl('')
+        setNewsMirrorState('resolving')
+
+        try {
+          const statuses = await fetchYoutubeStatuses(
+            [selectedNewsLink.youtubeChannel],
+            DEFAULT_XTREAM_PROXY_URL,
+          )
+          const status = statuses[selectedNewsLink.youtubeChannel.toLowerCase()]
+
+          if (!cancelled) {
+            if (status?.state === 'online' && status.playbackUrl) {
+              setResolvedNewsEmbedUrl(status.playbackUrl)
+              setNewsMirrorState('ready')
+            } else {
+              setNewsMirrorState('failed')
+              setNewsMirrorError(
+                status?.detail || 'O canal oficial do YouTube nao devolveu uma live ativa agora.',
+              )
+            }
+          }
+        } catch (error) {
+          if (!cancelled) {
+            setNewsMirrorState('failed')
+            setNewsMirrorError(
+              error instanceof Error ? error.message : 'Falha ao resolver o canal oficial da ABC News.',
+            )
           }
         }
         return
@@ -3164,9 +3233,9 @@ export function App() {
                   ? <div class="twitch-player-host" ref={twitchPlayerHostRef} />
                   : activeSurface === 'youtube'
                     ? statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl
-                      ? <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl} title={activeEmbed.title} />
+                      ? <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl)} title={activeEmbed.title} />
                       : <div class="empty-stage"><strong>Canal sem live agora.</strong><span>Quando o YouTube detectar uma live ativa nesse canal, ela abre aqui no palco.</span></div>
-                    : <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} />}
+                    : <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(buildKickEmbedUrl(activeEmbed.channel))} title={activeEmbed.title} />}
               </div>
               <div class="player-meta">
                 <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{activeEmbed.channel}</h3><p class="helper-copy">{statusMap[activeEmbed.channel.toLowerCase()]?.detail || 'Feed ativo no palco principal.'}</p></div>
