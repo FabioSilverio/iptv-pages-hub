@@ -13,11 +13,19 @@ export default {
       return handleKickStatus(request, env, url)
     }
 
+    if (url.pathname === '/youtube-status') {
+      return handleYouTubeStatus(request, url)
+    }
+
+    if (url.pathname === '/youtube-resolve') {
+      return handleYouTubeResolve(request, url)
+    }
+
     if (url.pathname !== '/proxy') {
       return json(
         {
           ok: true,
-          usage: '/proxy?url=http://origin/path or /kick-status?channel=xqc',
+          usage: '/proxy?url=http://origin/path or /kick-status?channel=xqc or /youtube-status?channel=@vaush',
         },
         200,
         request,
@@ -144,6 +152,118 @@ async function handleKickStatus(request, env, url) {
   }
 }
 
+async function handleYouTubeStatus(request, url) {
+  const channel = normalizeYouTubeChannel(String(url.searchParams.get('channel') || ''))
+  if (!channel) {
+    return json({ error: 'Missing channel query param.' }, 400, request)
+  }
+
+  try {
+    const pageUrl = buildYouTubeLivePageUrl(channel)
+    const response = await fetch(pageUrl, {
+      headers: buildUpstreamHeaders(request.headers, new URL(pageUrl)),
+      redirect: 'follow',
+    })
+
+    if (!response.ok) {
+      throw new Error(`YouTube respondeu ${response.status}.`)
+    }
+
+    const html = await response.text()
+    const liveMatch = html.match(
+      /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/,
+    ) || html.match(/"videoId":"([A-Za-z0-9_-]{11})"[\s\S]{0,2000}"isLive":true/)
+
+    if (liveMatch?.[1]) {
+      return json(
+        {
+          label: 'Ao vivo',
+          state: 'online',
+          detail: 'Live detectada na aba oficial /live do canal no YouTube.',
+          updatedAt: new Date().toISOString(),
+          playbackUrl: buildYouTubeEmbedUrl(liveMatch[1]),
+          watchUrl: `https://www.youtube.com/watch?v=${liveMatch[1]}`,
+        },
+        200,
+        request,
+      )
+    }
+
+    const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
+    return json(
+      {
+        label: isUpcoming ? 'Agendado' : 'Offline',
+        state: 'offline',
+        detail: isUpcoming
+          ? 'O canal tem uma live agendada no YouTube, mas nao esta ao vivo agora.'
+          : 'Canal sem live ao vivo agora no YouTube.',
+        updatedAt: new Date().toISOString(),
+        watchUrl: buildYouTubeWatchUrl(channel),
+      },
+      200,
+      request,
+    )
+  } catch (error) {
+    return json(
+      {
+        label: 'Indisponivel',
+        state: 'unknown',
+        detail: error instanceof Error ? error.message : 'Nao foi possivel consultar o YouTube agora.',
+        updatedAt: new Date().toISOString(),
+        watchUrl: buildYouTubeWatchUrl(channel),
+      },
+      200,
+      request,
+    )
+  }
+}
+
+async function handleYouTubeResolve(request, url) {
+  const input = String(url.searchParams.get('input') || '').trim()
+  const normalized = normalizeYouTubeChannel(input)
+
+  if (!normalized) {
+    return json({ error: 'Missing input query param.' }, 400, request)
+  }
+
+  if (
+    normalized.startsWith('@')
+    || normalized.startsWith('channel/')
+    || normalized.startsWith('c/')
+    || normalized.startsWith('user/')
+  ) {
+    return json({ channel: normalized }, 200, request)
+  }
+
+  if (!normalized.startsWith('live/')) {
+    return json({ channel: normalized }, 200, request)
+  }
+
+  try {
+    const pageUrl = buildYouTubeLivePageUrl(normalized)
+    const response = await fetch(pageUrl, {
+      headers: buildUpstreamHeaders(request.headers, new URL(pageUrl)),
+      redirect: 'follow',
+    })
+
+    if (!response.ok) {
+      throw new Error(`YouTube respondeu ${response.status}.`)
+    }
+
+    const html = await response.text()
+    const match = html.match(/"canonicalBaseUrl":"\/(@[^"]+|channel\/[^"]+|c\/[^"]+|user\/[^"]+)"/)
+    return json({ channel: match?.[1] || normalized }, 200, request)
+  } catch (error) {
+    return json(
+      {
+        error: error instanceof Error ? error.message : 'Nao consegui identificar o canal por esse link do YouTube.',
+      },
+      400,
+      request,
+    )
+  }
+}
+
 let kickTokenCache = {
   accessToken: '',
   expiresAt: 0,
@@ -217,11 +337,68 @@ function buildUpstreamHeaders(headers, targetUrl) {
     )
   }
 
+  if (requiresYoutubeHeaders(targetUrl)) {
+    next.set('origin', 'https://www.youtube.com')
+    next.set('referer', 'https://www.youtube.com/')
+    next.set('accept', 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')
+    next.set('accept-language', 'en-US,en;q=0.9')
+    next.set('cache-control', 'no-cache')
+    next.set(
+      'user-agent',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+    )
+  }
+
   return next
 }
 
 function requiresNbcHeaders(targetUrl) {
   return /(^|\.)cssott\.com$/i.test(targetUrl.hostname)
+}
+
+function requiresYoutubeHeaders(targetUrl) {
+  return /(^|\.)youtube\.com$/i.test(targetUrl.hostname) || /(^|\.)youtu\.be$/i.test(targetUrl.hostname)
+}
+
+function normalizeYouTubeChannel(value) {
+  const trimmed = String(value || '').trim()
+  if (!trimmed) return ''
+
+  if (trimmed.includes('youtube.com/')) {
+    try {
+      const url = new URL(trimmed)
+      const path = url.pathname.replace(/\/+$/, '')
+      if (path.startsWith('/@')) return path.slice(1)
+      if (/^\/channel\/[^/]+$/i.test(path)) return path.slice(1)
+      if (/^\/c\/[^/]+$/i.test(path)) return path.slice(1)
+      if (/^\/user\/[^/]+$/i.test(path)) return path.slice(1)
+      if (/^\/live\/[A-Za-z0-9_-]{11}$/i.test(path)) {
+        return `live/${path.replace(/^\/live\//i, '')}`
+      }
+    } catch {
+      return trimmed
+    }
+  }
+
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`
+}
+
+function buildYouTubeLivePageUrl(channel) {
+  const normalized = normalizeYouTubeChannel(channel)
+  if (!normalized) return 'https://www.youtube.com'
+  return normalized.startsWith('live/')
+    ? `https://www.youtube.com/${normalized}?hl=en`
+    : `https://www.youtube.com/${normalized}/live?hl=en`
+}
+
+function buildYouTubeWatchUrl(channel) {
+  const normalized = normalizeYouTubeChannel(channel)
+  if (!normalized) return 'https://www.youtube.com'
+  return `https://www.youtube.com/${normalized}`
+}
+
+function buildYouTubeEmbedUrl(videoId) {
+  return `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1`
 }
 
 function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {

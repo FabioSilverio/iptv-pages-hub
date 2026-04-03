@@ -421,14 +421,6 @@ function normalizeYoutubeChannel(value: string) {
   return trimmed.startsWith('@') ? trimmed : `@${trimmed}`
 }
 
-function buildYoutubeLivePageUrl(channel: string) {
-  const normalized = normalizeYoutubeChannel(channel)
-  if (!normalized) return ''
-  return normalized.startsWith('live/')
-    ? `https://www.youtube.com/${normalized}?hl=en`
-    : `https://www.youtube.com/${normalized}/live?hl=en`
-}
-
 function buildYoutubeWatchUrl(channel: string) {
   const normalized = normalizeYoutubeChannel(channel)
   if (!normalized) return 'https://www.youtube.com'
@@ -437,8 +429,14 @@ function buildYoutubeWatchUrl(channel: string) {
     : `https://www.youtube.com/${normalized}`
 }
 
-function buildYoutubeEmbedUrl(videoId: string) {
-  return `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1`
+function buildYoutubeStatusEndpoint(proxyBase: string, channel: string) {
+  const base = normalizeProxyUrl(proxyBase)
+  return `${base}/youtube-status?channel=${encodeURIComponent(channel)}`
+}
+
+function buildYoutubeResolveEndpoint(proxyBase: string, input: string) {
+  const base = normalizeProxyUrl(proxyBase)
+  return `${base}/youtube-resolve?input=${encodeURIComponent(input)}`
 }
 
 export async function fetchYoutubeStatuses(
@@ -452,58 +450,32 @@ export async function fetchYoutubeStatuses(
   const entries = await Promise.all(
     channels.map(async (channel) => {
       try {
-        const livePageUrl = buildYoutubeLivePageUrl(channel)
-        const watchUrl = buildYoutubeWatchUrl(channel)
-        const response = await fetch(buildProxyUrl(proxyBase, livePageUrl), {
-          headers: {
-            Accept: 'text/html',
-            'User-Agent': 'Mozilla/5.0',
-          },
+        const response = await fetch(buildYoutubeStatusEndpoint(proxyBase, channel), {
+          headers: { Accept: 'application/json' },
         })
 
         if (!response.ok) {
           throw new Error(`YouTube respondeu ${response.status}.`)
         }
 
-        const html = await response.text()
-        const liveMatch = html.match(
-          /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/,
-        )
-
-        if (liveMatch?.[1]) {
-          const videoId = liveMatch[1]
-          return [
-            channel.toLowerCase(),
-            {
-              label: 'Ao vivo',
-              state: 'online' as const,
-              detail: 'Live detectada na aba oficial /live do canal no YouTube.',
-              updatedAt: new Date().toISOString(),
-              playbackUrl: buildYoutubeEmbedUrl(videoId),
-              watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
-            } satisfies EmbedStatus,
-          ] as const
-        }
-
-        const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
+        const payload = (await response.json()) as Partial<EmbedStatus>
         return [
           channel.toLowerCase(),
           {
-            label: isUpcoming ? 'Agendado' : 'Offline',
-            state: 'offline' as const,
-            detail: isUpcoming
-              ? 'O canal tem uma live agendada no YouTube, mas nao esta ao vivo agora.'
-              : 'Canal sem live ao vivo agora no YouTube.',
-            updatedAt: new Date().toISOString(),
-            watchUrl,
+            label: payload.label || 'Indisponivel',
+            state: (payload.state as LiveState) || 'unknown',
+            detail: payload.detail || YOUTUBE_STATUS_HELP,
+            updatedAt: payload.updatedAt || new Date().toISOString(),
+            playbackUrl: payload.playbackUrl,
+            watchUrl: payload.watchUrl || buildYoutubeWatchUrl(channel),
           } satisfies EmbedStatus,
         ] as const
       } catch (error) {
         return [
           channel.toLowerCase(),
           {
-            label: 'Erro',
-            state: 'error' as const,
+            label: 'Indisponivel',
+            state: 'unknown' as const,
             detail: error instanceof Error ? error.message : YOUTUBE_STATUS_HELP,
             updatedAt: new Date().toISOString(),
             watchUrl: buildYoutubeWatchUrl(channel),
@@ -535,26 +507,20 @@ export async function resolveYoutubeChannelInput(
     return normalized
   }
 
-  if (normalized.startsWith('live/')) {
-    const response = await fetch(buildProxyUrl(proxyBase, buildYoutubeLivePageUrl(normalized)), {
-      headers: {
-        Accept: 'text/html',
-        'User-Agent': 'Mozilla/5.0',
-      },
-    })
+  const response = await fetch(buildYoutubeResolveEndpoint(proxyBase, rawInput), {
+    headers: { Accept: 'application/json' },
+  })
 
-    if (!response.ok) {
-      throw new Error('Nao consegui identificar o canal por esse link do YouTube.')
-    }
-
-    const html = await response.text()
-    const match = html.match(/"canonicalBaseUrl":"\/(@[^"]+|channel\/[^"]+|c\/[^"]+|user\/[^"]+)"/)
-    if (match?.[1]) {
-      return match[1]
-    }
+  if (!response.ok) {
+    throw new Error('Nao consegui identificar o canal por esse link do YouTube.')
   }
 
-  return normalized
+  const payload = (await response.json()) as { channel?: string; error?: string }
+  if (payload.channel?.trim()) {
+    return payload.channel.trim()
+  }
+
+  throw new Error(payload.error || 'Nao consegui identificar o canal por esse link do YouTube.')
 }
 
 export async function fetchKickAppAccessToken(
