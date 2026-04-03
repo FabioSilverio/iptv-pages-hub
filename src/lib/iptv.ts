@@ -410,6 +410,10 @@ function normalizeYoutubeChannel(value: string) {
       if (/^\/channel\/[^/]+$/i.test(path)) return path.slice(1)
       if (/^\/c\/[^/]+$/i.test(path)) return path.slice(1)
       if (/^\/user\/[^/]+$/i.test(path)) return path.slice(1)
+      if (/^\/live\/[A-Za-z0-9_-]{11}$/i.test(path)) {
+        const liveSlug = path.replace(/^\/live\//i, '')
+        return `live/${liveSlug}`
+      }
     } catch {
       return trimmed
     }
@@ -420,13 +424,17 @@ function normalizeYoutubeChannel(value: string) {
 function buildYoutubeLivePageUrl(channel: string) {
   const normalized = normalizeYoutubeChannel(channel)
   if (!normalized) return ''
-  return `https://www.youtube.com/${normalized}/live?hl=en`
+  return normalized.startsWith('live/')
+    ? `https://www.youtube.com/${normalized}?hl=en`
+    : `https://www.youtube.com/${normalized}/live?hl=en`
 }
 
 function buildYoutubeWatchUrl(channel: string) {
   const normalized = normalizeYoutubeChannel(channel)
   if (!normalized) return 'https://www.youtube.com'
-  return `https://www.youtube.com/${normalized}`
+  return normalized.startsWith('live/')
+    ? `https://www.youtube.com/${normalized}`
+    : `https://www.youtube.com/${normalized}`
 }
 
 function buildYoutubeEmbedUrl(videoId: string) {
@@ -443,56 +451,110 @@ export async function fetchYoutubeStatuses(
 
   const entries = await Promise.all(
     channels.map(async (channel) => {
-      const livePageUrl = buildYoutubeLivePageUrl(channel)
-      const watchUrl = buildYoutubeWatchUrl(channel)
-      const response = await fetch(buildProxyUrl(proxyBase, livePageUrl), {
-        headers: {
-          Accept: 'text/html',
-          'User-Agent': 'Mozilla/5.0',
-        },
-      })
+      try {
+        const livePageUrl = buildYoutubeLivePageUrl(channel)
+        const watchUrl = buildYoutubeWatchUrl(channel)
+        const response = await fetch(buildProxyUrl(proxyBase, livePageUrl), {
+          headers: {
+            Accept: 'text/html',
+            'User-Agent': 'Mozilla/5.0',
+          },
+        })
 
-      if (!response.ok) {
-        throw new Error('Falha ao consultar o canal do YouTube.')
-      }
+        if (!response.ok) {
+          throw new Error(`YouTube respondeu ${response.status}.`)
+        }
 
-      const html = await response.text()
-      const liveMatch = html.match(
-        /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/,
-      )
+        const html = await response.text()
+        const liveMatch = html.match(
+          /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/,
+        )
 
-      if (liveMatch?.[1]) {
-        const videoId = liveMatch[1]
+        if (liveMatch?.[1]) {
+          const videoId = liveMatch[1]
+          return [
+            channel.toLowerCase(),
+            {
+              label: 'Ao vivo',
+              state: 'online' as const,
+              detail: 'Live detectada na aba oficial /live do canal no YouTube.',
+              updatedAt: new Date().toISOString(),
+              playbackUrl: buildYoutubeEmbedUrl(videoId),
+              watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+            } satisfies EmbedStatus,
+          ] as const
+        }
+
+        const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
         return [
           channel.toLowerCase(),
           {
-            label: 'Ao vivo',
-            state: 'online' as const,
-            detail: 'Live detectada na aba oficial /live do canal no YouTube.',
+            label: isUpcoming ? 'Agendado' : 'Offline',
+            state: 'offline' as const,
+            detail: isUpcoming
+              ? 'O canal tem uma live agendada no YouTube, mas nao esta ao vivo agora.'
+              : 'Canal sem live ao vivo agora no YouTube.',
             updatedAt: new Date().toISOString(),
-            playbackUrl: buildYoutubeEmbedUrl(videoId),
-            watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+            watchUrl,
+          } satisfies EmbedStatus,
+        ] as const
+      } catch (error) {
+        return [
+          channel.toLowerCase(),
+          {
+            label: 'Erro',
+            state: 'error' as const,
+            detail: error instanceof Error ? error.message : YOUTUBE_STATUS_HELP,
+            updatedAt: new Date().toISOString(),
+            watchUrl: buildYoutubeWatchUrl(channel),
           } satisfies EmbedStatus,
         ] as const
       }
-
-      const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
-      return [
-        channel.toLowerCase(),
-        {
-          label: isUpcoming ? 'Agendado' : 'Offline',
-          state: 'offline' as const,
-          detail: isUpcoming
-            ? 'O canal tem uma live agendada no YouTube, mas nao esta ao vivo agora.'
-            : 'Canal sem live ao vivo agora no YouTube.',
-          updatedAt: new Date().toISOString(),
-          watchUrl,
-        } satisfies EmbedStatus,
-      ] as const
     }),
   )
 
   return Object.fromEntries(entries)
+}
+
+export async function resolveYoutubeChannelInput(
+  rawInput: string,
+  proxyBase: string,
+): Promise<string> {
+  const normalized = normalizeYoutubeChannel(rawInput)
+
+  if (!normalized) {
+    throw new Error('Cole um canal do YouTube usando @handle, URL do canal ou URL /live.')
+  }
+
+  if (
+    normalized.startsWith('@')
+    || normalized.startsWith('channel/')
+    || normalized.startsWith('c/')
+    || normalized.startsWith('user/')
+  ) {
+    return normalized
+  }
+
+  if (normalized.startsWith('live/')) {
+    const response = await fetch(buildProxyUrl(proxyBase, buildYoutubeLivePageUrl(normalized)), {
+      headers: {
+        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0',
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error('Nao consegui identificar o canal por esse link do YouTube.')
+    }
+
+    const html = await response.text()
+    const match = html.match(/"canonicalBaseUrl":"\/(@[^"]+|channel\/[^"]+|c\/[^"]+|user\/[^"]+)"/)
+    if (match?.[1]) {
+      return match[1]
+    }
+  }
+
+  return normalized
 }
 
 export async function fetchKickAppAccessToken(

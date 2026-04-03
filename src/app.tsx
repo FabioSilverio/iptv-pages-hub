@@ -13,6 +13,7 @@ import {
   fetchYoutubeStatuses,
   fetchXtreamPlaylist,
   KICK_STATUS_HELP,
+  resolveYoutubeChannelInput,
   takeTwitchTokenFromHash,
   TWITCH_STATUS_HELP,
   YOUTUBE_STATUS_HELP,
@@ -2337,13 +2338,25 @@ export function App() {
     setPlayerState('Voltando ao vivo...')
   }
 
-  function addEmbed() {
-    if (!embedDraft.channel.trim()) return
+  async function addEmbed() {
+    const rawChannel = embedDraft.channel.trim()
+    if (!rawChannel) return
+
+    let normalizedChannel = rawChannel
+    if (embedDraft.platform === 'youtube') {
+      try {
+        normalizedChannel = await resolveYoutubeChannelInput(rawChannel, DEFAULT_XTREAM_PROXY_URL)
+      } catch (error) {
+        setLoadError(error instanceof Error ? error.message : 'Nao consegui entender esse link do YouTube.')
+        return
+      }
+    }
+
     const nextEmbed = {
       id: crypto.randomUUID(),
       platform: embedDraft.platform,
-      channel: embedDraft.channel.trim(),
-      title: embedDraft.title.trim() || `${embedDraft.platform} / ${embedDraft.channel.trim()}`,
+      channel: normalizedChannel,
+      title: embedDraft.title.trim() || `${embedDraft.platform} / ${normalizedChannel}`,
       statusEndpoint: embedDraft.statusEndpoint?.trim() || undefined,
     }
     setEmbeds((current) => [
@@ -2353,6 +2366,7 @@ export function App() {
     setSelectedEmbedId(nextEmbed.id)
     setActiveSurface(nextEmbed.platform)
     setEmbedDraft({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
+    setLoadError('')
   }
 
   function addMovie() {
@@ -3182,11 +3196,12 @@ export function App() {
               <div class="subtle-card stack compact-card">
                 <div class="field-grid compact">
                   <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'youtube' | 'kick' }))}><option value="twitch">Twitch</option><option value="youtube">YouTube</option><option value="kick">Kick</option></select></label>
-                  <label><span>Canal</span><input placeholder="nome-do-canal" value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                  <label><span>Canal</span><input placeholder={embedDraft.platform === 'youtube' ? '@vaush ou link do canal/live' : 'nome-do-canal'} value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 </div>
                 <label><span>Titulo</span><input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 <label><span>Endpoint de status opcional</span><input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 <button class="primary-button" type="button" onClick={addEmbed}>Adicionar feed</button>
+                {embedDraft.platform === 'youtube' ? <p class="helper-copy">Pode colar `@handle`, URL do canal ou URL `/live`. O app tenta normalizar isso antes de salvar.</p> : null}
               </div>
               <div class="subtle-card stack compact-card">
                 <div class="field-grid compact">
