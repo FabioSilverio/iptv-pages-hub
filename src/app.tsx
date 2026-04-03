@@ -2626,7 +2626,7 @@ export function App() {
 
       <div class="news-shortcuts">
         {newsLinks.map((item) => (
-          <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
+            <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
             <span>{item.name}</span>
             <strong>{item.streamUrl || item.embedUrl ? 'PLAY' : 'LINK'}</strong>
           </button>
@@ -2833,7 +2833,7 @@ export function App() {
               </button>
               <div class="feed-strip feed-strip-scroll" ref={newsStripRef}>
                 {newsLinks.map((item) => (
-                  <button class={selectedNewsLink.id === item.id ? 'feed-pill active button-pill' : 'feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
+                  <button class={selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
                     <span>{item.name}</span>
                     <strong>LIVE</strong>
                   </button>
@@ -2844,7 +2844,7 @@ export function App() {
               </button>
             </div>
           ) : (
-            <div class="feed-strip stage-feed-strip">
+            <div class={activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick' ? 'feed-strip stage-feed-strip media-stage-strip feed-strip-scroll' : 'feed-strip stage-feed-strip'}>
               {activeSurface === 'iptv' ? (
                 <>
                   <span class="feed-pill active">{groupFilter}</span>
