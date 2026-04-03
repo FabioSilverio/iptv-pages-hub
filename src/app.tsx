@@ -2063,12 +2063,14 @@ export function App() {
         embeds
           .filter((item) => item.statusEndpoint?.trim())
           .map(async (item) => {
+            const statusKey = item.channel.toLowerCase()
+            const currentStatus = nextStatus[statusKey]
             try {
-              nextStatus[item.channel.toLowerCase()] = await fetchCustomStatus(item.statusEndpoint!.trim())
+              nextStatus[statusKey] = await fetchCustomStatus(item.statusEndpoint!.trim())
             } catch (error) {
-              nextStatus[item.channel.toLowerCase()] = {
-                label: 'Erro',
-                state: 'error',
+              nextStatus[statusKey] = currentStatus || {
+                label: 'Indisponivel',
+                state: 'unknown',
                 detail: error instanceof Error ? error.message : 'Falha ao consultar status externo.',
                 updatedAt: new Date().toISOString(),
               }
