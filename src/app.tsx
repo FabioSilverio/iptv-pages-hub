@@ -173,6 +173,19 @@ const defaultSettings: AppSettings = {
 function mergeSettings(value?: Partial<AppSettings> | null): AppSettings {
   return { ...defaultSettings, ...(value || {}) }
 }
+
+function prioritizeCurrentItem<T extends { id: string }>(
+  items: T[],
+  currentId: string | null | undefined,
+): T[] {
+  if (!currentId) return items
+
+  const currentIndex = items.findIndex((item) => item.id === currentId)
+  if (currentIndex <= 0) return items
+
+  return [items[currentIndex], ...items.slice(0, currentIndex), ...items.slice(currentIndex + 1)]
+}
+
 const embedDefaults: EmbedStream[] = [
   { id: 'default:twitch:destiny', platform: 'twitch', channel: 'destiny', title: 'destiny' },
   { id: 'default:twitch:anythingelse', platform: 'twitch', channel: 'anythingelse', title: 'anythingelse' },
@@ -236,6 +249,14 @@ const newsLinks: NewsLink[] = [
     note: 'Feed oficial ao vivo da Bloomberg Television US.',
     source: 'Bloomberg',
     streamUrl: 'https://www.bloomberg.com/media-manifest/streams/phoenix-us.m3u8',
+  },
+  {
+    id: 'times-brasil-cnbc',
+    name: 'Times Brasil CNBC',
+    href: 'https://www.youtube.com/@otimesbrasil/live',
+    note: 'Transmissao oficial ao vivo do Times Brasil, licenciado exclusivo CNBC no Brasil, embutida no palco via YouTube.',
+    source: 'Times Brasil | CNBC',
+    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UCY-FPXguTtLHSTK5YpQ-sgQ&enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1',
   },
   {
     id: 'vatican-news',
@@ -1111,19 +1132,27 @@ export function App() {
     return pool.find((item) => item.id === selectedEmbedId) ?? pool[0] ?? null
   }, [activeSurface, selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds])
   const activeFeedItems = useMemo(
-    () =>
-      activeSurface === 'twitch'
-        ? sortedTwitchEmbeds
-        : activeSurface === 'youtube'
-          ? sortedYouTubeEmbeds
-          : activeSurface === 'kick'
-            ? sortedKickEmbeds
-            : [],
-    [activeSurface, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds],
+    () => {
+      const pool =
+        activeSurface === 'twitch'
+          ? sortedTwitchEmbeds
+          : activeSurface === 'youtube'
+            ? sortedYouTubeEmbeds
+            : activeSurface === 'kick'
+              ? sortedKickEmbeds
+              : []
+
+      return prioritizeCurrentItem(pool, activeEmbed?.id)
+    },
+    [activeEmbed?.id, activeSurface, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds],
   )
   const selectedNewsLink = useMemo(
     () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
     [selectedNewsId],
+  )
+  const orderedNewsLinks = useMemo(
+    () => prioritizeCurrentItem(newsLinks, selectedNewsLink.id),
+    [selectedNewsLink.id],
   )
   const selectedRadioStation = useMemo<RadioStation | null>(
     () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
@@ -2683,7 +2712,7 @@ export function App() {
       </header>
 
       <div class="news-shortcuts">
-        {newsLinks.map((item) => (
+        {orderedNewsLinks.map((item) => (
             <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
             <span>{item.name}</span>
             <strong>{item.streamUrl || item.embedUrl ? 'PLAY' : 'LINK'}</strong>
@@ -2843,7 +2872,7 @@ export function App() {
                 <span>Noticias ao vivo</span>
                 <small>{newsLinks.length} links</small>
               </button>
-              {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{newsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
+              {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{orderedNewsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
             </div>
 
             <div class={activeSurface === 'radio' ? 'sidebar-section active' : 'sidebar-section'}>
@@ -2890,7 +2919,7 @@ export function App() {
                 <span aria-hidden="true">‹</span>
               </button>
               <div class="feed-strip feed-strip-scroll" ref={newsStripRef}>
-                {newsLinks.map((item) => (
+                {orderedNewsLinks.map((item) => (
                   <button class={selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
                     <span>{item.name}</span>
                     <strong>LIVE</strong>
