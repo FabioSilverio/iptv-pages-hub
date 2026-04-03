@@ -170,6 +170,22 @@ async function handleYouTubeStatus(request, url) {
     }
 
     const html = await response.text()
+    const watchLive = extractYouTubeWatchLive(html)
+    if (watchLive?.videoId) {
+      return json(
+        {
+          label: 'Ao vivo',
+          state: 'online',
+          detail: 'Live detectada na pagina oficial do video ao vivo do YouTube.',
+          updatedAt: new Date().toISOString(),
+          playbackUrl: buildYouTubeEmbedUrl(watchLive.videoId),
+          watchUrl: `https://www.youtube.com/watch?v=${watchLive.videoId}`,
+        },
+        200,
+        request,
+      )
+    }
+
     const liveCard = extractYouTubeLiveCard(html)
     const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
 
@@ -424,6 +440,35 @@ function isCurrentYouTubeLiveCard(details) {
   const hasStaticLength = /"lengthText":\{/i.test(details)
 
   return hasWatchingNow || (hasLiveBadge && !hasStaticLength)
+}
+
+function extractYouTubeWatchLive(html) {
+  const isWatchPage = /window\['ytPageType'\]\s*=\s*"watch"|itemtype="http:\/\/schema\.org\/VideoObject"/i.test(html)
+  if (!isWatchPage) {
+    return null
+  }
+
+  const isLive =
+    /itemprop="isLiveBroadcast"\s+content="True"/i.test(html)
+    || /"is_viewed_live","value":"True"/i.test(html)
+    || /"liveStreamability":\{/i.test(html)
+
+  if (!isLive) {
+    return null
+  }
+
+  const videoIdMatch =
+    html.match(/window\['ytCommand'\]\s*=\s*\{[\s\S]{0,1200}"watchEndpoint":\{"videoId":"([A-Za-z0-9_-]{11})"/)
+    || html.match(/<meta\s+property="og:video:url"\s+content="https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})"/i)
+    || html.match(/<link\s+rel="shortlinkUrl"\s+href="https:\/\/youtu\.be\/([A-Za-z0-9_-]{11})"/i)
+
+  if (!videoIdMatch?.[1]) {
+    return null
+  }
+
+  return {
+    videoId: videoIdMatch[1],
+  }
 }
 
 function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
