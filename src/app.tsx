@@ -565,12 +565,17 @@ async function resolveGlobalCatchupReplay(
   }
 }
 
-function formatXtreamError(error: unknown, serverUrl: string) {
-  if (hasHttpUrl(serverUrl) && window.location.protocol === 'https:') {
+function formatXtreamError(error: unknown, credentials: XtreamCredentials) {
+  const serverUrl = credentials.serverUrl
+  const hasProxy = Boolean(credentials.proxyUrl?.trim())
+
+  if (hasHttpUrl(serverUrl) && window.location.protocol === 'https:' && !hasProxy) {
     return `GitHub Pages abriu em HTTPS, mas esse Xtream esta em HTTP (${serverUrl.trim()}). O navegador bloqueia esse login. Tente a versao https:// do servidor. Se o provedor so responder em HTTP, vai precisar de proxy ou backend.`
   }
   if (error instanceof TypeError) {
-    return 'Falha de rede ao consultar o Xtream. O servidor pode estar offline, sem CORS ou recusando acesso do navegador.'
+    return hasProxy
+      ? 'Falha de rede ao consultar o Xtream via proxy. O worker pode estar ok, mas o provedor pode estar offline, lento ou recusando essa origem agora.'
+      : 'Falha de rede ao consultar o Xtream. O servidor pode estar offline, sem CORS ou recusando acesso do navegador.'
   }
   return error instanceof Error ? error.message : 'Falha ao carregar o Xtream Codes.'
 }
@@ -2018,7 +2023,7 @@ export function App() {
       setXtream(nextCredentials)
       if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'xtream', remember: settings.rememberConnection, xtream: nextCredentials, m3u })
     } catch (error) {
-      setLoadError(formatXtreamError(error, nextCredentials.serverUrl))
+      setLoadError(formatXtreamError(error, nextCredentials))
     } finally {
       setIsLoading(false)
     }
