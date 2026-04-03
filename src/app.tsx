@@ -980,6 +980,8 @@ export function App() {
   const [showCinemaPanel, setShowCinemaPanel] = useState(true)
   const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
+  const [mediaStripLeftReady, setMediaStripLeftReady] = useState(false)
+  const [mediaStripRightReady, setMediaStripRightReady] = useState(false)
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
   const [radioReplay, setRadioReplay] = useState<RadioReplayState | null>(null)
   const [radioGuide, setRadioGuide] = useState<RadioGuideSnapshot | null>(null)
@@ -989,6 +991,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const siteBackupInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
+  const mediaStripRef = useRef<HTMLDivElement | null>(null)
   const twitchPlayerHostRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const twitchPlayerRef = useRef<{
@@ -1250,6 +1253,32 @@ export function App() {
     })
   }
 
+  function syncMediaStripState() {
+    const node = mediaStripRef.current
+    const hasMediaStrip = activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick'
+
+    if (!node || !hasMediaStrip) {
+      setMediaStripLeftReady(false)
+      setMediaStripRightReady(false)
+      return
+    }
+
+    const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth)
+    const canScroll = maxScroll > 8
+    setMediaStripLeftReady(canScroll && node.scrollLeft > 8)
+    setMediaStripRightReady(canScroll && node.scrollLeft < maxScroll - 8)
+  }
+
+  function scrollMediaStrip(direction: 'left' | 'right') {
+    const node = mediaStripRef.current
+    if (!node) return
+
+    node.scrollBy({
+      left: (direction === 'right' ? 1 : -1) * Math.max(220, node.clientWidth * 0.68),
+      behavior: 'smooth',
+    })
+  }
+
   useEffect(() => {
     setVisibleCount(INITIAL_CHANNEL_BATCH)
   }, [playlist?.id, groupFilter, searchTerm])
@@ -1374,6 +1403,35 @@ export function App() {
       window.removeEventListener('resize', handleResize)
     }
   }, [activeSurface, selectedNewsId])
+
+  useEffect(() => {
+    const hasMediaStrip = activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick'
+    if (!hasMediaStrip) {
+      syncMediaStripState()
+      return
+    }
+
+    const node = mediaStripRef.current
+    if (!node) {
+      syncMediaStripState()
+      return
+    }
+
+    const handleScroll = () => syncMediaStripState()
+    const handleResize = () => syncMediaStripState()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
+
+    node.addEventListener('scroll', handleScroll, { passive: true })
+    observer?.observe(node)
+    window.addEventListener('resize', handleResize)
+    window.requestAnimationFrame(syncMediaStripState)
+
+    return () => {
+      node.removeEventListener('scroll', handleScroll)
+      observer?.disconnect()
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [activeSurface, selectedEmbedId, activeFeedItems.length])
   useEffect(() => {
     saveJson<PersistedFormState>(FORM_STATE_KEY, { sourceTab, xtream, m3u })
   }, [m3u, sourceTab, xtream])
@@ -2843,8 +2901,28 @@ export function App() {
                 <span aria-hidden="true">›</span>
               </button>
             </div>
+          ) : activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick' ? (
+            <div class="feed-strip-shell stage-feed-strip">
+              <button aria-label="Ver feeds anteriores" class="feed-strip-nav" disabled={!mediaStripLeftReady} type="button" onClick={() => scrollMediaStrip('left')}>
+                <span aria-hidden="true">&lsaquo;</span>
+              </button>
+              <div class="feed-strip stage-feed-strip media-stage-strip feed-strip-scroll" ref={mediaStripRef}>
+                {activeFeedItems.map((item) => {
+                  const status = statusMap[item.channel.toLowerCase()]
+                  return (
+                    <button class={feedPillTone(item.platform, activeEmbed?.id === item.id)} key={item.id} type="button" onClick={() => activateEmbed(item)}>
+                      <span>{item.channel}</span>
+                      <strong>{status?.label || 'OFF'}</strong>
+                    </button>
+                  )
+                })}
+              </div>
+              <button aria-label="Ver mais feeds" class="feed-strip-nav" disabled={!mediaStripRightReady} type="button" onClick={() => scrollMediaStrip('right')}>
+                <span aria-hidden="true">&rsaquo;</span>
+              </button>
+            </div>
           ) : (
-            <div class={activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick' ? 'feed-strip stage-feed-strip media-stage-strip feed-strip-scroll' : 'feed-strip stage-feed-strip'}>
+            <div class="feed-strip stage-feed-strip">
               {activeSurface === 'iptv' ? (
                 <>
                   <span class="feed-pill active">{groupFilter}</span>
@@ -2865,19 +2943,11 @@ export function App() {
                   <span class="feed-pill">{movies.length} filmes</span>
                   <span class="feed-pill soft">{selectedMovie?.title || 'Selecione um filme'}</span>
                 </>
-              ) : (
-                activeFeedItems.map((item) => {
-                  const status = statusMap[item.channel.toLowerCase()]
-                  return (
-                    <button class={feedPillTone(item.platform, activeEmbed?.id === item.id)} key={item.id} type="button" onClick={() => activateEmbed(item)}>
-                      <span>{item.channel}</span>
-                      <strong>{status?.label || 'OFF'}</strong>
-                    </button>
-                  )
-                })
-              )}
-            </div>
-          )}
+                ) : (
+                  null
+                )}
+              </div>
+            )}
 
           {activeSurface === 'iptv' ? (
             <>
