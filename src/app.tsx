@@ -10,10 +10,12 @@ import {
   fetchKickStatusesFromWorker,
   fetchM3UPlaylist,
   fetchTwitchStatuses,
+  fetchYoutubeStatuses,
   fetchXtreamPlaylist,
   KICK_STATUS_HELP,
   takeTwitchTokenFromHash,
   TWITCH_STATUS_HELP,
+  YOUTUBE_STATUS_HELP,
   type EmbedStatus,
   type EmbedStream,
   type LiveState,
@@ -38,6 +40,8 @@ const FORM_STATE_KEY = 'iptv-pages-hub.form-state'
 const ACTIVE_SURFACE_KEY = 'iptv-pages-hub.active-surface'
 const SELECTED_EMBED_KEY = 'iptv-pages-hub.selected-embed'
 const SELECTED_RADIO_KEY = 'iptv-pages-hub.selected-radio'
+const MOVIES_KEY = 'iptv-pages-hub.movies'
+const SELECTED_MOVIE_KEY = 'iptv-pages-hub.selected-movie'
 const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
@@ -46,7 +50,15 @@ const LIVE_STATUS_REFRESH_MS = 60_000
 const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
 const PT_BR_COLLATOR = new Intl.Collator('pt-BR')
 
-type MediaSurface = 'iptv' | 'twitch' | 'kick' | 'news' | 'radio'
+type MediaSurface = 'iptv' | 'twitch' | 'youtube' | 'kick' | 'news' | 'radio' | 'cinema'
+
+interface MovieItem {
+  id: string
+  title: string
+  driveUrl: string
+  previewUrl: string
+  openUrl: string
+}
 
 interface NewsLink {
   id: string
@@ -112,6 +124,8 @@ interface SiteTransferBundle {
   activeSurface: MediaSurface
   selectedEmbedId: string | null
   selectedRadioId: string
+  movies: MovieItem[]
+  selectedMovieId: string | null
   showLiveNowPanel: boolean
 }
 
@@ -268,14 +282,14 @@ function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
 }
 
-function statusTone(state: LiveState, platform?: 'twitch' | 'kick') {
+function statusTone(state: LiveState, platform?: 'twitch' | 'youtube' | 'kick') {
   if (state === 'online') return classNames('status-chip', 'online', platform)
   if (state === 'offline') return classNames('status-chip', 'offline', platform)
   if (state === 'error') return classNames('status-chip', 'error', platform)
   return classNames('status-chip', 'unknown', platform)
 }
 
-function feedPillTone(platform?: 'twitch' | 'kick', active = false) {
+function feedPillTone(platform?: 'twitch' | 'youtube' | 'kick', active = false) {
   return classNames('feed-pill', 'button-pill', platform, active && 'active')
 }
 
@@ -598,6 +612,34 @@ function mergeM3U(credentials?: Partial<M3UCredentials> | null) {
   return { ...defaultM3U, ...(credentials || {}) }
 }
 
+function extractDriveFileId(rawUrl: string) {
+  const value = rawUrl.trim()
+  if (!value) return ''
+
+  const directMatch = value.match(/\/file\/d\/([a-zA-Z0-9_-]+)/i)
+  if (directMatch?.[1]) return directMatch[1]
+
+  try {
+    const url = new URL(value)
+    const paramId = url.searchParams.get('id')
+    if (paramId) return paramId
+  } catch {
+    return ''
+  }
+
+  return ''
+}
+
+function buildDrivePreviewUrl(rawUrl: string) {
+  const fileId = extractDriveFileId(rawUrl)
+  return fileId ? `https://drive.google.com/file/d/${fileId}/preview` : ''
+}
+
+function buildDriveOpenUrl(rawUrl: string) {
+  const fileId = extractDriveFileId(rawUrl)
+  return fileId ? `https://drive.google.com/file/d/${fileId}/view` : rawUrl.trim()
+}
+
 function normalizeEmbeds(value: unknown) {
   if (!Array.isArray(value)) return embedDefaults
 
@@ -606,7 +648,14 @@ function normalizeEmbeds(value: unknown) {
   value.forEach((item, index) => {
     if (!item || typeof item !== 'object') return
     const candidate = item as Partial<EmbedStream>
-    const platform = candidate.platform === 'kick' ? 'kick' : candidate.platform === 'twitch' ? 'twitch' : null
+    const platform =
+      candidate.platform === 'kick'
+        ? 'kick'
+        : candidate.platform === 'twitch'
+          ? 'twitch'
+          : candidate.platform === 'youtube'
+            ? 'youtube'
+            : null
     const channel = String(candidate.channel || '').trim()
     if (!platform || !channel) return
 
@@ -621,6 +670,29 @@ function normalizeEmbeds(value: unknown) {
   })
 
   return normalized
+}
+
+function normalizeMovies(value: unknown): MovieItem[] {
+  if (!Array.isArray(value)) return []
+
+  return value.reduce<MovieItem[]>((items, entry, index) => {
+    if (!entry || typeof entry !== 'object') return items
+    const candidate = entry as Partial<MovieItem>
+    const driveUrl = String(candidate.driveUrl || '').trim()
+    const previewUrl = buildDrivePreviewUrl(driveUrl)
+    const openUrl = buildDriveOpenUrl(driveUrl)
+    if (!driveUrl || !previewUrl) return items
+
+    items.push({
+      id: String(candidate.id || `movie:${index}:${previewUrl}`),
+      title: String(candidate.title || `Filme ${index + 1}`).trim() || `Filme ${index + 1}`,
+      driveUrl,
+      previewUrl,
+      openUrl,
+    })
+
+    return items
+  }, [])
 }
 
 function isReadyXtream(credentials: XtreamCredentials) {
@@ -871,7 +943,9 @@ export function App() {
   const [groupFilter, setGroupFilter] = useState('Todos')
   const [favorites, setFavorites] = useState<string[]>(() => readJson(FAVORITES_KEY, [] as string[]))
   const [embeds, setEmbeds] = useState<EmbedStream[]>(() => readJson(EMBEDS_KEY, embedDefaults))
+  const [movies, setMovies] = useState<MovieItem[]>(() => normalizeMovies(readJson<unknown[]>(MOVIES_KEY, [])))
   const [embedDraft, setEmbedDraft] = useState<EmbedStream>({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
+  const [movieDraft, setMovieDraft] = useState({ title: '', driveUrl: '' })
   const [statusMap, setStatusMap] = useState<Record<string, EmbedStatus>>({})
   const [isLoading, setIsLoading] = useState(false)
   const [loadError, setLoadError] = useState('')
@@ -884,6 +958,7 @@ export function App() {
   )
   const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
   const [selectedRadioId, setSelectedRadioId] = useState<string>(() => readJson<string>(SELECTED_RADIO_KEY, radioStations[0]?.id || ''))
+  const [selectedMovieId, setSelectedMovieId] = useState<string | null>(() => window.localStorage.getItem(SELECTED_MOVIE_KEY))
   const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
   const [resolvedNewsEmbedUrl, setResolvedNewsEmbedUrl] = useState('')
   const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
@@ -897,9 +972,11 @@ export function App() {
   )
   const [showIptvPanel, setShowIptvPanel] = useState(true)
   const [showTwitchPanel, setShowTwitchPanel] = useState(true)
+  const [showYouTubePanel, setShowYouTubePanel] = useState(true)
   const [showKickPanel, setShowKickPanel] = useState(true)
   const [showNewsPanel, setShowNewsPanel] = useState(true)
   const [showRadioPanel, setShowRadioPanel] = useState(true)
+  const [showCinemaPanel, setShowCinemaPanel] = useState(true)
   const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
@@ -965,6 +1042,10 @@ export function App() {
     () => embeds.filter((item) => item.platform === 'twitch'),
     [embeds],
   )
+  const youtubeEmbeds = useMemo(
+    () => embeds.filter((item) => item.platform === 'youtube'),
+    [embeds],
+  )
   const kickEmbeds = useMemo(
     () => embeds.filter((item) => item.platform === 'kick'),
     [embeds],
@@ -983,20 +1064,28 @@ export function App() {
     () => sortEmbedsByStatus(twitchEmbeds),
     [statusMap, twitchEmbeds],
   )
+  const sortedYouTubeEmbeds = useMemo(
+    () => sortEmbedsByStatus(youtubeEmbeds),
+    [statusMap, youtubeEmbeds],
+  )
   const sortedKickEmbeds = useMemo(
     () => sortEmbedsByStatus(kickEmbeds),
     [kickEmbeds, statusMap],
   )
   const liveEmbeds = useMemo(
     () =>
-      [...sortedTwitchEmbeds, ...sortedKickEmbeds].filter(
+      [...sortedTwitchEmbeds, ...sortedYouTubeEmbeds, ...sortedKickEmbeds].filter(
         (item) => statusMap[item.channel.toLowerCase()]?.state === 'online',
       ),
-    [sortedKickEmbeds, sortedTwitchEmbeds, statusMap],
+    [sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds, statusMap],
   )
   const onlineTwitchCount = useMemo(
     () => sortedTwitchEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedTwitchEmbeds, statusMap],
+  )
+  const onlineYouTubeCount = useMemo(
+    () => sortedYouTubeEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
+    [sortedYouTubeEmbeds, statusMap],
   )
   const onlineKickCount = useMemo(
     () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
@@ -1007,12 +1096,26 @@ export function App() {
     [channels, selectedChannelId, visibleChannels],
   )
   const activeEmbed = useMemo(() => {
-    const pool = activeSurface === 'twitch' ? sortedTwitchEmbeds : activeSurface === 'kick' ? sortedKickEmbeds : []
+    const pool =
+      activeSurface === 'twitch'
+        ? sortedTwitchEmbeds
+        : activeSurface === 'youtube'
+          ? sortedYouTubeEmbeds
+          : activeSurface === 'kick'
+            ? sortedKickEmbeds
+            : []
     return pool.find((item) => item.id === selectedEmbedId) ?? pool[0] ?? null
-  }, [activeSurface, selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds])
+  }, [activeSurface, selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds])
   const activeFeedItems = useMemo(
-    () => activeSurface === 'twitch' ? sortedTwitchEmbeds : activeSurface === 'kick' ? sortedKickEmbeds : [],
-    [activeSurface, sortedKickEmbeds, sortedTwitchEmbeds],
+    () =>
+      activeSurface === 'twitch'
+        ? sortedTwitchEmbeds
+        : activeSurface === 'youtube'
+          ? sortedYouTubeEmbeds
+          : activeSurface === 'kick'
+            ? sortedKickEmbeds
+            : [],
+    [activeSurface, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds],
   )
   const selectedNewsLink = useMemo(
     () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
@@ -1021,6 +1124,10 @@ export function App() {
   const selectedRadioStation = useMemo<RadioStation | null>(
     () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
     [selectedRadioId],
+  )
+  const selectedMovie = useMemo<MovieItem | null>(
+    () => movies.find((item) => item.id === selectedMovieId) ?? movies[0] ?? null,
+    [movies, selectedMovieId],
   )
   const selectedRadioScheduleHref = selectedRadioStation?.scheduleHref || selectedRadioStation?.href || ''
   const canShowRadioGuide = useMemo(
@@ -1234,6 +1341,7 @@ export function App() {
   }, [])
 
   useEffect(() => saveJson(EMBEDS_KEY, embeds), [embeds])
+  useEffect(() => saveJson(MOVIES_KEY, movies), [movies])
   useEffect(() => saveJson(SETTINGS_KEY, settings), [settings])
   useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
   useEffect(() => saveJson(ACTIVE_SURFACE_KEY, activeSurface), [activeSurface])
@@ -1283,10 +1391,21 @@ export function App() {
   useEffect(() => {
     if (selectedRadioId) window.localStorage.setItem(SELECTED_RADIO_KEY, selectedRadioId)
   }, [selectedRadioId])
+  useEffect(() => {
+    if (selectedMovieId) {
+      window.localStorage.setItem(SELECTED_MOVIE_KEY, selectedMovieId)
+      return
+    }
+
+    window.localStorage.removeItem(SELECTED_MOVIE_KEY)
+  }, [selectedMovieId])
 
   useEffect(() => {
     if (activeSurface === 'twitch' && !twitchEmbeds.length) {
-      if (kickEmbeds.length) {
+      if (youtubeEmbeds.length) {
+        setActiveSurface('youtube')
+        setSelectedEmbedId(youtubeEmbeds[0].id)
+      } else if (kickEmbeds.length) {
         setActiveSurface('kick')
         setSelectedEmbedId(kickEmbeds[0].id)
       } else {
@@ -1295,8 +1414,11 @@ export function App() {
       return
     }
 
-    if (activeSurface === 'kick' && !kickEmbeds.length) {
-      if (twitchEmbeds.length) {
+    if (activeSurface === 'youtube' && !youtubeEmbeds.length) {
+      if (kickEmbeds.length) {
+        setActiveSurface('kick')
+        setSelectedEmbedId(kickEmbeds[0].id)
+      } else if (twitchEmbeds.length) {
         setActiveSurface('twitch')
         setSelectedEmbedId(twitchEmbeds[0].id)
       } else {
@@ -1305,10 +1427,23 @@ export function App() {
       return
     }
 
-    if ((activeSurface === 'twitch' || activeSurface === 'kick') && activeEmbed) {
+    if (activeSurface === 'kick' && !kickEmbeds.length) {
+      if (youtubeEmbeds.length) {
+        setActiveSurface('youtube')
+        setSelectedEmbedId(youtubeEmbeds[0].id)
+      } else if (twitchEmbeds.length) {
+        setActiveSurface('twitch')
+        setSelectedEmbedId(twitchEmbeds[0].id)
+      } else {
+        setActiveSurface('iptv')
+      }
+      return
+    }
+
+    if ((activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick') && activeEmbed) {
       setSelectedEmbedId(activeEmbed.id)
     }
-  }, [activeEmbed, activeSurface, kickEmbeds, twitchEmbeds])
+  }, [activeEmbed, activeSurface, kickEmbeds, twitchEmbeds, youtubeEmbeds])
 
   useEffect(() => {
     if (activeSurface !== 'radio') return
@@ -1316,6 +1451,13 @@ export function App() {
       setSelectedRadioId(radioStations[0].id)
     }
   }, [activeSurface, selectedRadioStation])
+
+  useEffect(() => {
+    if (activeSurface !== 'cinema') return
+    if (!selectedMovie && movies.length) {
+      setSelectedMovieId(movies[0].id)
+    }
+  }, [activeSurface, movies, selectedMovie])
 
   useEffect(() => {
     const video = videoRef.current
@@ -1824,6 +1966,34 @@ export function App() {
         })
       }
 
+      const youtubeChannels = Array.from(
+        new Set(
+          embeds
+            .filter((item) => item.platform === 'youtube')
+            .map((item) => item.channel.trim())
+            .filter(Boolean),
+        ),
+      )
+
+      if (youtubeChannels.length) {
+        try {
+          Object.assign(
+            nextStatus,
+            await fetchYoutubeStatuses(youtubeChannels, DEFAULT_XTREAM_PROXY_URL),
+          )
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : YOUTUBE_STATUS_HELP
+          youtubeChannels.forEach((channel) => {
+            nextStatus[channel.toLowerCase()] = {
+              label: 'Erro',
+              state: 'error',
+              detail,
+              updatedAt: new Date().toISOString(),
+            }
+          })
+        }
+      }
+
       const kickChannels = Array.from(
         new Set(
           embeds
@@ -2061,6 +2231,11 @@ export function App() {
       return
     }
 
+    if (surface === 'youtube') {
+      setSelectedEmbedId((current) => current && youtubeEmbeds.some((item) => item.id === current) ? current : (youtubeEmbeds[0]?.id ?? null))
+      return
+    }
+
     if (surface === 'kick') {
       setSelectedEmbedId((current) => current && kickEmbeds.some((item) => item.id === current) ? current : (kickEmbeds[0]?.id ?? null))
       return
@@ -2068,6 +2243,11 @@ export function App() {
 
     if (surface === 'radio') {
       setSelectedRadioId((current) => current && radioStations.some((item) => item.id === current) ? current : (radioStations[0]?.id ?? ''))
+      return
+    }
+
+    if (surface === 'cinema') {
+      setSelectedMovieId((current) => current && movies.some((item) => item.id === current) ? current : (movies[0]?.id ?? null))
     }
   }
 
@@ -2080,7 +2260,13 @@ export function App() {
     setSelectedEmbedId(embed.id)
     setSurface(embed.platform)
     setPlayerError('')
-    setPlayerState(embed.platform === 'twitch' ? 'Twitch em foco' : 'Kick em foco')
+    setPlayerState(
+      embed.platform === 'twitch'
+        ? 'Twitch em foco'
+        : embed.platform === 'youtube'
+          ? 'YouTube em foco'
+          : 'Kick em foco',
+    )
   }
 
   function activateRadio(radioId?: string) {
@@ -2169,6 +2355,29 @@ export function App() {
     setEmbedDraft({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
   }
 
+  function addMovie() {
+    const driveUrl = movieDraft.driveUrl.trim()
+    const previewUrl = buildDrivePreviewUrl(driveUrl)
+    if (!driveUrl || !previewUrl) {
+      setLoadError('Cole um link compartilhado de arquivo do Google Drive para adicionar em Cinema.')
+      return
+    }
+
+    const nextMovie: MovieItem = {
+      id: crypto.randomUUID(),
+      title: movieDraft.title.trim() || 'Filme no Drive',
+      driveUrl,
+      previewUrl,
+      openUrl: buildDriveOpenUrl(driveUrl),
+    }
+
+    setMovies((current) => [nextMovie, ...current])
+    setSelectedMovieId(nextMovie.id)
+    setSurface('cinema')
+    setMovieDraft({ title: '', driveUrl: '' })
+    setLoadError('')
+  }
+
   function toggleFavorite(channelId: string) {
     setFavorites((current) => (current.includes(channelId) ? current.filter((id) => id !== channelId) : [channelId, ...current]))
   }
@@ -2178,14 +2387,29 @@ export function App() {
 
     if (selectedEmbedId === embedId) {
       const nextTwitch = twitchEmbeds.find((entry) => entry.id !== embedId)
+      const nextYouTube = youtubeEmbeds.find((entry) => entry.id !== embedId)
       const nextKick = kickEmbeds.find((entry) => entry.id !== embedId)
 
       if (activeSurface === 'twitch' && nextTwitch) {
         setSelectedEmbedId(nextTwitch.id)
+      } else if (activeSurface === 'youtube' && nextYouTube) {
+        setSelectedEmbedId(nextYouTube.id)
       } else if (activeSurface === 'kick' && nextKick) {
         setSelectedEmbedId(nextKick.id)
       } else {
         setSelectedEmbedId(null)
+        setActiveSurface('iptv')
+      }
+    }
+  }
+
+  function removeMovie(movieId: string) {
+    const nextMovie = movies.find((item) => item.id !== movieId) || null
+    setMovies((current) => current.filter((item) => item.id !== movieId))
+
+    if (selectedMovieId === movieId) {
+      setSelectedMovieId(nextMovie?.id || null)
+      if (!nextMovie) {
         setActiveSurface('iptv')
       }
     }
@@ -2224,6 +2448,8 @@ export function App() {
       activeSurface,
       selectedEmbedId,
       selectedRadioId,
+      movies,
+      selectedMovieId,
       showLiveNowPanel,
     }
 
@@ -2281,34 +2507,42 @@ export function App() {
       const nextSourceTab = payload.sourceTab === 'm3u' ? 'm3u' : 'xtream'
       const nextXtream = withDefaultProxy(payload.xtream ? payload.xtream as XtreamCredentials : defaultXtream)
       const nextM3U = mergeM3U(payload.m3u)
-      const nextSettings = mergeSettings(payload.settings)
-      const nextEmbeds = normalizeEmbeds(payload.embeds)
-      const nextFavorites = Array.isArray(payload.favorites)
-        ? payload.favorites.map((item) => String(item || '').trim()).filter(Boolean)
-        : []
-      const nextActiveSurface = payload.activeSurface === 'twitch'
-        || payload.activeSurface === 'kick'
-        || payload.activeSurface === 'news'
-        || payload.activeSurface === 'radio'
-        || payload.activeSurface === 'iptv'
-        ? payload.activeSurface
-        : 'iptv'
-      const nextSelectedEmbedId = payload.selectedEmbedId ? String(payload.selectedEmbedId) : null
-      const nextSelectedRadioId = payload.selectedRadioId && radioStations.some((item) => item.id === payload.selectedRadioId)
-        ? payload.selectedRadioId
-        : (radioStations[0]?.id || '')
-      const nextShowLiveNowPanel = Boolean(payload.showLiveNowPanel)
+        const nextSettings = mergeSettings(payload.settings)
+        const nextEmbeds = normalizeEmbeds(payload.embeds)
+        const nextMovies = normalizeMovies(payload.movies)
+        const nextFavorites = Array.isArray(payload.favorites)
+          ? payload.favorites.map((item) => String(item || '').trim()).filter(Boolean)
+          : []
+        const nextActiveSurface = payload.activeSurface === 'twitch'
+          || payload.activeSurface === 'youtube'
+          || payload.activeSurface === 'kick'
+          || payload.activeSurface === 'news'
+          || payload.activeSurface === 'radio'
+          || payload.activeSurface === 'cinema'
+          || payload.activeSurface === 'iptv'
+          ? payload.activeSurface
+          : 'iptv'
+        const nextSelectedEmbedId = payload.selectedEmbedId ? String(payload.selectedEmbedId) : null
+        const nextSelectedRadioId = payload.selectedRadioId && radioStations.some((item) => item.id === payload.selectedRadioId)
+          ? payload.selectedRadioId
+          : (radioStations[0]?.id || '')
+        const nextSelectedMovieId = payload.selectedMovieId && nextMovies.some((item) => item.id === payload.selectedMovieId)
+          ? payload.selectedMovieId
+          : (nextMovies[0]?.id || null)
+        const nextShowLiveNowPanel = Boolean(payload.showLiveNowPanel)
 
-      setSourceTab(nextSourceTab)
-      setXtream(nextXtream)
-      setM3U(nextM3U)
-      setSettings(nextSettings)
-      setEmbeds(nextEmbeds)
-      setFavorites(nextFavorites)
-      setActiveSurface(nextActiveSurface)
-      setSelectedEmbedId(nextSelectedEmbedId)
-      setSelectedRadioId(nextSelectedRadioId)
-      setShowLiveNowPanel(nextShowLiveNowPanel)
+        setSourceTab(nextSourceTab)
+        setXtream(nextXtream)
+        setM3U(nextM3U)
+        setSettings(nextSettings)
+        setEmbeds(nextEmbeds)
+        setMovies(nextMovies)
+        setFavorites(nextFavorites)
+        setActiveSurface(nextActiveSurface)
+        setSelectedEmbedId(nextSelectedEmbedId)
+        setSelectedRadioId(nextSelectedRadioId)
+        setSelectedMovieId(nextSelectedMovieId)
+        setShowLiveNowPanel(nextShowLiveNowPanel)
 
       saveJson<PersistedFormState>(FORM_STATE_KEY, {
         sourceTab: nextSourceTab,
@@ -2317,6 +2551,7 @@ export function App() {
       })
       saveJson<AppSettings>(SETTINGS_KEY, nextSettings)
       saveJson<EmbedStream[]>(EMBEDS_KEY, nextEmbeds)
+      saveJson<MovieItem[]>(MOVIES_KEY, nextMovies)
       saveJson<string[]>(FAVORITES_KEY, nextFavorites)
       saveJson<MediaSurface>(ACTIVE_SURFACE_KEY, nextActiveSurface)
       saveJson<boolean>(SHOW_LIVE_NOW_KEY, nextShowLiveNowPanel)
@@ -2335,6 +2570,12 @@ export function App() {
 
       if (nextSelectedRadioId) {
         window.localStorage.setItem(SELECTED_RADIO_KEY, nextSelectedRadioId)
+      }
+
+      if (nextSelectedMovieId) {
+        window.localStorage.setItem(SELECTED_MOVIE_KEY, nextSelectedMovieId)
+      } else {
+        window.localStorage.removeItem(SELECTED_MOVIE_KEY)
       }
 
       setLoadError('')
@@ -2356,13 +2597,15 @@ export function App() {
             <p class="hero-subcopy">Horario no Brasil, em Londres, em Chicago, em Paris, em LA e em NY no topo. IPTV, noticias e agora radios entram no mesmo palco leve para manter a navegacao agil.</p>
             <LiveDashboardMeta />
           </div>
-          <div class="surface-switch hero-surface-switch">
-            <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
-            <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
-            <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
-            <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
-            <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
-          </div>
+            <div class="surface-switch hero-surface-switch">
+              <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+              <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
+              <button class={activeSurface === 'youtube' ? 'active youtube-tab' : 'youtube-tab'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YouTube</button>
+              <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
+              <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
+              <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
+              <button class={activeSurface === 'cinema' ? 'active cinema-tab' : 'cinema-tab'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
+            </div>
       </header>
 
       <div class="news-shortcuts">
@@ -2504,6 +2747,14 @@ export function App() {
               {showTwitchPanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedTwitchEmbeds.length ? sortedTwitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Twitch cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
             </div>
 
+            <div class={activeSurface === 'youtube' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={showYouTubePanel ? 'section-toggle active' : 'section-toggle'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setShowYouTubePanel((current) => !current)}>
+                <span>Feeds YouTube</span>
+                <small>{onlineYouTubeCount} ao vivo - {youtubeEmbeds.length} total</small>
+              </button>
+              {showYouTubePanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedYouTubeEmbeds.length ? sortedYouTubeEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'youtube')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed do YouTube cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
+            </div>
+
             <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
               <button class={showKickPanel ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setShowKickPanel((current) => !current)}>
                 <span>Feeds Kick</span>
@@ -2547,6 +2798,14 @@ export function App() {
                 </div>
               ) : null}
             </div>
+
+            <div class={activeSurface === 'cinema' ? 'sidebar-section active' : 'sidebar-section'}>
+              <button class={showCinemaPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowCinemaPanel((current) => !current)}>
+                <span>Cinema</span>
+                <small>{movies.length} filmes</small>
+              </button>
+              {showCinemaPanel ? <div class="sidebar-content"><div class="sidebar-list">{movies.length ? movies.map((item) => <button key={item.id} class={selectedMovie?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}><div class="list-row-copy"><strong>{item.title}</strong><span>Google Drive preview</span></div><span class="status-chip unknown">Drive</span></button>) : <div class="empty-state compact-empty"><strong>Nenhum filme cadastrado.</strong><span>Cole um link compartilhado do Drive no painel da direita.</span></div>}</div></div> : null}
+            </div>
           </div>
         </aside>
 
@@ -2583,6 +2842,12 @@ export function App() {
                   <span class="feed-pill">{radioStations.length} radios</span>
                   <span class="feed-pill">{selectedRadioStation?.category || 'Ao vivo'}</span>
                   <span class="feed-pill soft">{radioPlaybackBadge}</span>
+                </>
+              ) : activeSurface === 'cinema' ? (
+                <>
+                  <span class="feed-pill active cinema-pill">Cinema</span>
+                  <span class="feed-pill">{movies.length} filmes</span>
+                  <span class="feed-pill soft">{selectedMovie?.title || 'Selecione um filme'}</span>
                 </>
               ) : (
                 activeFeedItems.map((item) => {
@@ -2761,20 +3026,36 @@ export function App() {
               </div>
               {playerError ? <p class="alert error">{playerError}</p> : null}
             </>
+          ) : activeSurface === 'cinema' && selectedMovie ? (
+            <>
+              <div class="panel-heading">
+                <div><p class="section-tag">Cinema</p><h2>{selectedMovie.title}</h2></div>
+                <div class="pill-row"><span class="pill">Google Drive</span><a class="ghost-button compact" href={selectedMovie.openUrl} rel="noreferrer" target="_blank">Abrir no Drive</a></div>
+              </div>
+              <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedMovie.previewUrl} title={selectedMovie.title} /></div>
+              <div class="player-meta">
+                <div class="subtle-card compact-card"><p class="section-tag">Preview</p><h3>Drive em modo preview</h3><p class="helper-copy">O site tenta abrir o video direto no preview do Google Drive. Se o preview do Drive nao ficar bom, use o botao para abrir no Google Drive.</p></div>
+                <div class="subtle-card compact-card"><p class="section-tag">Legendas</p><h3>Dependem do Drive</h3><p class="helper-copy">Neste modo o player e o do proprio Google Drive, entao legenda e PiP dependem do preview deles.</p></div>
+              </div>
+            </>
           ) : activeEmbed ? (
             <>
               <div class="panel-heading">
-                <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
-                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
+                <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : activeSurface === 'youtube' ? 'YouTube' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
+                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : activeSurface === 'youtube' ? 'youtube' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : activeSurface === 'youtube' ? (statusMap[activeEmbed.channel.toLowerCase()]?.watchUrl || `https://www.youtube.com/${activeEmbed.channel.startsWith('@') ? activeEmbed.channel : `@${activeEmbed.channel}`}`) : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
               </div>
               <div class="player-frame embed-stage-frame">
                 {activeSurface === 'twitch'
                   ? <div class="twitch-player-host" ref={twitchPlayerHostRef} />
-                  : <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} />}
+                  : activeSurface === 'youtube'
+                    ? statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl
+                      ? <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl} title={activeEmbed.title} />
+                      : <div class="empty-stage"><strong>Canal sem live agora.</strong><span>Quando o YouTube detectar uma live ativa nesse canal, ela abre aqui no palco.</span></div>
+                    : <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={buildKickEmbedUrl(activeEmbed.channel)} title={activeEmbed.title} />}
               </div>
               <div class="player-meta">
                 <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{activeEmbed.channel}</h3><p class="helper-copy">{statusMap[activeEmbed.channel.toLowerCase()]?.detail || 'Feed ativo no palco principal.'}</p></div>
-                <div class="subtle-card compact-card"><p class="section-tag">Audio</p><h3>Autoplay com mute inicial</h3><p class="helper-copy">Ao clicar no feed, o embed ja entra tocando. O mute inicial ajuda o navegador a liberar autoplay sem travar o palco.</p></div>
+                <div class="subtle-card compact-card"><p class="section-tag">Playback</p><h3>{activeSurface === 'youtube' ? 'Live oficial do YouTube' : 'Autoplay com mute inicial'}</h3><p class="helper-copy">{activeSurface === 'youtube' ? 'O app verifica a pagina /live do canal e, quando encontrar live ao vivo, abre o video direto no palco.' : 'Ao clicar no feed, o embed ja entra tocando. O mute inicial ajuda o navegador a liberar autoplay sem travar o palco.'}</p></div>
               </div>
             </>
           ) : <div class="empty-stage"><strong>Nenhum feed selecionado.</strong><span>Escolha um canal ou feed na sidebar.</span></div>}
@@ -2882,7 +3163,7 @@ export function App() {
         ) : (
           <section class="panel manager-panel">
             <div class="panel-heading">
-              <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch e Kick</h2></div>
+              <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch, YouTube, Kick e Cinema</h2></div>
               <span class="pill">{embeds.length} feeds cadastrados</span>
             </div>
             <div class="embed-tools">
@@ -2896,16 +3177,24 @@ export function App() {
                   <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
                 </div>
                 <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
-                <p class="helper-copy">Twitch usa OAuth do navegador. Na Kick, o site ja consulta o status oficial pelo worker do app; esses campos ficam como override manual caso voce queira testar outra credencial.</p>
+                <p class="helper-copy">Twitch usa OAuth do navegador. YouTube nao precisa de API key e a leitura do status vem da pagina /live via proxy. Na Kick, o site ja consulta o status oficial pelo worker do app.</p>
               </div>
               <div class="subtle-card stack compact-card">
                 <div class="field-grid compact">
-                  <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'kick' }))}><option value="twitch">Twitch</option><option value="kick">Kick</option></select></label>
+                  <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'youtube' | 'kick' }))}><option value="twitch">Twitch</option><option value="youtube">YouTube</option><option value="kick">Kick</option></select></label>
                   <label><span>Canal</span><input placeholder="nome-do-canal" value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 </div>
                 <label><span>Titulo</span><input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 <label><span>Endpoint de status opcional</span><input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} /></label>
                 <button class="primary-button" type="button" onClick={addEmbed}>Adicionar feed</button>
+              </div>
+              <div class="subtle-card stack compact-card">
+                <div class="field-grid compact">
+                  <label><span>Titulo do filme</span><input placeholder="Ex.: Filme no Drive" value={movieDraft.title} onInput={(event) => setMovieDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                  <label><span>Link compartilhado do Drive</span><input placeholder="https://drive.google.com/file/d/.../view" value={movieDraft.driveUrl} onInput={(event) => setMovieDraft((current) => ({ ...current, driveUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                </div>
+                <button class="primary-button" type="button" onClick={addMovie}>Adicionar em Cinema</button>
+                <p class="helper-copy">O site tenta abrir o arquivo em modo preview do Google Drive. Se o preview nao ficar bom, o botao Abrir no Drive fica disponivel no palco.</p>
               </div>
             </div>
             <div class="feed-chip-grid">
@@ -2913,6 +3202,9 @@ export function App() {
                 const status = statusMap[item.channel.toLowerCase()]
                 return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
               })}
+              {movies.map((item) => (
+                <article class="feed-chip-card" key={item.id}><div><p class="section-tag">cinema</p><h3>{item.title}</h3><p class="helper-copy">Google Drive preview</p></div><div class="feed-chip-actions"><button class="ghost-button compact" type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeMovie(item.id)}>Remover</button></div></article>
+              ))}
             </div>
           </section>
         )}

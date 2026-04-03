@@ -581,6 +581,28 @@ input:focus, select:focus {
   border-color: rgba(251, 146, 60, 0.4);
 }
 
+.status-chip.youtube.online {
+  color: #fff1f2;
+  background: rgba(239, 68, 68, 0.92);
+}
+
+.status-chip.youtube.offline {
+  color: #ffe4e6;
+  background: rgba(127, 29, 29, 0.95);
+}
+
+.status-chip.youtube.unknown {
+  color: #ffe4e6;
+  background: rgba(127, 29, 29, 0.32);
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.status-chip.youtube.error {
+  color: #fff7ed;
+  background: rgba(249, 115, 22, 0.92);
+  border-color: rgba(251, 146, 60, 0.4);
+}
+
 @media (max-width: 1240px) {
   .layout-grid { grid-template-columns: 1fr; }
   .connect-panel, .embed-panel, .player-panel { grid-row: auto; grid-column: auto; position: static; }
@@ -907,7 +929,7 @@ input:focus, select:focus {
 
   .surface-switch {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   }
 
   .surface-switch button,
@@ -1051,6 +1073,26 @@ input:focus, select:focus {
 .surface-switch {
   background: rgba(180, 83, 255, 0.16);
   border-color: rgba(220, 143, 255, 0.25);
+}
+
+.surface-switch button.youtube-tab {
+  color: #fecaca;
+  background: rgba(127, 29, 29, 0.28);
+}
+
+.surface-switch button.youtube-tab.active {
+  background: linear-gradient(135deg, #dc2626, #fb7185);
+  color: #fff7f7;
+}
+
+.surface-switch button.cinema-tab {
+  color: #e0f2fe;
+  background: rgba(14, 116, 144, 0.22);
+}
+
+.surface-switch button.cinema-tab.active {
+  background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+  color: #082f49;
 }
 
 .surface-switch button.active {
@@ -1199,6 +1241,24 @@ input:focus, select:focus {
   background: linear-gradient(135deg, #22c55e, #86efac);
   border-color: rgba(134, 239, 172, 0.72);
   color: #052e16;
+}
+
+.feed-pill.youtube {
+  background: rgba(220, 38, 38, 0.84);
+  border-color: rgba(248, 113, 113, 0.36);
+  color: #fff1f2;
+}
+
+.feed-pill.youtube.active {
+  background: linear-gradient(135deg, #dc2626, #fb7185);
+  border-color: rgba(251, 113, 133, 0.72);
+  color: #fff7f7;
+}
+
+.feed-pill.cinema-pill {
+  background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+  border-color: rgba(56, 189, 248, 0.6);
+  color: #082f49;
 }
 
 .feed-pill strong {

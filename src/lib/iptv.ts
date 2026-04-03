@@ -1,5 +1,5 @@
 export type PlaylistKind = 'xtream' | 'm3u'
-export type EmbedPlatform = 'twitch' | 'kick'
+export type EmbedPlatform = 'twitch' | 'youtube' | 'kick'
 export type LiveState = 'online' | 'offline' | 'unknown' | 'error'
 
 export interface Channel {
@@ -55,6 +55,8 @@ export interface EmbedStatus {
   state: LiveState
   detail: string
   updatedAt: string
+  playbackUrl?: string
+  watchUrl?: string
 }
 
 export interface KickAppToken {
@@ -80,6 +82,8 @@ const FALLBACK_GROUP = 'Sem grupo'
 
 export const TWITCH_STATUS_HELP =
   'Status oficial requer Client ID da Twitch e um token OAuth do navegador.'
+export const YOUTUBE_STATUS_HELP =
+  'O status do YouTube e lido pelo proxy a partir da pagina /live do canal, sem precisar de API key.'
 export const KICK_STATUS_HELP =
   'Status da Kick usa o worker do app por padrao. Se quiser, voce ainda pode sobrescrever com Client ID e Client Secret locais.'
 
@@ -393,6 +397,102 @@ export async function fetchTwitchStatuses(
       ]
     }),
   )
+}
+
+function normalizeYoutubeChannel(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  if (trimmed.includes('youtube.com/')) {
+    try {
+      const url = new URL(trimmed)
+      const path = url.pathname.replace(/\/+$/, '')
+      if (path.startsWith('/@')) return path.slice(1)
+      if (/^\/channel\/[^/]+$/i.test(path)) return path.slice(1)
+      if (/^\/c\/[^/]+$/i.test(path)) return path.slice(1)
+      if (/^\/user\/[^/]+$/i.test(path)) return path.slice(1)
+    } catch {
+      return trimmed
+    }
+  }
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`
+}
+
+function buildYoutubeLivePageUrl(channel: string) {
+  const normalized = normalizeYoutubeChannel(channel)
+  if (!normalized) return ''
+  return `https://www.youtube.com/${normalized}/live?hl=en`
+}
+
+function buildYoutubeWatchUrl(channel: string) {
+  const normalized = normalizeYoutubeChannel(channel)
+  if (!normalized) return 'https://www.youtube.com'
+  return `https://www.youtube.com/${normalized}`
+}
+
+function buildYoutubeEmbedUrl(videoId: string) {
+  return `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1`
+}
+
+export async function fetchYoutubeStatuses(
+  channels: string[],
+  proxyBase: string,
+): Promise<Record<string, EmbedStatus>> {
+  if (!channels.length) {
+    return {}
+  }
+
+  const entries = await Promise.all(
+    channels.map(async (channel) => {
+      const livePageUrl = buildYoutubeLivePageUrl(channel)
+      const watchUrl = buildYoutubeWatchUrl(channel)
+      const response = await fetch(buildProxyUrl(proxyBase, livePageUrl), {
+        headers: {
+          Accept: 'text/html',
+          'User-Agent': 'Mozilla/5.0',
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error('Falha ao consultar o canal do YouTube.')
+      }
+
+      const html = await response.text()
+      const liveMatch = html.match(
+        /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/,
+      )
+
+      if (liveMatch?.[1]) {
+        const videoId = liveMatch[1]
+        return [
+          channel.toLowerCase(),
+          {
+            label: 'Ao vivo',
+            state: 'online' as const,
+            detail: 'Live detectada na aba oficial /live do canal no YouTube.',
+            updatedAt: new Date().toISOString(),
+            playbackUrl: buildYoutubeEmbedUrl(videoId),
+            watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+          } satisfies EmbedStatus,
+        ] as const
+      }
+
+      const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
+      return [
+        channel.toLowerCase(),
+        {
+          label: isUpcoming ? 'Agendado' : 'Offline',
+          state: 'offline' as const,
+          detail: isUpcoming
+            ? 'O canal tem uma live agendada no YouTube, mas nao esta ao vivo agora.'
+            : 'Canal sem live ao vivo agora no YouTube.',
+          updatedAt: new Date().toISOString(),
+          watchUrl,
+        } satisfies EmbedStatus,
+      ] as const
+    }),
+  )
+
+  return Object.fromEntries(entries)
 }
 
 export async function fetchKickAppAccessToken(
