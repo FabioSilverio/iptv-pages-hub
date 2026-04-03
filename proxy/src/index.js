@@ -170,26 +170,24 @@ async function handleYouTubeStatus(request, url) {
     }
 
     const html = await response.text()
-    const liveMatch = html.match(
-      /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"/,
-    ) || html.match(/"videoId":"([A-Za-z0-9_-]{11})"[\s\S]{0,2000}"isLive":true/)
+    const liveCard = extractYouTubeLiveCard(html)
+    const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
 
-    if (liveMatch?.[1]) {
+    if (liveCard?.videoId && isCurrentYouTubeLiveCard(liveCard.details)) {
       return json(
         {
           label: 'Ao vivo',
           state: 'online',
           detail: 'Live detectada na aba oficial /live do canal no YouTube.',
           updatedAt: new Date().toISOString(),
-          playbackUrl: buildYouTubeEmbedUrl(liveMatch[1]),
-          watchUrl: `https://www.youtube.com/watch?v=${liveMatch[1]}`,
+          playbackUrl: buildYouTubeEmbedUrl(liveCard.videoId),
+          watchUrl: `https://www.youtube.com/watch?v=${liveCard.videoId}`,
         },
         200,
         request,
       )
     }
 
-    const isUpcoming = /"title":"(?:Live|Ao vivo)","selected":true[\s\S]{0,2500}"upcomingEventData"/.test(html)
     return json(
       {
         label: isUpcoming ? 'Agendado' : 'Offline',
@@ -399,6 +397,33 @@ function buildYouTubeWatchUrl(channel) {
 
 function buildYouTubeEmbedUrl(videoId) {
   return `https://www.youtube.com/embed/${videoId}?autoplay=1&mute=1&playsinline=1&rel=0&modestbranding=1`
+}
+
+function extractYouTubeLiveCard(html) {
+  const match = html.match(
+    /"title":"(?:Live|Ao vivo)","selected":true,"content":\{"richGridRenderer":\{"contents":\[\{"richItemRenderer":\{"content":\{"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"([\s\S]{0,5000}?)"navigationEndpoint"/,
+  )
+
+  if (!match?.[1]) return null
+
+  return {
+    videoId: match[1],
+    details: match[2] || '',
+  }
+}
+
+function isCurrentYouTubeLiveCard(details) {
+  const hasArchivedMeta = /"publishedTimeText":\{"simpleText":"(?:Streamed|Transmitido|Premiered|Estreou)/i.test(details)
+  if (hasArchivedMeta) {
+    return false
+  }
+
+  const hasWatchingNow = /"viewCountText":\{[\s\S]{0,220}"(?:watching|assistindo)/i.test(details)
+  const hasLiveBadge =
+    /BADGE_STYLE_TYPE_LIVE_NOW|"label":"LIVE NOW"|"label":"Ao vivo"/i.test(details)
+  const hasStaticLength = /"lengthText":\{/i.test(details)
+
+  return hasWatchingNow || (hasLiveBadge && !hasStaticLength)
 }
 
 function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
