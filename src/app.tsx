@@ -263,9 +263,9 @@ const newsLinks: NewsLink[] = [
     id: 'times-brasil-cnbc',
     name: 'Times Brasil CNBC',
     href: 'https://www.youtube.com/@otimesbrasil/live',
-    note: 'Transmissao oficial ao vivo do Times Brasil, licenciado exclusivo CNBC no Brasil, embutida no palco via YouTube.',
+    note: 'Transmissao oficial ao vivo do Times Brasil, licenciado exclusivo CNBC no Brasil, resolvida pelo canal oficial no YouTube.',
     source: 'Times Brasil | CNBC',
-    embedUrl: 'https://www.youtube.com/embed/live_stream?channel=UCY-FPXguTtLHSTK5YpQ-sgQ&enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1',
+    youtubeChannel: '@otimesbrasil',
   },
   {
     id: 'vatican-news',
