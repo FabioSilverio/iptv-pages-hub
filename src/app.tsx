@@ -260,6 +260,14 @@ const newsLinks: NewsLink[] = [
     youtubeChannel: '@dwnews',
   },
   {
+    id: 'cnn-us',
+    name: 'CNN US',
+    href: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_2_1964000.m3u8',
+    note: 'Feed HLS leve da CNN US, validado com playlist e segmentos ao vivo respondendo no browser.',
+    source: 'CNN HLS',
+    streamUrl: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_2_1964000.m3u8',
+  },
+  {
     id: 'bloomberg-us',
     name: 'Bloomberg US',
     href: 'https://www.bloomberg.com/live',
