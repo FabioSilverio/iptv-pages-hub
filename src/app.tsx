@@ -268,14 +268,6 @@ const newsLinks: NewsLink[] = [
       streamUrl: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_2_1964000.m3u8',
     },
     {
-      id: 'msnbc',
-      name: 'MSNBC',
-      href: 'http://41.205.93.154/MSNBC/index.m3u8',
-      note: 'Feed HLS da MSNBC validado com manifesto, playlist filha e segmentos respondendo ao vivo.',
-      source: 'MSNBC HLS',
-      streamUrl: 'http://41.205.93.154/MSNBC/index.m3u8',
-    },
-    {
       id: 'bloomberg-us',
       name: 'Bloomberg US',
       href: 'https://www.bloomberg.com/live',
