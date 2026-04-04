@@ -837,8 +837,8 @@ function buildPlaybackSources(channel: Channel) {
   const fallbackIsTs = Boolean(channel.fallbackStreamUrl && isLikelyTsStream(channel.fallbackStreamUrl))
   const orderedSources = primaryIsHls && fallbackIsTs
     ? [
-        channel.fallbackStreamUrl,
         channel.streamUrl,
+        channel.fallbackStreamUrl,
         replaceStreamExtension(channel.streamUrl, 'ts'),
         replaceStreamExtension(channel.streamUrl, 'm3u8'),
       ]
