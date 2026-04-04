@@ -668,6 +668,9 @@ function formatXtreamError(error: unknown, credentials: XtreamCredentials) {
   if (hasHttpUrl(serverUrl) && window.location.protocol === 'https:' && !hasProxy) {
     return `GitHub Pages abriu em HTTPS, mas esse Xtream esta em HTTP (${serverUrl.trim()}). O navegador bloqueia esse login. Tente a versao https:// do servidor. Se o provedor so responder em HTTP, vai precisar de proxy ou backend.`
   }
+  if (error instanceof Error && /Direct IP access not allowed|HTML\/403|403/i.test(error.message)) {
+    return 'A origem bloqueou o proxy HTTPS atual. Esse host HTTP parece barrar o worker da Cloudflare. Tente um proxy HTTPS alternativo fora do Cloudflare para essa playlist.'
+  }
   if (error instanceof TypeError) {
     return hasProxy
       ? 'Falha de rede ao consultar o Xtream via proxy. O worker pode estar ok, mas o provedor pode estar offline, lento ou recusando essa origem agora.'
