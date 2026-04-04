@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: iptv-pages-hub-http-proxy
+    runtime: node
+    rootDir: http-proxy
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
