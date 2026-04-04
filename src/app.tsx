@@ -244,6 +244,22 @@ const newsLinks: NewsLink[] = [
     streamUrl: 'https://live-hls-web-aje-fa.getaj.net/AJE/index.m3u8',
   },
   {
+    id: 'france-24-english',
+    name: 'France 24 English',
+    href: 'https://www.youtube.com/@FRANCE24_en/live',
+    note: 'Live oficial da France 24 English, resolvida dinamicamente pelo canal oficial no YouTube.',
+    source: 'France 24 | YouTube',
+    youtubeChannel: '@FRANCE24_en',
+  },
+  {
+    id: 'dw-news-english',
+    name: 'DW News English',
+    href: 'https://www.youtube.com/@dwnews/live',
+    note: 'Live oficial da DW News English, resolvida dinamicamente pelo canal oficial no YouTube.',
+    source: 'DW News | YouTube',
+    youtubeChannel: '@dwnews',
+  },
+  {
     id: 'bloomberg-us',
     name: 'Bloomberg US',
     href: 'https://www.bloomberg.com/live',
