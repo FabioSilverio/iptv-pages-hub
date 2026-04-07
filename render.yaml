@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: iptv-pages-hub-http-proxy
+    name: iptv-hub-proxy
     runtime: node
     rootDir: http-proxy
     plan: free
