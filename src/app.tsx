@@ -307,6 +307,38 @@ const newsLinks: NewsLink[] = [
     source: 'NASA',
     embedResolver: 'nasa-live',
   },
+  {
+    id: 'newsmax',
+    name: 'Newsmax',
+    href: 'https://newsmax-samsungus.amagi.tv/playlist.m3u8',
+    note: 'Feed HLS da Newsmax TV via Amagi/Samsung, tocando direto no player leve do site.',
+    source: 'Newsmax / Amagi',
+    streamUrl: 'https://newsmax-samsungus.amagi.tv/playlist.m3u8',
+  },
+  {
+    id: 'cnbc',
+    name: 'CNBC',
+    href: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
+    note: 'Feed HLS 720p da CNBC ao vivo tocando direto no player leve do site.',
+    source: 'CNBC',
+    streamUrl: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
+  },
+  {
+    id: 'fox-news',
+    name: 'Fox News',
+    href: 'https://fl1.moveonjoy.com/FOX_NEWS_CHANNEL/tracks-v1a1/mono.ts.m3u8',
+    note: 'Feed HLS da Fox News Channel 720p. Servidor pode estar instavel.',
+    source: 'Fox News HLS',
+    streamUrl: 'https://fl1.moveonjoy.com/FOX_NEWS_CHANNEL/tracks-v1a1/mono.ts.m3u8',
+  },
+  {
+    id: 'fox-business',
+    name: 'Fox Business',
+    href: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
+    note: 'Feed HLS da Fox Business Network ao vivo tocando direto no player do site.',
+    source: 'Fox Business Network',
+    streamUrl: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
+  },
 ]
 
 const marketItems = [
