@@ -45,7 +45,7 @@ const MOVIES_KEY = 'iptv-pages-hub.movies'
 const SELECTED_MOVIE_KEY = 'iptv-pages-hub.selected-movie'
 const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
-const RENDER_PROXY_URL = 'https://iptv-hub-proxy.onrender.com'
+const RENDER_PROXY_URL = 'https://iptv-hub-proxy.vercel.app'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
 const LIVE_STATUS_REFRESH_MS = 60_000
@@ -1274,10 +1274,14 @@ export function App() {
       : selectedNewsLink.streamUrl
 
     if (!resolvedStream) return null
-    const proxyBase = selectedNewsLink.proxyOverride || DEFAULT_XTREAM_PROXY_URL
-    const streamUrl = selectedNewsLink.playbackEngine === 'dash'
-      ? resolvedStream
-      : buildProxyUrl(proxyBase, resolvedStream)
+    let streamUrl: string
+    if (selectedNewsLink.playbackEngine === 'dash') {
+      streamUrl = resolvedStream
+    } else if (selectedNewsLink.proxyOverride) {
+      streamUrl = `${selectedNewsLink.proxyOverride}/api/proxy?url=${encodeURIComponent(resolvedStream)}`
+    } else {
+      streamUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, resolvedStream)
+    }
 
     return {
       id: `news:${selectedNewsLink.id}`,
