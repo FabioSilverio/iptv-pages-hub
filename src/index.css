@@ -1101,7 +1101,7 @@ input:focus, select:focus {
 }
 
 .hub-grid {
-  grid-template-columns: 168px minmax(0, 1fr) 260px;
+  grid-template-columns: 148px minmax(0, 1fr) 230px;
   gap: 18px 22px;
   align-items: start;
 }
