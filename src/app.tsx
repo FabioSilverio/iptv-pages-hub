@@ -45,6 +45,7 @@ const MOVIES_KEY = 'iptv-pages-hub.movies'
 const SELECTED_MOVIE_KEY = 'iptv-pages-hub.selected-movie'
 const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
+const RENDER_PROXY_URL = 'https://iptv-pages-hub-http-proxy.onrender.com'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
 const LIVE_STATUS_REFRESH_MS = 60_000
@@ -74,6 +75,7 @@ interface NewsLink {
   mirrorChannelKey?: string
   mirrorServers?: string[]
   playbackEngine?: 'dash'
+  proxyOverride?: string
 }
 
 interface MarketQuote {
@@ -335,9 +337,10 @@ const newsLinks: NewsLink[] = [
     id: 'fox-business',
     name: 'Fox Business',
     href: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
-    note: 'Feed HLS da Fox Business Network. Pode nao funcionar se o servidor IP estiver instavel.',
+    note: 'Feed HLS da Fox Business Network via proxy Render (IP direto).',
     source: 'Fox Business Network',
     streamUrl: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
+    proxyOverride: RENDER_PROXY_URL,
   },
 ]
 
@@ -1271,9 +1274,10 @@ export function App() {
       : selectedNewsLink.streamUrl
 
     if (!resolvedStream) return null
+    const proxyBase = selectedNewsLink.proxyOverride || DEFAULT_XTREAM_PROXY_URL
     const streamUrl = selectedNewsLink.playbackEngine === 'dash'
       ? resolvedStream
-      : buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, resolvedStream)
+      : buildProxyUrl(proxyBase, resolvedStream)
 
     return {
       id: `news:${selectedNewsLink.id}`,
