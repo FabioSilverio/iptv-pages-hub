@@ -326,10 +326,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-news',
     name: 'Fox News',
-    href: 'https://fox-foxnewsnow-vizio.amagi.tv/playlist.m3u8',
-    note: 'Feed HLS Live Now from Fox via Amagi, multi-qualidade ate 720p com legendas.',
-    source: 'Fox News / Amagi',
-    streamUrl: 'https://fox-foxnewsnow-vizio.amagi.tv/playlist.m3u8',
+    href: 'http://247preview.foxnews.com/hls/live/2020027/fncv3preview/primary.m3u8',
+    note: 'Feed HLS oficial Fox News Preview 24/7 tocando direto no player do site.',
+    source: 'Fox News',
+    streamUrl: 'http://247preview.foxnews.com/hls/live/2020027/fncv3preview/primary.m3u8',
   },
   {
     id: 'fox-business',
