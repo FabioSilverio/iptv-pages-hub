@@ -1632,6 +1632,7 @@ input:focus, select:focus {
 .feed-pill {
   min-height: 32px;
   font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .panel-heading {
@@ -1746,11 +1747,31 @@ input:focus, select:focus {
   margin-top: 6px;
 }
 
+.news-shortcuts-shell {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin: -4px 0 14px;
+}
+
 .news-shortcuts {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
-  margin: -4px 0 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.news-shortcuts::-webkit-scrollbar {
+  display: none;
+}
+
+.news-shortcuts .feed-pill {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .news-embed-frame {
@@ -1793,18 +1814,16 @@ input:focus, select:focus {
     min-width: max-content;
   }
 
-  .news-shortcuts {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 0 2px 6px;
+  .news-shortcuts-shell {
     margin: 0 0 12px;
-    scrollbar-width: none;
-    -ms-overflow-style: none;
   }
 
-  .news-shortcuts::-webkit-scrollbar {
+  .news-shortcuts-shell .feed-strip-nav {
     display: none;
+  }
+
+  .news-shortcuts {
+    padding: 0 2px 6px;
   }
 
   .news-shortcuts .feed-pill {

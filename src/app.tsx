@@ -326,16 +326,16 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-news',
     name: 'Fox News',
-    href: 'https://fl1.moveonjoy.com/FOX_NEWS_CHANNEL/tracks-v1a1/mono.ts.m3u8',
-    note: 'Feed HLS da Fox News Channel 720p. Servidor pode estar instavel.',
-    source: 'Fox News HLS',
-    streamUrl: 'https://fl1.moveonjoy.com/FOX_NEWS_CHANNEL/tracks-v1a1/mono.ts.m3u8',
+    href: 'https://fox-foxnewsnow-vizio.amagi.tv/playlist.m3u8',
+    note: 'Feed HLS Live Now from Fox via Amagi, multi-qualidade ate 720p com legendas.',
+    source: 'Fox News / Amagi',
+    streamUrl: 'https://fox-foxnewsnow-vizio.amagi.tv/playlist.m3u8',
   },
   {
     id: 'fox-business',
     name: 'Fox Business',
     href: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
-    note: 'Feed HLS da Fox Business Network ao vivo tocando direto no player do site.',
+    note: 'Feed HLS da Fox Business Network. Pode nao funcionar se o servidor IP estiver instavel.',
     source: 'Fox Business Network',
     streamUrl: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
   },
@@ -1096,6 +1096,8 @@ export function App() {
   const [showCinemaPanel, setShowCinemaPanel] = useState(true)
   const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
+  const [newsShortcutLeftReady, setNewsShortcutLeftReady] = useState(false)
+  const [newsShortcutRightReady, setNewsShortcutRightReady] = useState(false)
   const [mediaStripLeftReady, setMediaStripLeftReady] = useState(false)
   const [mediaStripRightReady, setMediaStripRightReady] = useState(false)
   const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
@@ -1107,6 +1109,7 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const siteBackupInputRef = useRef<HTMLInputElement | null>(null)
   const newsStripRef = useRef<HTMLDivElement | null>(null)
+  const newsShortcutRef = useRef<HTMLDivElement | null>(null)
   const mediaStripRef = useRef<HTMLDivElement | null>(null)
   const twitchPlayerHostRef = useRef<HTMLDivElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -1377,6 +1380,31 @@ export function App() {
     })
   }
 
+  function syncNewsShortcutState() {
+    const node = newsShortcutRef.current
+
+    if (!node) {
+      setNewsShortcutLeftReady(false)
+      setNewsShortcutRightReady(false)
+      return
+    }
+
+    const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth)
+    const canScroll = maxScroll > 8
+    setNewsShortcutLeftReady(canScroll && node.scrollLeft > 8)
+    setNewsShortcutRightReady(canScroll && node.scrollLeft < maxScroll - 8)
+  }
+
+  function scrollNewsShortcut(direction: 'left' | 'right') {
+    const node = newsShortcutRef.current
+    if (!node) return
+
+    node.scrollBy({
+      left: (direction === 'right' ? 1 : -1) * Math.max(220, node.clientWidth * 0.68),
+      behavior: 'smooth',
+    })
+  }
+
   function syncMediaStripState() {
     const node = mediaStripRef.current
     const hasMediaStrip = activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick'
@@ -1560,6 +1588,29 @@ export function App() {
       window.removeEventListener('resize', handleResize)
     }
   }, [activeSurface, selectedNewsId])
+
+  useEffect(() => {
+    const node = newsShortcutRef.current
+    if (!node) {
+      syncNewsShortcutState()
+      return
+    }
+
+    const handleScroll = () => syncNewsShortcutState()
+    const handleResize = () => syncNewsShortcutState()
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
+
+    node.addEventListener('scroll', handleScroll, { passive: true })
+    observer?.observe(node)
+    window.addEventListener('resize', handleResize)
+    window.requestAnimationFrame(syncNewsShortcutState)
+
+    return () => {
+      node.removeEventListener('scroll', handleScroll)
+      observer?.disconnect()
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [])
 
   useEffect(() => {
     const hasMediaStrip = activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick'
@@ -2839,13 +2890,21 @@ export function App() {
             </div>
       </header>
 
-      <div class="news-shortcuts">
-        {orderedNewsLinks.map((item) => (
-            <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
-            <span>{item.name}</span>
-            <strong>{item.streamUrl || item.embedUrl ? 'PLAY' : 'LINK'}</strong>
-          </button>
-        ))}
+      <div class="feed-strip-shell news-shortcuts-shell">
+        <button aria-label="Ver canais anteriores" class="feed-strip-nav" disabled={!newsShortcutLeftReady} type="button" onClick={() => scrollNewsShortcut('left')}>
+          <span aria-hidden="true">‹</span>
+        </button>
+        <div class="news-shortcuts feed-strip-scroll" ref={newsShortcutRef}>
+          {orderedNewsLinks.map((item) => (
+              <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
+              <span>{item.name}</span>
+              <strong>{item.streamUrl || item.embedUrl ? 'PLAY' : 'LINK'}</strong>
+            </button>
+          ))}
+        </div>
+        <button aria-label="Ver mais canais" class="feed-strip-nav" disabled={!newsShortcutRightReady} type="button" onClick={() => scrollNewsShortcut('right')}>
+          <span aria-hidden="true">›</span>
+        </button>
       </div>
 
       <main class="hub-grid">
