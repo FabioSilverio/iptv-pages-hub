@@ -336,11 +336,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-business',
     name: 'Fox Business',
-    href: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
-    note: 'Feed HLS da Fox Business Network via proxy Vercel (IP direto). Codec AC-3 pode nao funcionar em todos os navegadores.',
-    source: 'Fox Business Network',
-    streamUrl: 'http://41.205.93.154/FOXBUSINESS/index.m3u8',
-    proxyOverride: RENDER_PROXY_URL,
+    href: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxbusiness.com%2Fhls%2Flive%2F2003756%2FFBNHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
+    note: 'Feed HLS direto da Fox Business CDN (247.foxbusiness.com) via proxy com headers Akamai.',
+    source: 'Fox Business Network / CDN',
+    streamUrl: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxbusiness.com%2Fhls%2Flive%2F2003756%2FFBNHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
   },
 ]
 
