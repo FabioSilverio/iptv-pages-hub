@@ -328,17 +328,17 @@ const newsLinks: NewsLink[] = [
     id: 'fox-news',
     name: 'Fox News',
     href: 'https://www.foxnews.com/video/5614615980001',
-    note: 'Player oficial Brightcove da Fox News embutido no palco para evitar o bloqueio Akamai do HLS direto.',
-    source: 'Fox News / Brightcove',
-    embedUrl: 'https://players.brightcove.net/694940094001/default_default/index.html?videoId=5614615980001',
+    note: 'Embed oficial da Fox News usado pela propria emissora, evitando o player Brightcove generico que falha no HLS protegido.',
+    source: 'Fox News / Official Embed',
+    embedUrl: 'https://video.foxnews.com/v/video-embed.html?video_id=5614615980001',
   },
   {
     id: 'fox-business',
     name: 'Fox Business',
-    href: 'https://www.foxbusiness.com/video/5640669329001',
-    note: 'Player oficial Brightcove da Fox Business no palco, sem depender do HLS protegido da CDN.',
-    source: 'Fox Business / Brightcove',
-    embedUrl: 'https://players.brightcove.net/854081161001/default_default/index.html?videoId=5640669329001',
+    href: 'https://www.foxnews.com/video/5614626175001',
+    note: 'Embed oficial atual da Fox Business Go, o mesmo exposto pela Fox News para o canal ao vivo.',
+    source: 'Fox Business / Official Embed',
+    embedUrl: 'https://video.foxnews.com/v/video-embed.html?video_id=5614626175001',
   },
 ]
 
@@ -427,6 +427,14 @@ function withAutoplayEmbedUrl(rawUrl?: string) {
       url.searchParams.set('autoplay', 'true')
       url.searchParams.set('muted', 'true')
       url.searchParams.set('playsinline', 'true')
+    }
+
+    if (hostname === 'video.foxnews.com' && /\/v\/video-embed\.html$/i.test(url.pathname)) {
+      const locationHost = window.location.hostname.replace(/^www\./i, '')
+      const locationRef = `${window.location.protocol}//${window.location.host}${window.location.pathname}`
+
+      url.searchParams.set('loc', locationHost)
+      url.searchParams.set('ref', locationRef)
     }
 
     return url.toString()
