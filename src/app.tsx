@@ -68,6 +68,7 @@ interface NewsLink {
   note: string
   source: string
   embedUrl?: string
+  foxTve?: FoxTveEmbedConfig
   embedResolver?: 'nasa-live'
   youtubeChannel?: string
   streamUrl?: string
@@ -75,6 +76,15 @@ interface NewsLink {
   mirrorServers?: string[]
   playbackEngine?: 'dash'
   proxyOverride?: string
+}
+
+interface FoxTveEmbedConfig {
+  host: 'foxnews' | 'foxbusiness'
+  videoId: string
+  domain: 'foxnews' | 'foxbusiness'
+  ampSite?: string
+  requiresAuth?: boolean
+  clipType?: string
 }
 
 interface MarketQuote {
@@ -328,17 +338,30 @@ const newsLinks: NewsLink[] = [
     id: 'fox-news',
     name: 'Fox News',
     href: 'https://www.foxnews.com/video/5614615980001',
-    note: 'Embed oficial da Fox News usado pela propria emissora, evitando o player Brightcove generico que falha no HLS protegido.',
-    source: 'Fox News / Official Embed',
-    embedUrl: 'https://video.foxnews.com/v/video-embed.html?video_id=5614615980001',
+    note: 'Player oficial da Fox News carregado direto pelo TVE da emissora, sem passar pelo wrapper legado que cai em 404.',
+    source: 'Fox News / TVE',
+    foxTve: {
+      host: 'foxnews',
+      videoId: '5614615980001',
+      domain: 'foxnews',
+      requiresAuth: true,
+      clipType: 'auth:live',
+    },
   },
   {
     id: 'fox-business',
     name: 'Fox Business',
-    href: 'https://www.foxnews.com/video/5614626175001',
-    note: 'Embed oficial atual da Fox Business Go, o mesmo exposto pela Fox News para o canal ao vivo.',
-    source: 'Fox Business / Official Embed',
-    embedUrl: 'https://video.foxnews.com/v/video-embed.html?video_id=5614626175001',
+    href: 'https://www.foxbusiness.com/video/5640669329001',
+    note: 'Player oficial da Fox Business carregado direto pelo TVE da emissora, com o site ao vivo correto do canal.',
+    source: 'Fox Business / TVE',
+    foxTve: {
+      host: 'foxnews',
+      videoId: '5640669329001',
+      domain: 'foxbusiness',
+      ampSite: 'fblive',
+      requiresAuth: true,
+      clipType: 'auth:live',
+    },
   },
 ]
 
@@ -429,18 +452,129 @@ function withAutoplayEmbedUrl(rawUrl?: string) {
       url.searchParams.set('playsinline', 'true')
     }
 
-    if (hostname === 'video.foxnews.com' && /\/v\/video-embed\.html$/i.test(url.pathname)) {
-      const locationHost = window.location.hostname.replace(/^www\./i, '')
-      const locationRef = `${window.location.protocol}//${window.location.host}${window.location.pathname}`
-
-      url.searchParams.set('loc', locationHost)
-      url.searchParams.set('ref', locationRef)
-    }
-
     return url.toString()
   } catch {
     return rawUrl
   }
+}
+
+interface FoxTveMessageEnvelope {
+  uid: string
+  name: string
+  data: unknown
+}
+
+interface FoxTveMessage {
+  type?: string
+  data?: FoxTveMessageEnvelope
+}
+
+function normalizeFoxTveMessage(raw: unknown): FoxTveMessage | null {
+  if (!raw) return null
+
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as FoxTveMessage
+    } catch {
+      return null
+    }
+  }
+
+  return typeof raw === 'object' ? (raw as FoxTveMessage) : null
+}
+
+function buildFoxTveChannel(uid: string) {
+  return `core.video.events_event.listener.${uid}`
+}
+
+function buildFoxTveMessage(uid: string, name: string, data: unknown): FoxTveMessage {
+  return {
+    type: buildFoxTveChannel(uid),
+    data: {
+      uid: `uid-embed-${uid}`,
+      name,
+      data: data ?? null,
+    },
+  }
+}
+
+function buildFoxTveIframeSrc(config: FoxTveEmbedConfig, uid: string) {
+  const originPath = `${window.location.hostname}${window.location.pathname}`
+  return `https://static.${config.host}.com/static/orion/html/video/iframe/tve.html?v=null#uid=${encodeURIComponent(uid)}&url=${encodeURIComponent(originPath)}`
+}
+
+function buildFoxTveLoadConfig(config: FoxTveEmbedConfig) {
+  const parentEmbedUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}`
+  const loadConfig: {
+    app: Record<string, unknown>
+    player: Record<string, unknown>
+  } = {
+    app: {
+      videoId: config.videoId,
+      domain: config.domain,
+      tve: true,
+    },
+    player: {
+      name: 'embed',
+      autoplay: false,
+      params: {
+        parentEmbedUrl,
+        playerName: 'embed',
+      },
+    },
+  }
+
+  if (config.requiresAuth) {
+    loadConfig.app.clipType = config.clipType || 'auth:live'
+    loadConfig.app.auth = {
+      enabled: true,
+      domain: config.domain,
+      mvpd: null,
+    }
+    loadConfig.player.ais = {
+      enabled: false,
+    }
+  }
+
+  if (config.ampSite) {
+    loadConfig.app.ampConfig = {
+      site: config.ampSite,
+    }
+  }
+
+  return loadConfig
+}
+
+function FoxTveEmbed({ config, title }: { config: FoxTveEmbedConfig; title: string }) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const uid = useMemo(() => `fox-${config.videoId}`, [config.videoId])
+  const src = useMemo(() => buildFoxTveIframeSrc(config, uid), [config, uid])
+  const loadConfig = useMemo(() => buildFoxTveLoadConfig(config), [config])
+
+  useEffect(() => {
+    const channel = buildFoxTveChannel(uid)
+
+    function handleMessage(event: MessageEvent) {
+      const payload = normalizeFoxTveMessage(event.data)
+      if (!payload || payload.type !== channel || payload.data?.name !== 'iframe.ready') return
+
+      iframeRef.current?.contentWindow?.postMessage(buildFoxTveMessage(uid, '__load', loadConfig), '*')
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [loadConfig, uid])
+
+  return (
+    <iframe
+      allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+      allowFullScreen
+      loading="lazy"
+      ref={iframeRef}
+      src={src}
+      title={title}
+    />
+  )
 }
 
 async function ensureTwitchPlayerScript() {
@@ -1319,6 +1453,7 @@ export function App() {
     () => withAutoplayEmbedUrl(resolvedNewsEmbedUrl || selectedNewsLink.embedUrl || ''),
     [resolvedNewsEmbedUrl, selectedNewsLink.embedUrl],
   )
+  const selectedNewsFoxTve = selectedNewsLink.foxTve || null
   const selectedRadioPlayback = useMemo<Channel | null>(() => {
     if (!selectedRadioStation) return null
 
@@ -3231,6 +3366,14 @@ export function App() {
                   <h3>Preparando {selectedNewsLink.name}</h3>
                   <p class="helper-copy">Resolvendo o feed leve desse canal para evitar o iframe pesado e abrir mais rapido no palco.</p>
                 </div>
+              ) : selectedNewsFoxTve ? (
+                <>
+                  <div class="player-frame embed-stage-frame news-embed-frame"><FoxTveEmbed config={selectedNewsFoxTve} title={selectedNewsLink.name} /></div>
+                  <div class="player-meta">
+                    <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
+                    <div class="subtle-card compact-card"><p class="section-tag">Origem</p><h3>{selectedNewsLink.source}</h3><p class="helper-copy">Bridge direto com o TVE oficial da Fox, sem o wrapper legado do video.fox*.com que estava caindo em 404.</p></div>
+                  </div>
+                </>
               ) : selectedNewsEmbedUrl ? (
                 <>
                   <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsEmbedUrl} title={selectedNewsLink.name} /></div>
