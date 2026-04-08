@@ -638,6 +638,13 @@ export async function fetchKickStatuses(
       const payload = (await response.json()) as {
         data?: Array<{
           slug?: string
+          user?: {
+            username?: string
+            display_name?: string
+            profile_pic?: string
+            profile_picture?: string
+            profilePicture?: string
+          }
           stream?: {
             is_live?: boolean
             viewer_count?: number
@@ -667,6 +674,16 @@ export async function fetchKickStatuses(
               : 'Canal ao vivo na Kick.'
             : 'Canal offline no ultimo refresh.',
           updatedAt: new Date().toISOString(),
+          avatarUrl:
+            item!.user?.profile_pic
+            || item!.user?.profile_picture
+            || item!.user?.profilePicture
+            || undefined,
+          displayName:
+            item!.user?.display_name
+            || item!.user?.username
+            || item!.slug
+            || key,
         },
       ]
     }),
@@ -682,6 +699,7 @@ export async function fetchKickStatuses(
           state: 'offline' as const,
           detail: 'Canal offline no ultimo refresh.',
           updatedAt: new Date().toISOString(),
+          displayName: channel,
         },
       ]
     }),
