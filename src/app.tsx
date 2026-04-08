@@ -45,7 +45,6 @@ const MOVIES_KEY = 'iptv-pages-hub.movies'
 const SELECTED_MOVIE_KEY = 'iptv-pages-hub.selected-movie'
 const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
-const RENDER_PROXY_URL = 'https://iptv-pages-hub.vercel.app'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
 const LIVE_STATUS_REFRESH_MS = 60_000
@@ -328,18 +327,18 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-news',
     name: 'Fox News',
-    href: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxnews.com%2Fhls%2Flive%2F2003586%2FFNCHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
-    note: 'Feed HLS direto da Fox News CDN (247.foxnews.com) via proxy com headers Akamai.',
-    source: 'Fox News / CDN',
-    streamUrl: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxnews.com%2Fhls%2Flive%2F2003586%2FFNCHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
+    href: 'https://www.foxnews.com/video/5614615980001',
+    note: 'Player oficial Brightcove da Fox News embutido no palco para evitar o bloqueio Akamai do HLS direto.',
+    source: 'Fox News / Brightcove',
+    embedUrl: 'https://players.brightcove.net/694940094001/default_default/index.html?videoId=5614615980001',
   },
   {
     id: 'fox-business',
     name: 'Fox Business',
-    href: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxbusiness.com%2Fhls%2Flive%2F2003756%2FFBNHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
-    note: 'Feed HLS direto da Fox Business CDN (247.foxbusiness.com) via proxy com headers Akamai.',
-    source: 'Fox Business Network / CDN',
-    streamUrl: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxbusiness.com%2Fhls%2Flive%2F2003756%2FFBNHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
+    href: 'https://www.foxbusiness.com/video/5640669329001',
+    note: 'Player oficial Brightcove da Fox Business no palco, sem depender do HLS protegido da CDN.',
+    source: 'Fox Business / Brightcove',
+    embedUrl: 'https://players.brightcove.net/854081161001/default_default/index.html?videoId=5640669329001',
   },
 ]
 
@@ -392,6 +391,17 @@ function buildKickEmbedUrl(channel: string) {
   return `https://player.kick.com/${channel}?autoplay=true&muted=true`
 }
 
+function isProxyApiUrl(rawUrl?: string) {
+  if (!rawUrl) return false
+
+  try {
+    const url = new URL(rawUrl)
+    return /\/api\/proxy$/i.test(url.pathname) && url.searchParams.has('url')
+  } catch {
+    return false
+  }
+}
+
 function withAutoplayEmbedUrl(rawUrl?: string) {
   if (!rawUrl) return ''
 
@@ -411,6 +421,12 @@ function withAutoplayEmbedUrl(rawUrl?: string) {
     if (hostname.includes('player.kick.com')) {
       url.searchParams.set('autoplay', 'true')
       url.searchParams.set('muted', 'true')
+    }
+
+    if (hostname.includes('players.brightcove.net')) {
+      url.searchParams.set('autoplay', 'true')
+      url.searchParams.set('muted', 'true')
+      url.searchParams.set('playsinline', 'true')
     }
 
     return url.toString()
@@ -1275,6 +1291,8 @@ export function App() {
     if (!resolvedStream) return null
     let streamUrl: string
     if (selectedNewsLink.playbackEngine === 'dash') {
+      streamUrl = resolvedStream
+    } else if (isProxyApiUrl(resolvedStream)) {
       streamUrl = resolvedStream
     } else if (selectedNewsLink.proxyOverride) {
       streamUrl = `${selectedNewsLink.proxyOverride}/api/proxy?url=${encodeURIComponent(resolvedStream)}`
