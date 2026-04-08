@@ -142,6 +142,16 @@ async function handleKickStatus(request, env, url) {
           ? `${title}${viewers ? ` • ${viewers} assistindo` : ''}`
           : 'Canal ao vivo na Kick.'
         : 'Canal offline no ultimo refresh.',
+      avatarUrl:
+        data?.user?.profile_pic
+        || data?.user?.profile_picture
+        || data?.user?.profilePicture
+        || '',
+      displayName:
+        data?.user?.username
+        || data?.user?.display_name
+        || data?.slug
+        || channel,
     }, 200, request)
   } catch (error) {
     return json({
@@ -180,6 +190,8 @@ async function handleYouTubeStatus(request, url) {
           updatedAt: new Date().toISOString(),
           playbackUrl: buildYouTubeEmbedUrl(watchLive.videoId),
           watchUrl: `https://www.youtube.com/watch?v=${watchLive.videoId}`,
+          avatarUrl: extractYouTubeAvatar(html),
+          displayName: extractYouTubeDisplayName(html, channel),
         },
         200,
         request,
@@ -198,6 +210,8 @@ async function handleYouTubeStatus(request, url) {
           updatedAt: new Date().toISOString(),
           playbackUrl: buildYouTubeEmbedUrl(liveCard.videoId),
           watchUrl: `https://www.youtube.com/watch?v=${liveCard.videoId}`,
+          avatarUrl: extractYouTubeAvatar(html),
+          displayName: extractYouTubeDisplayName(html, channel),
         },
         200,
         request,
@@ -213,6 +227,8 @@ async function handleYouTubeStatus(request, url) {
           : 'Canal sem live ao vivo agora no YouTube.',
         updatedAt: new Date().toISOString(),
         watchUrl: buildYouTubeWatchUrl(channel),
+        avatarUrl: extractYouTubeAvatar(html),
+        displayName: extractYouTubeDisplayName(html, channel),
       },
       200,
       request,
@@ -225,6 +241,7 @@ async function handleYouTubeStatus(request, url) {
         detail: error instanceof Error ? error.message : 'Nao foi possivel consultar o YouTube agora.',
         updatedAt: new Date().toISOString(),
         watchUrl: buildYouTubeWatchUrl(channel),
+        displayName: channel,
       },
       200,
       request,
@@ -469,6 +486,29 @@ function extractYouTubeWatchLive(html) {
   return {
     videoId: videoIdMatch[1],
   }
+}
+
+function extractYouTubeAvatar(html) {
+  const channelMetadataMatch = html.match(/"channelMetadataRenderer":\{[\s\S]{0,4000}?"avatar":\{"thumbnails":\[(.*?)\]\}/i)
+  const avatarChunk = channelMetadataMatch?.[1] || ''
+  const urlMatches = [...avatarChunk.matchAll(/"url":"(https:[^"]+)"/g)]
+  const avatarUrl = urlMatches.at(-1)?.[1] || urlMatches[0]?.[1]
+
+  return avatarUrl ? avatarUrl.replace(/\\u0026/g, '&') : ''
+}
+
+function extractYouTubeDisplayName(html, fallbackChannel) {
+  const channelNameMatch = html.match(/"channelMetadataRenderer":\{[\s\S]{0,2000}?"title":"([^"]+)"/i)
+  if (channelNameMatch?.[1]) {
+    return channelNameMatch[1]
+  }
+
+  const metaMatch = html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)
+  if (metaMatch?.[1]) {
+    return metaMatch[1].replace(/\s*-\s*YouTube\s*$/i, '')
+  }
+
+  return fallbackChannel
 }
 
 function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {

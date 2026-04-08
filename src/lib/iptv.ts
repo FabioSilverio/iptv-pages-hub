@@ -57,6 +57,8 @@ export interface EmbedStatus {
   updatedAt: string
   playbackUrl?: string
   watchUrl?: string
+  avatarUrl?: string
+  displayName?: string
 }
 
 export interface KickAppToken {
@@ -354,38 +356,77 @@ export async function fetchTwitchStatuses(
   const params = new URLSearchParams()
   channels.forEach((channel) => params.append('user_login', channel))
 
-  const response = await fetch(`https://api.twitch.tv/helix/streams?${params.toString()}`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Client-Id': clientId,
-    },
-  })
+  const userParams = new URLSearchParams()
+  channels.forEach((channel) => userParams.append('login', channel))
+
+  const [response, usersResponse] = await Promise.all([
+    fetch(`https://api.twitch.tv/helix/streams?${params.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Client-Id': clientId,
+      },
+    }),
+    fetch(`https://api.twitch.tv/helix/users?${userParams.toString()}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Client-Id': clientId,
+      },
+    }),
+  ])
 
   if (!response.ok) {
     throw new Error('Falha ao consultar o status da Twitch.')
   }
 
+  if (!usersResponse.ok) {
+    throw new Error('Falha ao consultar o perfil da Twitch.')
+  }
+
+  const usersPayload = (await usersResponse.json()) as {
+    data?: Array<{
+      login?: string
+      display_name?: string
+      profile_image_url?: string
+    }>
+  }
+  const userMap = new Map(
+    (usersPayload.data ?? []).map((item) => [
+      item.login?.toLowerCase() ?? '',
+      {
+        displayName: item.display_name || '',
+        avatarUrl: item.profile_image_url || '',
+      },
+    ]),
+  )
+
   const payload = (await response.json()) as {
     data?: Array<{ user_login?: string; title?: string; viewer_count?: number }>
   }
   const liveMap = new Map(
-    (payload.data ?? []).map((item) => [
-      item.user_login?.toLowerCase() ?? '',
-      {
-        label: 'On air',
-        state: 'online' as const,
-        detail: item.title
-          ? `${item.title}${item.viewer_count ? ` • ${item.viewer_count} viewers` : ''}`
-          : 'Live agora',
-        updatedAt: new Date().toISOString(),
-      },
-    ]),
+    (payload.data ?? []).map((item) => {
+      const key = item.user_login?.toLowerCase() ?? ''
+      const user = userMap.get(key)
+      return [
+        key,
+        {
+          label: 'On air',
+          state: 'online' as const,
+          detail: item.title
+            ? `${item.title}${item.viewer_count ? ` • ${item.viewer_count} viewers` : ''}`
+            : 'Live agora',
+          updatedAt: new Date().toISOString(),
+          displayName: user?.displayName || item.user_login || '',
+          avatarUrl: user?.avatarUrl || undefined,
+        },
+      ]
+    }),
   )
 
   return Object.fromEntries(
     channels.map((channel) => {
       const key = channel.toLowerCase()
       const online = liveMap.get(key)
+      const user = userMap.get(key)
 
       return [
         key,
@@ -394,6 +435,8 @@ export async function fetchTwitchStatuses(
           state: 'offline' as const,
           detail: 'Canal offline no ultimo refresh.',
           updatedAt: new Date().toISOString(),
+          displayName: user?.displayName || channel,
+          avatarUrl: user?.avatarUrl || undefined,
         },
       ]
     }),
@@ -469,6 +512,8 @@ export async function fetchYoutubeStatuses(
             updatedAt: payload.updatedAt || new Date().toISOString(),
             playbackUrl: payload.playbackUrl,
             watchUrl: payload.watchUrl || buildYoutubeWatchUrl(channel),
+            avatarUrl: payload.avatarUrl,
+            displayName: payload.displayName,
           } satisfies EmbedStatus,
         ] as const
       } catch (error) {
@@ -480,6 +525,7 @@ export async function fetchYoutubeStatuses(
             detail: error instanceof Error ? error.message : YOUTUBE_STATUS_HELP,
             updatedAt: new Date().toISOString(),
             watchUrl: buildYoutubeWatchUrl(channel),
+            displayName: channel,
           } satisfies EmbedStatus,
         ] as const
       }
@@ -653,6 +699,8 @@ export async function fetchCustomStatus(endpoint: string): Promise<EmbedStatus> 
     live?: boolean
     detail?: string
     label?: string
+    avatarUrl?: string
+    displayName?: string
   }
   const isLive = Boolean(payload.live)
 
@@ -661,6 +709,8 @@ export async function fetchCustomStatus(endpoint: string): Promise<EmbedStatus> 
     state: isLive ? 'online' : 'offline',
     detail: payload.detail || (isLive ? 'Status informado por endpoint externo.' : 'Canal offline.'),
     updatedAt: new Date().toISOString(),
+    avatarUrl: payload.avatarUrl,
+    displayName: payload.displayName,
   }
 }
 

@@ -384,22 +384,18 @@ function feedPillTone(platform?: 'twitch' | 'youtube' | 'kick', active = false) 
   return classNames('feed-pill', 'button-pill', platform, active && 'active')
 }
 
-function platformLabel(platform: 'twitch' | 'youtube' | 'kick') {
-  return platform === 'twitch' ? 'Twitch' : platform === 'youtube' ? 'YouTube' : 'Kick'
-}
-
-function compactLiveDetail(status: EmbedStatus | undefined, item: EmbedStream) {
-  if (status?.detail?.trim()) {
-    return status.detail.trim()
-  }
-
-  return `${platformLabel(item.platform)} · ${item.channel}`
-}
-
 function embedAvatarText(item: EmbedStream) {
   const seed = item.title?.trim() || item.channel.trim()
   const clean = seed.replace(/^@/, '').trim()
   return clean.slice(0, 2).toUpperCase()
+}
+
+function embedAvatarUrl(status: EmbedStatus | undefined) {
+  return status?.avatarUrl?.trim() || ''
+}
+
+function embedDisplayName(item: EmbedStream, status: EmbedStatus | undefined) {
+  return status?.displayName?.trim() || item.title
 }
 
 function isTokenFresh(expiresAt?: string) {
@@ -1244,8 +1240,6 @@ export function App() {
     },
     [selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds, statusMap],
   )
-  const featuredLiveEmbed = liveEmbeds[0] ?? null
-  const secondaryLiveEmbeds = featuredLiveEmbed ? liveEmbeds.slice(1) : []
   const onlineTwitchCount = useMemo(
     () => sortedTwitchEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedTwitchEmbeds, statusMap],
@@ -1266,6 +1260,13 @@ export function App() {
       { id: 'kick', label: 'Kick', value: onlineKickCount, tone: 'kick' },
     ].filter((item) => item.value > 0 || item.id === 'total'),
     [liveEmbeds.length, onlineKickCount, onlineTwitchCount, onlineYouTubeCount],
+  )
+  const favoriteChannels = useMemo(
+    () =>
+      favorites
+        .map((channelId) => channels.find((channel) => channel.id === channelId) || null)
+        .filter((channel): channel is Channel => Boolean(channel)),
+    [channels, favorites],
   )
   const selectedChannel = useMemo(
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
@@ -2976,83 +2977,72 @@ export function App() {
                 <small>{liveEmbeds.length ? `${liveEmbeds.length} no ar agora` : 'Nenhum feed live'}</small>
               </button>
               {showLiveNowPanel ? <div class="sidebar-content">
-                {liveEmbeds.length ? <>
-                  <div class="live-now-summary">
-                    {liveSummaryPills.map((item) => (
-                      <div class={classNames('live-now-pill', item.tone !== 'all' && `platform-${item.tone}`)} key={item.id}>
-                        <strong>{item.value}</strong>
-                        <span>{item.label}</span>
-                      </div>
+                <div class="live-now-summary">
+                  {liveSummaryPills.map((item) => (
+                    <div class={classNames('live-now-pill', item.tone !== 'all' && `platform-${item.tone}`)} key={item.id}>
+                      <strong>{item.value}</strong>
+                      <span>{item.label}</span>
+                    </div>
+                  ))}
+                </div>
+                {liveEmbeds.length ? (
+                  <div class="live-now-icon-grid">
+                    {liveEmbeds.map((item) => {
+                      const status = statusMap[item.channel.toLowerCase()]
+                      const avatarUrl = embedAvatarUrl(status)
+                      return (
+                        <button
+                          key={item.id}
+                          class={activeEmbed?.id === item.id ? 'live-now-icon-card active' : 'live-now-icon-card'}
+                          type="button"
+                          onClick={() => activateEmbed(item)}
+                        >
+                          <div class={classNames('live-now-icon-shell', `platform-${item.platform}`)}>
+                            <div class={classNames('live-now-icon-avatar', avatarUrl ? 'has-image' : '')}>
+                              {avatarUrl ? <img alt={embedDisplayName(item, status)} loading="lazy" src={avatarUrl} /> : <span>{embedAvatarText(item)}</span>}
+                            </div>
+                            <span class={classNames('live-now-dot', `platform-${item.platform}`)} />
+                          </div>
+                          <strong>{embedDisplayName(item, status)}</strong>
+                          <span>{item.channel}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                ) : <div class="empty-state compact-empty"><strong>Nenhum feed ao vivo agora.</strong><span>Twitch, YouTube e Kick aparecem aqui automaticamente quando o status vier como online.</span></div>}
+              </div> : null}
+            </div>
+
+            <div class="sidebar-section active">
+              <button class="section-toggle active" type="button">
+                <span>Favoritos IPTV</span>
+                <small>{favoriteChannels.length ? `${favoriteChannels.length} canais salvos` : 'Nenhum favorito salvo'}</small>
+              </button>
+              <div class="sidebar-content">
+                {favoriteChannels.length ? (
+                  <div class="live-now-icon-grid favorites-icon-grid">
+                    {favoriteChannels.map((channel) => (
+                      <button
+                        key={channel.id}
+                        class={selectedChannel?.id === channel.id ? 'live-now-icon-card active' : 'live-now-icon-card'}
+                        type="button"
+                        onClick={() => {
+                          setSelectedChannelId(channel.id)
+                          setSurface('iptv')
+                        }}
+                      >
+                        <div class="live-now-icon-shell platform-iptv">
+                          <div class={classNames('live-now-icon-avatar', channel.logo ? 'has-image' : '')}>
+                            {channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}
+                          </div>
+                        </div>
+                        <strong>{channel.name}</strong>
+                        <span>{channel.group}</span>
+                      </button>
                     ))}
                   </div>
-                  {featuredLiveEmbed ? (
-                    <button
-                      class={activeEmbed?.id === featuredLiveEmbed.id ? 'live-now-feature active' : 'live-now-feature'}
-                      type="button"
-                      onClick={() => activateEmbed(featuredLiveEmbed)}
-                    >
-                      <div class={classNames('live-now-avatar', `platform-${featuredLiveEmbed.platform}`)}>
-                        <span>{embedAvatarText(featuredLiveEmbed)}</span>
-                      </div>
-                      <div class="live-now-feature-copy">
-                        <div class="live-now-feature-topline">
-                          <span class="section-tag">{platformLabel(featuredLiveEmbed.platform)}</span>
-                          <span class={statusTone(statusMap[featuredLiveEmbed.channel.toLowerCase()]?.state || 'online', featuredLiveEmbed.platform)}>
-                            {statusMap[featuredLiveEmbed.channel.toLowerCase()]?.label || 'Ao vivo'}
-                          </span>
-                        </div>
-                        <strong>{featuredLiveEmbed.title}</strong>
-                        <span>{featuredLiveEmbed.channel}</span>
-                        <p>{compactLiveDetail(statusMap[featuredLiveEmbed.channel.toLowerCase()], featuredLiveEmbed)}</p>
-                      </div>
-                      <span class="live-now-open">Abrir</span>
-                    </button>
-                  ) : null}
-                  {secondaryLiveEmbeds.length ? (
-                    <div class="live-now-list">
-                      {secondaryLiveEmbeds.map((item) => {
-                        const status = statusMap[item.channel.toLowerCase()]
-                        return (
-                          <button
-                            key={item.id}
-                            class={activeEmbed?.id === item.id ? 'live-now-card active' : 'live-now-card'}
-                            type="button"
-                            onClick={() => activateEmbed(item)}
-                          >
-                            <div class={classNames('live-now-avatar', `platform-${item.platform}`)}>
-                              <span>{embedAvatarText(item)}</span>
-                            </div>
-                            <div class="live-now-card-copy">
-                              <strong>{item.title}</strong>
-                              <span>{platformLabel(item.platform)} · {item.channel}</span>
-                            </div>
-                            <span class={statusTone(status?.state || 'online', item.platform)}>{status?.label || 'Ao vivo'}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  ) : null}
-                </> : <div class="empty-state compact-empty"><strong>Nenhum feed ao vivo agora.</strong><span>Twitch, YouTube e Kick aparecem aqui automaticamente quando o status vier como online.</span></div>}
-                <div class="sidebar-list live-now-legacy-list" aria-hidden="true">
-                  {liveEmbeds.length ? liveEmbeds.map((item) => {
-                    const status = statusMap[item.channel.toLowerCase()]
-                    return (
-                      <button
-                        key={item.id}
-                        class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'}
-                        type="button"
-                        onClick={() => activateEmbed(item)}
-                      >
-                        <div class="list-row-copy">
-                          <strong>{item.title}</strong>
-                          <span>{item.platform === 'twitch' ? 'Twitch' : 'Kick'} · {item.channel}</span>
-                        </div>
-                        <span class={statusTone(status?.state || 'online', item.platform)}>{status?.label || 'Ao vivo'}</span>
-                      </button>
-                    )
-                  }) : <div class="empty-state compact-empty"><strong>Nenhum feed ao vivo agora.</strong><span>Twitch e Kick aparecem aqui automaticamente quando o status vier como online.</span></div>}
-                </div>
-              </div> : null}
+                ) : <div class="empty-state compact-empty"><strong>Nenhum favorito IPTV salvo.</strong><span>Favorite canais na lista IPTV e eles aparecem aqui em forma de atalho.</span></div>}
+              </div>
             </div>
 
             <div class="sidebar-section">
