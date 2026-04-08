@@ -1122,6 +1122,7 @@ export function App() {
   const [showLiveNowPanel, setShowLiveNowPanel] = useState(
     () => readJson<boolean>(SHOW_LIVE_NOW_KEY, false),
   )
+  const [showFavoriteIptvPanel, setShowFavoriteIptvPanel] = useState(true)
   const [showIptvPanel, setShowIptvPanel] = useState(true)
   const [showTwitchPanel, setShowTwitchPanel] = useState(true)
   const [showYouTubePanel, setShowYouTubePanel] = useState(true)
@@ -1251,15 +1252,6 @@ export function App() {
   const onlineKickCount = useMemo(
     () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedKickEmbeds, statusMap],
-  )
-  const liveSummaryPills = useMemo(
-    () => [
-      { id: 'total', label: 'No ar', value: liveEmbeds.length, tone: 'all' },
-      { id: 'twitch', label: 'Twitch', value: onlineTwitchCount, tone: 'twitch' },
-      { id: 'youtube', label: 'YouTube', value: onlineYouTubeCount, tone: 'youtube' },
-      { id: 'kick', label: 'Kick', value: onlineKickCount, tone: 'kick' },
-    ].filter((item) => item.value > 0 || item.id === 'total'),
-    [liveEmbeds.length, onlineKickCount, onlineTwitchCount, onlineYouTubeCount],
   )
   const favoriteChannels = useMemo(
     () =>
@@ -2977,14 +2969,6 @@ export function App() {
                 <small>{liveEmbeds.length ? `${liveEmbeds.length} no ar agora` : 'Nenhum feed live'}</small>
               </button>
               {showLiveNowPanel ? <div class="sidebar-content">
-                <div class="live-now-summary">
-                  {liveSummaryPills.map((item) => (
-                    <div class={classNames('live-now-pill', item.tone !== 'all' && `platform-${item.tone}`)} key={item.id}>
-                      <strong>{item.value}</strong>
-                      <span>{item.label}</span>
-                    </div>
-                  ))}
-                </div>
                 {liveEmbeds.length ? (
                   <div class="live-now-icon-grid">
                     {liveEmbeds.map((item) => {
@@ -3014,11 +2998,11 @@ export function App() {
             </div>
 
             <div class="sidebar-section active">
-              <button class="section-toggle active" type="button">
+              <button class={showFavoriteIptvPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowFavoriteIptvPanel((current) => !current)}>
                 <span>Favoritos IPTV</span>
                 <small>{favoriteChannels.length ? `${favoriteChannels.length} canais salvos` : 'Nenhum favorito salvo'}</small>
               </button>
-              <div class="sidebar-content">
+              {showFavoriteIptvPanel ? <div class="sidebar-content">
                 {favoriteChannels.length ? (
                   <div class="live-now-icon-grid favorites-icon-grid">
                     {favoriteChannels.map((channel) => (
@@ -3042,7 +3026,7 @@ export function App() {
                     ))}
                   </div>
                 ) : <div class="empty-state compact-empty"><strong>Nenhum favorito IPTV salvo.</strong><span>Favorite canais na lista IPTV e eles aparecem aqui em forma de atalho.</span></div>}
-              </div>
+              </div> : null}
             </div>
 
             <div class="sidebar-section">
