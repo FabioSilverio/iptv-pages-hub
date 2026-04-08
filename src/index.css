@@ -1462,6 +1462,95 @@ input:focus, select:focus {
   padding: 14px;
 }
 
+.vod-panel {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.compact-panel-heading {
+  margin-bottom: 12px;
+}
+
+.vod-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.vod-card {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.vod-card:hover,
+.vod-card:focus-visible,
+.vod-card.active {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.5);
+  background: rgba(37, 99, 235, 0.09);
+}
+
+.vod-card-thumb {
+  width: 112px;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.vod-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vod-card-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.vod-card-copy strong,
+.vod-card-copy span,
+.vod-card-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vod-card-copy strong {
+  font-size: 0.95rem;
+}
+
+.vod-card-copy span,
+.vod-card-copy small,
+.vod-helper {
+  color: rgba(255, 255, 255, 0.66);
+}
+
+.vod-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
 .manager-panel .panel-heading,
 .stage-panel .panel-heading {
   margin-bottom: 14px;

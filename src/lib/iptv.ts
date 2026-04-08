@@ -61,6 +61,19 @@ export interface EmbedStatus {
   displayName?: string
 }
 
+export interface RecentVodItem {
+  id: string
+  platform: EmbedPlatform
+  channel: string
+  title: string
+  watchUrl: string
+  playbackUrl?: string
+  thumbnailUrl?: string
+  publishedAt: string
+  durationLabel?: string
+  detail?: string
+}
+
 export interface KickAppToken {
   accessToken: string
   expiresAt: string
@@ -89,6 +102,8 @@ export const YOUTUBE_STATUS_HELP =
 export const KICK_STATUS_HELP =
   'Status da Kick usa o worker do app por padrao. Se quiser, voce ainda pode sobrescrever com Client ID e Client Secret locais.'
 
+const RECENT_VOD_WINDOW_MS = 24 * 60 * 60 * 1000
+
 export function normalizeServerUrl(url: string) {
   return url.trim().replace(/\/+$/, '')
 }
@@ -100,6 +115,26 @@ export function normalizeProxyUrl(url?: string) {
 export function buildProxyUrl(proxyBase: string, targetUrl: string) {
   const base = normalizeProxyUrl(proxyBase)
   return `${base}/proxy?url=${encodeURIComponent(targetUrl)}`
+}
+
+function buildTwitchVodEmbedUrl(videoId: string) {
+  const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
+  return `https://player.twitch.tv/?video=v${encodeURIComponent(videoId)}&parent=${encodeURIComponent(host)}&autoplay=true&muted=true`
+}
+
+function isRecentVodDate(rawDate?: string) {
+  const timestamp = Date.parse(String(rawDate || ''))
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= RECENT_VOD_WINDOW_MS
+}
+
+function buildYoutubeVodsEndpoint(proxyBase: string, channel: string) {
+  const base = normalizeProxyUrl(proxyBase)
+  return `${base}/youtube-vods?channel=${encodeURIComponent(channel)}`
+}
+
+function buildKickVodsEndpoint(proxyBase: string, channel: string) {
+  const base = normalizeProxyUrl(proxyBase)
+  return `${base}/kick-vods?channel=${encodeURIComponent(channel)}`
 }
 
 function ensureBrowserSafeRemoteUrl(rawUrl: string, label: string) {
@@ -443,6 +478,92 @@ export async function fetchTwitchStatuses(
   )
 }
 
+export async function fetchTwitchRecentVods(
+  channels: string[],
+  clientId: string,
+  accessToken: string,
+): Promise<RecentVodItem[]> {
+  if (!channels.length) {
+    return []
+  }
+
+  const userParams = new URLSearchParams()
+  channels.forEach((channel) => userParams.append('login', channel))
+
+  const usersResponse = await fetch(`https://api.twitch.tv/helix/users?${userParams.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Client-Id': clientId,
+    },
+  })
+
+  if (!usersResponse.ok) {
+    throw new Error('Falha ao consultar os perfis da Twitch para buscar VODs.')
+  }
+
+  const usersPayload = (await usersResponse.json()) as {
+    data?: Array<{
+      id?: string
+      login?: string
+      display_name?: string
+      profile_image_url?: string
+    }>
+  }
+
+  const users = (usersPayload.data ?? []).filter((item) => item.id && item.login)
+  const videoGroups = await Promise.all(
+    users.map(async (user) => {
+      const response = await fetch(
+        `https://api.twitch.tv/helix/videos?user_id=${encodeURIComponent(user.id!)}&type=archive&first=4`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Client-Id': clientId,
+          },
+        },
+      )
+
+      if (!response.ok) {
+        return []
+      }
+
+      const payload = (await response.json()) as {
+        data?: Array<{
+          id?: string
+          title?: string
+          url?: string
+          created_at?: string
+          published_at?: string
+          thumbnail_url?: string
+          duration?: string
+          view_count?: number
+        }>
+      }
+
+      return (payload.data ?? [])
+        .filter((item) => item.id && item.url && isRecentVodDate(item.created_at || item.published_at))
+        .map<RecentVodItem>((item) => ({
+          id: `twitch-vod:${item.id}`,
+          platform: 'twitch',
+          channel: user.login!,
+          title: item.title?.trim() || `${user.display_name || user.login} replay recente`,
+          watchUrl: item.url!,
+          playbackUrl: buildTwitchVodEmbedUrl(item.id!),
+          thumbnailUrl: item.thumbnail_url
+            ?.replace(/%{width}/g, '640')
+            .replace(/%{height}/g, '360'),
+          publishedAt: item.created_at || item.published_at || new Date().toISOString(),
+          durationLabel: item.duration || undefined,
+          detail: item.view_count ? `${item.view_count} views` : 'VOD recente da Twitch.',
+        }))
+    }),
+  )
+
+  return videoGroups
+    .flat()
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
+}
+
 function normalizeYoutubeChannel(value: string) {
   const trimmed = value.trim()
   if (!trimmed) return ''
@@ -568,6 +689,42 @@ export async function resolveYoutubeChannelInput(
   }
 
   throw new Error(payload.error || 'Nao consegui identificar o canal por esse link do YouTube.')
+}
+
+export async function fetchYoutubeRecentVods(
+  channels: string[],
+  proxyBase: string,
+): Promise<RecentVodItem[]> {
+  if (!channels.length) {
+    return []
+  }
+
+  const groups = await Promise.all(
+    channels.map(async (channel) => {
+      try {
+        const response = await fetch(buildYoutubeVodsEndpoint(proxyBase, channel), {
+          headers: { Accept: 'application/json' },
+        })
+
+        if (!response.ok) {
+          throw new Error(`YouTube respondeu ${response.status}.`)
+        }
+
+        const payload = (await response.json()) as { items?: RecentVodItem[] }
+        return (payload.items ?? []).map((item) => ({
+          ...item,
+          platform: 'youtube' as const,
+          channel,
+        }))
+      } catch {
+        return [] as RecentVodItem[]
+      }
+    }),
+  )
+
+  return groups
+    .flat()
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
 }
 
 export async function fetchKickAppAccessToken(
@@ -748,4 +905,40 @@ export async function fetchKickStatusesFromWorker(
   )
 
   return Object.fromEntries(entries)
+}
+
+export async function fetchKickRecentVods(
+  channels: string[],
+  proxyBase: string,
+): Promise<RecentVodItem[]> {
+  if (!channels.length) {
+    return []
+  }
+
+  const groups = await Promise.all(
+    channels.map(async (channel) => {
+      try {
+        const response = await fetch(buildKickVodsEndpoint(proxyBase, channel), {
+          headers: { Accept: 'application/json' },
+        })
+
+        if (!response.ok) {
+          throw new Error(`Kick respondeu ${response.status}.`)
+        }
+
+        const payload = (await response.json()) as { items?: RecentVodItem[] }
+        return (payload.items ?? []).map((item) => ({
+          ...item,
+          platform: 'kick' as const,
+          channel,
+        }))
+      } catch {
+        return [] as RecentVodItem[]
+      }
+    }),
+  )
+
+  return groups
+    .flat()
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
 }

@@ -6,10 +6,13 @@ import {
   type Channel,
   fetchCustomStatus,
   fetchKickAppAccessToken,
+  fetchKickRecentVods,
   fetchKickStatuses,
   fetchKickStatusesFromWorker,
   fetchM3UPlaylist,
+  fetchTwitchRecentVods,
   fetchTwitchStatuses,
+  fetchYoutubeRecentVods,
   fetchYoutubeStatuses,
   fetchXtreamPlaylist,
   KICK_STATUS_HELP,
@@ -23,6 +26,7 @@ import {
   type M3UCredentials,
   type PersistedConnection,
   type PlaylistSession,
+  type RecentVodItem,
   type XtreamCredentials,
 } from './lib/iptv'
 import {
@@ -396,6 +400,34 @@ function embedAvatarUrl(status: EmbedStatus | undefined) {
 
 function embedDisplayName(item: EmbedStream, status: EmbedStatus | undefined) {
   return status?.displayName?.trim() || item.title
+}
+
+function formatRecentVodAge(value: string) {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return 'Agora'
+
+  const diffMs = Math.max(Date.now() - timestamp, 0)
+  const diffMinutes = Math.round(diffMs / 60_000)
+
+  if (diffMinutes < 60) {
+    return `ha ${Math.max(diffMinutes, 1)} min`
+  }
+
+  const diffHours = Math.round(diffMinutes / 60)
+  if (diffHours < 24) {
+    return `ha ${diffHours}h`
+  }
+
+  const diffDays = Math.round(diffHours / 24)
+  return `ha ${diffDays} dia${diffDays > 1 ? 's' : ''}`
+}
+
+function recentVodPlatformLabel(platform: RecentVodItem['platform']) {
+  return platform === 'youtube' ? 'YouTube' : platform === 'kick' ? 'Kick' : 'Twitch'
+}
+
+function recentVodStatusTone(platform: RecentVodItem['platform']) {
+  return statusTone('online', platform)
 }
 
 function isTokenFresh(expiresAt?: string) {
@@ -1111,6 +1143,10 @@ export function App() {
   const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
   const [selectedRadioId, setSelectedRadioId] = useState<string>(() => readJson<string>(SELECTED_RADIO_KEY, radioStations[0]?.id || ''))
   const [selectedMovieId, setSelectedMovieId] = useState<string | null>(() => window.localStorage.getItem(SELECTED_MOVIE_KEY))
+  const [selectedVod, setSelectedVod] = useState<RecentVodItem | null>(null)
+  const [recentVods, setRecentVods] = useState<RecentVodItem[]>([])
+  const [recentVodsLoading, setRecentVodsLoading] = useState(false)
+  const [recentVodsError, setRecentVodsError] = useState('')
   const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
   const [resolvedNewsEmbedUrl, setResolvedNewsEmbedUrl] = useState('')
   const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
@@ -2456,6 +2492,96 @@ export function App() {
   ])
 
   useEffect(() => {
+    let isActive = true
+
+    const twitchChannels = Array.from(
+      new Set(
+        embeds
+          .filter((item) => item.platform === 'twitch')
+          .map((item) => item.channel.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    )
+    const youtubeChannels = Array.from(
+      new Set(
+        embeds
+          .filter((item) => item.platform === 'youtube')
+          .map((item) => item.channel.trim())
+          .filter(Boolean),
+      ),
+    )
+    const kickChannels = Array.from(
+      new Set(
+        embeds
+          .filter((item) => item.platform === 'kick')
+          .map((item) => item.channel.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    )
+
+    if (!twitchChannels.length && !youtubeChannels.length && !kickChannels.length) {
+      setRecentVods([])
+      setRecentVodsError('')
+      setRecentVodsLoading(false)
+      return
+    }
+
+    const loadRecentVods = async () => {
+      setRecentVodsLoading(true)
+      setRecentVodsError('')
+
+      const loaders = [
+        youtubeChannels.length
+          ? fetchYoutubeRecentVods(youtubeChannels, DEFAULT_XTREAM_PROXY_URL).catch(() => [] as RecentVodItem[])
+          : Promise.resolve([] as RecentVodItem[]),
+        kickChannels.length
+          ? fetchKickRecentVods(kickChannels, DEFAULT_XTREAM_PROXY_URL).catch(() => [] as RecentVodItem[])
+          : Promise.resolve([] as RecentVodItem[]),
+        twitchChannels.length && settings.twitchClientId && settings.twitchAccessToken
+          ? fetchTwitchRecentVods(
+              twitchChannels,
+              settings.twitchClientId,
+              settings.twitchAccessToken,
+            ).catch(() => [] as RecentVodItem[])
+          : Promise.resolve([] as RecentVodItem[]),
+      ]
+
+      try {
+        const [youtubeItems, kickItems, twitchItems] = await Promise.all(loaders)
+        if (!isActive) return
+
+        const merged = [...youtubeItems, ...kickItems, ...twitchItems]
+          .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
+          .slice(0, 12)
+
+        setRecentVods(merged)
+      } catch (error) {
+        if (!isActive) return
+        setRecentVodsError(error instanceof Error ? error.message : 'Nao foi possivel carregar os VODs recentes.')
+      } finally {
+        if (isActive) {
+          setRecentVodsLoading(false)
+        }
+      }
+    }
+
+    void loadRecentVods()
+
+    const interval = window.setInterval(() => {
+      void loadRecentVods()
+    }, 5 * 60_000)
+
+    return () => {
+      isActive = false
+      window.clearInterval(interval)
+    }
+  }, [
+    embeds,
+    settings.twitchAccessToken,
+    settings.twitchClientId,
+  ])
+
+  useEffect(() => {
     const destroyTwitchPlayer = () => {
       try {
         twitchPlayerRef.current?.pause?.()
@@ -2577,6 +2703,7 @@ export function App() {
   }
 
   function setSurface(surface: MediaSurface) {
+    setSelectedVod(null)
     setActiveSurface(surface)
 
     if (surface === 'twitch') {
@@ -2619,10 +2746,16 @@ export function App() {
         : embed.platform === 'youtube'
           ? 'YouTube em foco'
           : 'Kick em foco',
-    )
+      )
+    }
+
+  function activateVod(vod: RecentVodItem) {
+    setSelectedVod(vod)
+    setPlayerError('')
+    setPlayerState('Replay recente carregado no palco')
   }
 
-  function activateRadio(radioId?: string) {
+    function activateRadio(radioId?: string) {
     if (radioId) setSelectedRadioId(radioId)
     setRadioReplay(null)
     setSurface('radio')
@@ -3181,7 +3314,7 @@ export function App() {
                 <span>Noticias ao vivo</span>
                 <small>{newsLinks.length} links</small>
               </button>
-              {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{orderedNewsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => setSelectedNewsId(item.id)}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
+              {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{orderedNewsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
             </div>
 
             <div class={activeSurface === 'radio' ? 'sidebar-section active' : 'sidebar-section'}>
@@ -3222,14 +3355,21 @@ export function App() {
         </aside>
 
         <section class="panel stage-panel">
-          {activeSurface === 'news' ? (
+          {selectedVod ? (
+            <div class="feed-strip stage-feed-strip">
+              <span class="feed-pill active">{recentVodPlatformLabel(selectedVod.platform)}</span>
+              <span class="feed-pill">{selectedVod.channel}</span>
+              <span class="feed-pill">{formatRecentVodAge(selectedVod.publishedAt)}</span>
+              <span class="feed-pill soft">{selectedVod.durationLabel || 'Replay recente'}</span>
+            </div>
+          ) : activeSurface === 'news' ? (
             <div class="feed-strip-shell stage-feed-strip">
               <button aria-label="Ver canais anteriores" class="feed-strip-nav" disabled={!newsStripLeftReady} type="button" onClick={() => scrollNewsStrip('left')}>
                 <span aria-hidden="true">‹</span>
               </button>
               <div class="feed-strip feed-strip-scroll" ref={newsStripRef}>
                 {orderedNewsLinks.map((item) => (
-                  <button class={selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => setSelectedNewsId(item.id)}>
+                  <button class={selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}>
                     <span>{item.name}</span>
                     <strong>LIVE</strong>
                   </button>
@@ -3287,7 +3427,21 @@ export function App() {
               </div>
             )}
 
-          {activeSurface === 'iptv' ? (
+          {selectedVod ? (
+            <>
+              <div class="panel-heading">
+                <div><p class="section-tag">Replay recente</p><h2>{selectedVod.title}</h2></div>
+                <div class="pill-row"><span class={recentVodStatusTone(selectedVod.platform)}>{recentVodPlatformLabel(selectedVod.platform)}</span><a class="ghost-button compact" href={selectedVod.watchUrl} rel="noreferrer" target="_blank">Abrir original</a></div>
+              </div>
+              <div class="player-frame embed-stage-frame news-embed-frame">
+                <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(selectedVod.playbackUrl || selectedVod.watchUrl)} title={selectedVod.title} />
+              </div>
+              <div class="player-meta">
+                <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedVod.channel}</h3><p class="helper-copy">{selectedVod.detail || 'Replay recente carregado a partir dos canais que voce ja segue.'}</p></div>
+                <div class="subtle-card compact-card"><p class="section-tag">Publicado</p><h3>{formatRecentVodAge(selectedVod.publishedAt)}</h3><p class="helper-copy">{selectedVod.durationLabel || 'Abrindo o VOD direto no palco principal para voce voltar entre live e replay sem sair do site.'}</p></div>
+              </div>
+            </>
+          ) : activeSurface === 'iptv' ? (
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">IPTV ao vivo</p><h2>{selectedChannel?.name || 'Selecione um canal'}</h2></div>
@@ -3350,7 +3504,7 @@ export function App() {
                       <p class="helper-copy">{item.note}</p>
                     </div>
                     <div class="feed-chip-actions">
-                      <button class="ghost-button compact" type="button" onClick={() => setSelectedNewsId(item.id)}>Selecionar</button>
+                      <button class="ghost-button compact" type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}>Selecionar</button>
                       <a class="ghost-button compact" href={item.href} rel="noreferrer" target="_blank">Abrir link</a>
                     </div>
                   </article>
@@ -3628,17 +3782,59 @@ export function App() {
                 <p class="helper-copy">O site tenta abrir o arquivo em modo preview do Google Drive. Se o preview nao ficar bom, o botao Abrir no Drive fica disponivel no palco.</p>
               </div>
             </div>
-            <div class="feed-chip-grid">
-              {embeds.map((item) => {
-                const status = statusMap[item.channel.toLowerCase()]
-                return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
-              })}
-              {movies.map((item) => (
-                <article class="feed-chip-card" key={item.id}><div><p class="section-tag">cinema</p><h3>{item.title}</h3><p class="helper-copy">Google Drive preview</p></div><div class="feed-chip-actions"><button class="ghost-button compact" type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeMovie(item.id)}>Remover</button></div></article>
-              ))}
-            </div>
-          </section>
-        )}
+              <div class="feed-chip-grid">
+                {embeds.map((item) => {
+                  const status = statusMap[item.channel.toLowerCase()]
+                  return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
+                })}
+                {movies.map((item) => (
+                  <article class="feed-chip-card" key={item.id}><div><p class="section-tag">cinema</p><h3>{item.title}</h3><p class="helper-copy">Google Drive preview</p></div><div class="feed-chip-actions"><button class="ghost-button compact" type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeMovie(item.id)}>Remover</button></div></article>
+                ))}
+              </div>
+              <div class="vod-panel">
+                <div class="panel-heading compact-panel-heading">
+                  <div><p class="section-tag">VODs recentes</p><h3>Lives encerradas dos canais que voce ja segue</h3></div>
+                  <span class="pill">{recentVods.length} itens</span>
+                </div>
+                {recentVodsLoading ? (
+                  <div class="empty-state compact-empty">
+                    <strong>Carregando VODs recentes...</strong>
+                    <span>Buscando replays do ultimo dia em Twitch, YouTube e Kick.</span>
+                  </div>
+                ) : recentVods.length ? (
+                  <div class="vod-card-list">
+                    {recentVods.map((item) => (
+                      <button
+                        class={selectedVod?.id === item.id ? 'vod-card active' : 'vod-card'}
+                        key={item.id}
+                        type="button"
+                        onClick={() => activateVod(item)}
+                      >
+                        <div class="vod-card-thumb">
+                          {item.thumbnailUrl ? <img alt={item.title} loading="lazy" src={item.thumbnailUrl} /> : <span>{item.channel.slice(0, 2).toUpperCase()}</span>}
+                        </div>
+                        <div class="vod-card-copy">
+                          <div class="vod-card-meta">
+                            <span class={recentVodStatusTone(item.platform)}>{recentVodPlatformLabel(item.platform)}</span>
+                            <small>{formatRecentVodAge(item.publishedAt)}</small>
+                          </div>
+                          <strong>{item.title}</strong>
+                          <span>{item.channel}</span>
+                          <small>{item.durationLabel || item.detail || 'Replay recente do canal.'}</small>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div class="empty-state compact-empty">
+                    <strong>Nenhum VOD recente apareceu ainda.</strong>
+                    <span>O painel olha so para os canais que voce ja segue e mostra replays recentes do ultimo dia quando a plataforma entregar esse historico.</span>
+                  </div>
+                )}
+                {recentVodsError ? <p class="helper-copy vod-helper">{recentVodsError}</p> : null}
+              </div>
+            </section>
+          )}
       </main>
     </div>
   )

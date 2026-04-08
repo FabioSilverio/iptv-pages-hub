@@ -21,11 +21,19 @@ export default {
       return handleYouTubeResolve(request, url)
     }
 
+    if (url.pathname === '/youtube-vods') {
+      return handleYouTubeVods(request, url)
+    }
+
+    if (url.pathname === '/kick-vods') {
+      return handleKickVods(request, env, url)
+    }
+
     if (url.pathname !== '/proxy') {
       return json(
         {
           ok: true,
-          usage: '/proxy?url=http://origin/path or /kick-status?channel=xqc or /youtube-status?channel=@vaush',
+          usage: '/proxy?url=http://origin/path or /kick-status?channel=xqc or /youtube-status?channel=@vaush or /youtube-vods?channel=@vaush',
         },
         200,
         request,
@@ -288,6 +296,59 @@ async function handleYouTubeResolve(request, url) {
   }
 }
 
+async function handleYouTubeVods(request, url) {
+  const channel = normalizeYouTubeChannel(String(url.searchParams.get('channel') || ''))
+  if (!channel) {
+    return json({ error: 'Missing channel query param.' }, 400, request)
+  }
+
+  try {
+    const pageUrl = buildYouTubeStreamsPageUrl(channel)
+    const response = await fetch(pageUrl, {
+      headers: buildUpstreamHeaders(request.headers, new URL(pageUrl)),
+      redirect: 'follow',
+    })
+
+    if (!response.ok) {
+      throw new Error(`YouTube respondeu ${response.status}.`)
+    }
+
+    const html = await response.text()
+    const items = extractYouTubeRecentVods(html, channel)
+    return json({ items }, 200, request)
+  } catch (error) {
+    return json(
+      {
+        items: [],
+        error: error instanceof Error ? error.message : 'Nao foi possivel consultar os VODs do YouTube agora.',
+      },
+      200,
+      request,
+    )
+  }
+}
+
+async function handleKickVods(request, env, url) {
+  const channel = String(url.searchParams.get('channel') || '').trim().toLowerCase()
+  if (!channel) {
+    return json({ error: 'Missing channel query param.' }, 400, request)
+  }
+
+  try {
+    const items = await fetchKickRecentVods(channel, env)
+    return json({ items }, 200, request)
+  } catch (error) {
+    return json(
+      {
+        items: [],
+        error: error instanceof Error ? error.message : 'Nao foi possivel consultar os VODs da Kick agora.',
+      },
+      200,
+      request,
+    )
+  }
+}
+
 let kickTokenCache = {
   accessToken: '',
   expiresAt: 0,
@@ -415,6 +476,14 @@ function buildYouTubeLivePageUrl(channel) {
     : `https://www.youtube.com/${normalized}/live?hl=en`
 }
 
+function buildYouTubeStreamsPageUrl(channel) {
+  const normalized = normalizeYouTubeChannel(channel)
+  if (!normalized) return 'https://www.youtube.com'
+  return normalized.startsWith('live/')
+    ? `https://www.youtube.com/${normalized}?hl=en`
+    : `https://www.youtube.com/${normalized}/streams?hl=en`
+}
+
 function buildYouTubeWatchUrl(channel) {
   const normalized = normalizeYouTubeChannel(channel)
   if (!normalized) return 'https://www.youtube.com'
@@ -512,6 +581,52 @@ function extractYouTubeDisplayName(html, fallbackChannel) {
   return fallbackChannel
 }
 
+function extractYouTubeRecentVods(html, channel) {
+  const blocks = [...html.matchAll(/"videoRenderer":\{([\s\S]{0,8000}?)\},"trackingParams"/g)]
+  const seenIds = new Set()
+  const items = []
+
+  for (const match of blocks) {
+    const block = match[1] || ''
+    const videoId = block.match(/"videoId":"([A-Za-z0-9_-]{11})"/)?.[1]
+    if (!videoId || seenIds.has(videoId)) continue
+
+    const isLiveNow =
+      /BADGE_STYLE_TYPE_LIVE_NOW|"label":"LIVE NOW"|"label":"Ao vivo"|"watching"|assistindo/i.test(block)
+    if (isLiveNow) continue
+
+    const publishedText =
+      decodeWebText(block.match(/"publishedTimeText":\{"simpleText":"([^"]+)"/)?.[1] || '')
+    const publishedAt = parseRelativeVideoTimeToIso(publishedText)
+    if (!publishedAt) continue
+
+    const title =
+      decodeWebText(block.match(/"title":\{"runs":\[\{"text":"([^"]+)"/)?.[1] || '')
+      || decodeWebText(block.match(/"title":\{"simpleText":"([^"]+)"/)?.[1] || '')
+      || `${channel} replay recente`
+    const durationLabel = decodeWebText(block.match(/"lengthText":\{"simpleText":"([^"]+)"/)?.[1] || '')
+    const viewText = decodeWebText(block.match(/"viewCountText":\{"simpleText":"([^"]+)"/)?.[1] || '')
+
+    seenIds.add(videoId)
+    items.push({
+      id: `youtube-vod:${videoId}`,
+      platform: 'youtube',
+      channel,
+      title,
+      watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      playbackUrl: buildYouTubeEmbedUrl(videoId),
+      thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      publishedAt,
+      durationLabel: durationLabel || undefined,
+      detail: viewText || publishedText || 'Replay recente do YouTube.',
+    })
+  }
+
+  return items
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
+    .slice(0, 4)
+}
+
 async function resolveKickProfile(channel, data) {
   const directAvatar =
     data?.user?.profile_pic
@@ -545,6 +660,380 @@ async function resolveKickProfile(channel, data) {
   return {
     avatarUrl: htmlProfile.avatarUrl || '',
     displayName: htmlProfile.displayName || directName,
+  }
+}
+
+async function fetchKickRecentVods(channel, env) {
+  const apiItems = await fetchKickRecentVodsFromApi(channel, env)
+  if (apiItems.length) {
+    return apiItems
+  }
+
+  return fetchKickRecentVodsFromHtml(channel)
+}
+
+async function fetchKickRecentVodsFromApi(channel, env) {
+  const token = env.KICK_CLIENT_ID && env.KICK_CLIENT_SECRET
+    ? await getKickAccessToken(env)
+    : ''
+  const endpoints = [
+    `https://api.kick.com/public/v1/channels/${encodeURIComponent(channel)}/videos`,
+    `https://api.kick.com/public/v1/channels/${encodeURIComponent(channel)}/livestreams`,
+    `https://kick.com/api/v2/channels/${encodeURIComponent(channel)}/videos`,
+    `https://kick.com/api/v1/channels/${encodeURIComponent(channel)}/videos`,
+  ]
+
+  for (const endpoint of endpoints) {
+    try {
+      const headers = {
+        Accept: 'application/json',
+        Referer: `https://kick.com/${channel}/videos`,
+        Origin: 'https://kick.com',
+        'User-Agent': browserUserAgent(),
+      }
+
+      if (token && endpoint.includes('api.kick.com/public/')) {
+        headers.Authorization = `Bearer ${token}`
+      }
+
+      const response = await fetch(endpoint, { headers })
+      if (!response.ok) continue
+
+      const payload = await response.json()
+      const items = normalizeKickVodPayload(payload, channel)
+      if (items.length) {
+        return items
+      }
+    } catch {
+      // Try the next Kick VOD source.
+    }
+  }
+
+  return []
+}
+
+async function fetchKickRecentVodsFromHtml(channel) {
+  try {
+    const response = await fetch(`https://kick.com/${encodeURIComponent(channel)}/videos`, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Referer: `https://kick.com/${channel}`,
+        Origin: 'https://kick.com',
+        'User-Agent': browserUserAgent(),
+      },
+      redirect: 'follow',
+    })
+
+    if (!response.ok) {
+      return []
+    }
+
+    const html = await response.text()
+    const items = []
+    const matches = [...html.matchAll(/href="(\/video\/[^"]+|\/videos\/[^"]+)"/g)]
+
+    for (const match of matches.slice(0, 6)) {
+      const href = match[1]
+      const watchUrl = href.startsWith('http') ? href : `https://kick.com${href}`
+      const context = html.slice(Math.max(0, match.index - 1200), match.index + 2400)
+      const publishedText = decodeWebText(
+        context.match(/(\d+\s+(?:minute|hour|day)s?\s+ago|yesterday)/i)?.[1] || '',
+      )
+      const publishedAt = parseRelativeVideoTimeToIso(publishedText)
+      if (!publishedAt) continue
+
+      const title =
+        decodeWebText(context.match(/"title":"([^"]+)"/i)?.[1] || '')
+        || decodeWebText(context.match(/alt="([^"]+)"/i)?.[1] || '')
+        || `${channel} replay recente`
+      const thumbnailUrl =
+        context.match(/https:\/\/files\.kick\.com\/[^"'\\\s>]+/i)?.[0]
+        || ''
+
+      items.push({
+        id: `kick-vod:${href}`,
+        platform: 'kick',
+        channel,
+        title,
+        watchUrl,
+        playbackUrl: buildKickVodPlaybackUrl(watchUrl),
+        thumbnailUrl: thumbnailUrl.replace(/\\u0026/g, '&') || undefined,
+        publishedAt,
+        detail: publishedText || 'Replay recente da Kick.',
+      })
+    }
+
+    return dedupeVodItems(items)
+  } catch {
+    return []
+  }
+}
+
+function normalizeKickVodPayload(payload, channel) {
+  const rawItems = []
+
+  if (Array.isArray(payload)) {
+    rawItems.push(...payload)
+  }
+  if (Array.isArray(payload?.data)) {
+    rawItems.push(...payload.data)
+  }
+  if (Array.isArray(payload?.videos)) {
+    rawItems.push(...payload.videos)
+  }
+  if (Array.isArray(payload?.stream_videos)) {
+    rawItems.push(...payload.stream_videos)
+  }
+  if (Array.isArray(payload?.livestreams)) {
+    rawItems.push(...payload.livestreams)
+  }
+
+  const items = rawItems
+    .map((item) => normalizeKickVodItem(item, channel))
+    .filter(Boolean)
+
+  return dedupeVodItems(items)
+}
+
+function normalizeKickVodItem(item, channel) {
+  const publishedAt =
+    item?.created_at
+    || item?.published_at
+    || item?.start_time
+    || item?.ended_at
+    || ''
+
+  if (!publishedAt || !isRecentIsoDate(publishedAt)) {
+    return null
+  }
+
+  const rawUrl =
+    item?.url
+    || item?.share_url
+    || item?.watch_url
+    || item?.permalink
+    || item?.slug
+    || item?.video_url
+    || ''
+  const watchUrl = normalizeKickVodUrl(rawUrl, channel, item?.id)
+  const playbackUrl = buildKickVodPlaybackUrl(watchUrl)
+
+  return {
+    id: `kick-vod:${item?.id || watchUrl}`,
+    platform: 'kick',
+    channel,
+    title:
+      decodeWebText(item?.session_title || '')
+      || decodeWebText(item?.stream_title || '')
+      || decodeWebText(item?.title || '')
+      || `${channel} replay recente`,
+    watchUrl,
+    playbackUrl,
+    thumbnailUrl: normalizeVodThumbnailUrl(
+      pickKickThumbnailUrl(item)
+      || item?.thumbnailUrl
+      || item?.thumbnail_url
+      || item?.thumbnail
+      || item?.image,
+    ),
+    publishedAt: new Date(publishedAt).toISOString(),
+    durationLabel: normalizeVodDurationLabel(
+      item?.durationLabel
+      || item?.duration_hms
+      || item?.duration
+      || item?.length,
+    ),
+    detail: item?.view_count ? `${item.view_count} views` : 'Replay recente da Kick.',
+  }
+}
+
+function normalizeKickVodUrl(rawUrl, channel, fallbackId) {
+  const value = String(rawUrl || '').trim()
+  if (!value) {
+    return fallbackId ? `https://kick.com/video/${fallbackId}` : `https://kick.com/${channel}/videos`
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return value
+  }
+  if (value.startsWith('/')) {
+    return `https://kick.com${value}`
+  }
+  if (/^[A-Za-z0-9_-]+$/.test(value) && String(fallbackId || '') !== value) {
+    return `https://kick.com/video/${value}`
+  }
+  return `https://kick.com/${channel}/videos`
+}
+
+function buildKickVodPlaybackUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl)
+    if (url.hostname === 'kick.com' && url.pathname.startsWith('/video/')) {
+      url.hostname = 'player.kick.com'
+      url.searchParams.set('autoplay', 'true')
+      url.searchParams.set('muted', 'true')
+    }
+    return url.toString()
+  } catch {
+    return rawUrl
+  }
+}
+
+function dedupeVodItems(items) {
+  const seen = new Set()
+  return items
+    .filter((item) => item && item.watchUrl && item.publishedAt)
+    .filter((item) => {
+      const key = `${item.watchUrl}:${item.publishedAt}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
+    .slice(0, 4)
+}
+
+function pickKickThumbnailUrl(item) {
+  return (
+    item?.thumbnail?.url
+    || item?.thumbnail?.src
+    || item?.thumbnail_url?.src
+    || item?.thumbnail_url
+    || item?.thumbnailUrl?.src
+    || item?.thumbnailUrl
+    || item?.image?.src
+    || item?.image
+    || undefined
+  )
+}
+
+function normalizeVodThumbnailUrl(rawValue) {
+  if (!rawValue) return undefined
+
+  if (typeof rawValue === 'string') {
+    return rawValue.trim().replace(/\\u0026/g, '&') || undefined
+  }
+
+  if (Array.isArray(rawValue)) {
+    for (const entry of rawValue) {
+      const candidate = normalizeVodThumbnailUrl(entry)
+      if (candidate) return candidate
+    }
+    return undefined
+  }
+
+  if (typeof rawValue === 'object') {
+    return (
+      normalizeVodThumbnailUrl(rawValue.src)
+      || normalizeVodThumbnailUrl(rawValue.url)
+      || normalizeVodThumbnailUrl(rawValue.href)
+      || normalizeVodThumbnailUrl(rawValue.default)
+      || normalizeVodThumbnailUrl(rawValue.medium)
+      || normalizeVodThumbnailUrl(rawValue.large)
+      || normalizeVodThumbnailUrl(rawValue.original)
+      || normalizeVodThumbnailUrl(String(rawValue.srcset || '').split(',')[0]?.trim().split(' ')[0])
+    )
+  }
+
+  return undefined
+}
+
+function formatVodDuration(rawValue) {
+  if (typeof rawValue === 'string') {
+    return rawValue.trim() || undefined
+  }
+
+  const totalMs = Number(rawValue)
+  if (!Number.isFinite(totalMs) || totalMs <= 0) {
+    return undefined
+  }
+
+  const totalSeconds = Math.round(totalMs / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`
+}
+
+function normalizeVodDurationLabel(rawValue) {
+  if (rawValue == null) return undefined
+
+  if (typeof rawValue === 'string') {
+    const trimmed = rawValue.trim()
+    if (!trimmed) return undefined
+    if (/^\d+$/.test(trimmed)) {
+      return formatVodDuration(Number(trimmed))
+    }
+    return trimmed
+  }
+
+  if (typeof rawValue === 'number') {
+    return formatVodDuration(rawValue)
+  }
+
+  if (typeof rawValue === 'object') {
+    return (
+      normalizeVodDurationLabel(rawValue.label)
+      || normalizeVodDurationLabel(rawValue.text)
+      || normalizeVodDurationLabel(rawValue.duration)
+      || normalizeVodDurationLabel(rawValue.ms)
+      || normalizeVodDurationLabel(rawValue.value)
+    )
+  }
+
+  return undefined
+}
+
+function parseRelativeVideoTimeToIso(rawText) {
+  const text = String(rawText || '').trim().toLowerCase().replace(/^streamed\s+/i, '')
+  if (!text) return ''
+
+  if (text === 'yesterday') {
+    return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  }
+
+  const match = text.match(/(\d+)\s+(minute|minutes|hour|hours|day|days)\s+ago/)
+  if (!match) return ''
+
+  const amount = Number(match[1])
+  const unit = match[2]
+  if (!Number.isFinite(amount)) return ''
+
+  const multiplier =
+    unit.startsWith('minute')
+      ? 60 * 1000
+      : unit.startsWith('hour')
+        ? 60 * 60 * 1000
+        : 24 * 60 * 60 * 1000
+
+  const publishedAt = Date.now() - amount * multiplier
+  if (Date.now() - publishedAt > 24 * 60 * 60 * 1000) {
+    return ''
+  }
+
+  return new Date(publishedAt).toISOString()
+}
+
+function isRecentIsoDate(rawDate) {
+  const timestamp = Date.parse(String(rawDate || ''))
+  return Number.isFinite(timestamp) && Date.now() - timestamp <= 24 * 60 * 60 * 1000
+}
+
+function decodeWebText(rawValue) {
+  const value = String(rawValue || '').trim()
+  if (!value) return ''
+
+  try {
+    return JSON.parse(`"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+  } catch {
+    return value
+      .replace(/\\u0026/g, '&')
+      .replace(/\\"/g, '"')
+      .replace(/\\\//g, '/')
   }
 }
 
