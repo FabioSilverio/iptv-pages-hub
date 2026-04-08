@@ -2350,10 +2350,41 @@ export function App() {
             }
           }
 
-          Object.assign(
-            nextStatus,
-            await fetchKickStatuses(kickChannels, accessToken, DEFAULT_XTREAM_PROXY_URL),
+          const officialKickStatuses = await fetchKickStatuses(
+            kickChannels,
+            accessToken,
+            DEFAULT_XTREAM_PROXY_URL,
           )
+          Object.assign(nextStatus, officialKickStatuses)
+
+          const channelsNeedingProfileFallback = kickChannels.filter((channel) => {
+            const status = officialKickStatuses[channel]
+            return !status?.avatarUrl?.trim() || !status?.displayName?.trim()
+          })
+
+          if (channelsNeedingProfileFallback.length) {
+            try {
+              const workerKickStatuses = await fetchKickStatusesFromWorker(
+                channelsNeedingProfileFallback,
+                DEFAULT_XTREAM_PROXY_URL,
+              )
+
+              channelsNeedingProfileFallback.forEach((channel) => {
+                const currentStatus = officialKickStatuses[channel]
+                const fallbackStatus = workerKickStatuses[channel]
+
+                if (!currentStatus || !fallbackStatus) return
+
+                nextStatus[channel] = {
+                  ...currentStatus,
+                  avatarUrl: currentStatus.avatarUrl?.trim() || fallbackStatus.avatarUrl,
+                  displayName: currentStatus.displayName?.trim() || fallbackStatus.displayName,
+                }
+              })
+            } catch {
+              // Keep the official Kick status if the worker fallback fails.
+            }
+          }
         } catch (error) {
           const detail = error instanceof Error ? error.message : KICK_STATUS_HELP
           kickChannels.forEach((channel) => {
