@@ -328,10 +328,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-news',
     name: 'Fox News',
-    href: 'https://fox-foxnewsnow-vizio.amagi.tv/playlist.m3u8',
-    note: 'Feed HLS Live Now from Fox via Amagi, multi-qualidade ate 720p com audio e legendas.',
-    source: 'Fox News / Amagi',
-    streamUrl: 'https://fox-foxnewsnow-vizio.amagi.tv/playlist.m3u8',
+    href: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxnews.com%2Fhls%2Flive%2F2003586%2FFNCHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
+    note: 'Feed HLS direto da Fox News CDN (247.foxnews.com) via proxy com headers Akamai.',
+    source: 'Fox News / CDN',
+    streamUrl: 'https://iptv-pages-hub.vercel.app/api/proxy?url=https%3A%2F%2F247.foxnews.com%2Fhls%2Flive%2F2003586%2FFNCHLSv3%2Fprimary_2692.m3u8&referer=https%3A%2F%2Fstatic.foxnews.com%2Fstatic%2Forion%2Fhtml%2Fvideo%2Fiframe%2Ftve.html%3Fv%3Dnull&origin=https%3A%2F%2Fstatic.foxnews.com',
   },
   {
     id: 'fox-business',
