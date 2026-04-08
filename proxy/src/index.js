@@ -133,6 +133,7 @@ async function handleKickStatus(request, env, url) {
     const isLive = Boolean(data?.stream?.is_live)
     const viewers = Number(data?.stream?.viewer_count || 0)
     const title = typeof data?.stream_title === 'string' ? data.stream_title : ''
+    const profile = await resolveKickProfile(channel, data)
 
     return json({
       live: isLive,
@@ -142,16 +143,8 @@ async function handleKickStatus(request, env, url) {
           ? `${title}${viewers ? ` • ${viewers} assistindo` : ''}`
           : 'Canal ao vivo na Kick.'
         : 'Canal offline no ultimo refresh.',
-      avatarUrl:
-        data?.user?.profile_pic
-        || data?.user?.profile_picture
-        || data?.user?.profilePicture
-        || '',
-      displayName:
-        data?.user?.username
-        || data?.user?.display_name
-        || data?.slug
-        || channel,
+      avatarUrl: profile.avatarUrl,
+      displayName: profile.displayName,
     }, 200, request)
   } catch (error) {
     return json({
@@ -489,8 +482,16 @@ function extractYouTubeWatchLive(html) {
 }
 
 function extractYouTubeAvatar(html) {
-  const channelMetadataMatch = html.match(/"channelMetadataRenderer":\{[\s\S]{0,4000}?"avatar":\{"thumbnails":\[(.*?)\]\}/i)
-  const avatarChunk = channelMetadataMatch?.[1] || ''
+  const directAvatarMatches = [...html.matchAll(/https:\/\/yt3\.ggpht\.com\/[^"\\]+/g)]
+  const directAvatar = directAvatarMatches.at(-1)?.[0] || directAvatarMatches[0]?.[0]
+  if (directAvatar) {
+    return directAvatar.replace(/\\u0026/g, '&')
+  }
+
+  const channelThumbMatch =
+    html.match(/channelThumbnailWithLinkRenderer\\?":\\?\{"thumbnail\\?":\\?\{"thumbnails\\?":\\?\[(.*?)\]\}/i)
+    || html.match(/"avatar":\{"thumbnails":\[(.*?)\]\}/i)
+  const avatarChunk = channelThumbMatch?.[1] || ''
   const urlMatches = [...avatarChunk.matchAll(/"url":"(https:[^"]+)"/g)]
   const avatarUrl = urlMatches.at(-1)?.[1] || urlMatches[0]?.[1]
 
@@ -509,6 +510,126 @@ function extractYouTubeDisplayName(html, fallbackChannel) {
   }
 
   return fallbackChannel
+}
+
+async function resolveKickProfile(channel, data) {
+  const directAvatar =
+    data?.user?.profile_pic
+    || data?.user?.profile_picture
+    || data?.user?.profilePicture
+    || data?.livestream?.thumbnail?.url
+    || data?.banner_image?.url
+    || ''
+  const directName =
+    data?.user?.username
+    || data?.user?.display_name
+    || data?.slug
+    || channel
+
+  if (directAvatar) {
+    return {
+      avatarUrl: directAvatar,
+      displayName: directName,
+    }
+  }
+
+  const apiProfile = await fetchKickProfileFromApi(channel)
+  if (apiProfile.avatarUrl) {
+    return {
+      avatarUrl: apiProfile.avatarUrl,
+      displayName: apiProfile.displayName || directName,
+    }
+  }
+
+  const htmlProfile = await fetchKickProfileFromHtml(channel)
+  return {
+    avatarUrl: htmlProfile.avatarUrl || '',
+    displayName: htmlProfile.displayName || directName,
+  }
+}
+
+async function fetchKickProfileFromApi(channel) {
+  const endpoints = [
+    `https://kick.com/api/v2/channels/${encodeURIComponent(channel)}`,
+    `https://kick.com/api/v1/channels/${encodeURIComponent(channel)}`,
+  ]
+
+  for (const endpoint of endpoints) {
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          Accept: 'application/json',
+          Referer: `https://kick.com/${channel}`,
+          Origin: 'https://kick.com',
+          'User-Agent': browserUserAgent(),
+        },
+      })
+
+      if (!response.ok) continue
+
+      const payload = await response.json()
+      const avatarUrl =
+        payload?.profile_pic
+        || payload?.profile_picture
+        || payload?.profilePicture
+        || payload?.user?.profile_pic
+        || payload?.user?.profile_picture
+        || payload?.user?.profilePicture
+        || ''
+      const displayName =
+        payload?.username
+        || payload?.display_name
+        || payload?.user?.username
+        || payload?.slug
+        || channel
+
+      if (avatarUrl || displayName) {
+        return { avatarUrl, displayName }
+      }
+    } catch {
+      // Try the next Kick profile source.
+    }
+  }
+
+  return { avatarUrl: '', displayName: channel }
+}
+
+async function fetchKickProfileFromHtml(channel) {
+  try {
+    const response = await fetch(`https://kick.com/${encodeURIComponent(channel)}`, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Referer: 'https://kick.com/',
+        Origin: 'https://kick.com',
+        'User-Agent': browserUserAgent(),
+      },
+      redirect: 'follow',
+    })
+
+    if (!response.ok) {
+      return { avatarUrl: '', displayName: channel }
+    }
+
+    const html = await response.text()
+    const avatarMatch =
+      html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i)
+      || html.match(/<meta\s+name="twitter:image"\s+content="([^"]+)"/i)
+      || html.match(/"profile_pic":"([^"]+)"/i)
+    const displayNameMatch =
+      html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)
+      || html.match(/"name":"([^"]+)"/i)
+
+    return {
+      avatarUrl: avatarMatch?.[1]?.replace(/\\u0026/g, '&') || '',
+      displayName: displayNameMatch?.[1] || channel,
+    }
+  } catch {
+    return { avatarUrl: '', displayName: channel }
+  }
+}
+
+function browserUserAgent() {
+  return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
 }
 
 function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
