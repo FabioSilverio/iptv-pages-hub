@@ -1,8 +1,11 @@
-function buildProxyUrl(proxyOrigin, targetUrl) {
-  return `${proxyOrigin}/api/proxy?url=${encodeURIComponent(targetUrl)}`
+function buildProxyUrl(proxyOrigin, targetUrl, customReferer, customOrigin) {
+  let url = `${proxyOrigin}/api/proxy?url=${encodeURIComponent(targetUrl)}`
+  if (customReferer) url += `&referer=${encodeURIComponent(customReferer)}`
+  if (customOrigin) url += `&origin=${encodeURIComponent(customOrigin)}`
+  return url
 }
 
-function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
+function rewriteManifest(rawManifest, targetUrl, proxyOrigin, customReferer, customOrigin) {
   return rawManifest
     .split(/\r?\n/)
     .map((line) => {
@@ -12,12 +15,12 @@ function rewriteManifest(rawManifest, targetUrl, proxyOrigin) {
       if (trimmed.startsWith('#')) {
         return line.replace(/URI="([^"]+)"/g, (_, uriValue) => {
           const absoluteUrl = new URL(uriValue, targetUrl).toString()
-          return `URI="${buildProxyUrl(proxyOrigin, absoluteUrl)}"`
+          return `URI="${buildProxyUrl(proxyOrigin, absoluteUrl, customReferer, customOrigin)}"`
         })
       }
 
       const absoluteUrl = new URL(trimmed, targetUrl).toString()
-      return buildProxyUrl(proxyOrigin, absoluteUrl)
+      return buildProxyUrl(proxyOrigin, absoluteUrl, customReferer, customOrigin)
     })
     .join('\n')
 }
@@ -38,6 +41,8 @@ export default async function handler(req, res) {
   }
 
   const target = String(req.query.url || '').trim()
+  const customReferer = req.query.referer || ''
+  const customOrigin = req.query.origin || ''
   if (!target) {
     res.writeHead(400, { ...corsHeaders, 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: 'Missing url query param.' }))
@@ -65,9 +70,9 @@ export default async function handler(req, res) {
       headers: {
         Accept: req.headers.accept || '*/*',
         'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-        Referer: targetUrl.origin,
-        Origin: targetUrl.origin,
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+        Referer: customReferer || targetUrl.origin,
+        Origin: customOrigin || targetUrl.origin,
       },
       redirect: 'follow',
     })
@@ -84,7 +89,7 @@ export default async function handler(req, res) {
 
     if (isManifest) {
       const rawManifest = await upstream.text()
-      const manifest = rewriteManifest(rawManifest, targetUrl, proxyOrigin)
+      const manifest = rewriteManifest(rawManifest, targetUrl, proxyOrigin, customReferer, customOrigin)
       res.writeHead(upstream.status, {
         ...corsHeaders,
         'Content-Type': 'application/vnd.apple.mpegurl',
