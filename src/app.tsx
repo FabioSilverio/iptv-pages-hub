@@ -1147,6 +1147,7 @@ export function App() {
   const [recentVods, setRecentVods] = useState<RecentVodItem[]>([])
   const [recentVodsLoading, setRecentVodsLoading] = useState(false)
   const [recentVodsError, setRecentVodsError] = useState('')
+  const [isTheaterMode, setIsTheaterMode] = useState(false)
   const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
   const [resolvedNewsEmbedUrl, setResolvedNewsEmbedUrl] = useState('')
   const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
@@ -2582,6 +2583,27 @@ export function App() {
   ])
 
   useEffect(() => {
+    if (!isTheaterMode) {
+      document.body.style.overflow = ''
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsTheaterMode(false)
+      }
+    }
+
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = ''
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isTheaterMode])
+
+  useEffect(() => {
     const destroyTwitchPlayer = () => {
       try {
         twitchPlayerRef.current?.pause?.()
@@ -2755,7 +2777,23 @@ export function App() {
     setPlayerState('Replay recente carregado no palco')
   }
 
-    function activateRadio(radioId?: string) {
+  function toggleTheaterMode() {
+    setIsTheaterMode((current) => !current)
+  }
+
+  function renderTheaterButton() {
+    return (
+      <button
+        class={classNames('ghost-button', 'compact', 'theater-toggle-button', isTheaterMode && 'active')}
+        type="button"
+        onClick={toggleTheaterMode}
+      >
+        {isTheaterMode ? 'Sair do teatro' : 'Modo teatro'}
+      </button>
+    )
+  }
+
+  function activateRadio(radioId?: string) {
     if (radioId) setSelectedRadioId(radioId)
     setRadioReplay(null)
     setSurface('radio')
@@ -3088,7 +3126,7 @@ export function App() {
   }
 
   return (
-    <div class="app-shell">
+    <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
         <header class="topbar">
           <div>
             <p class="eyebrow">IPTV Pages Hub</p>
@@ -3431,7 +3469,7 @@ export function App() {
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">Replay recente</p><h2>{selectedVod.title}</h2></div>
-                <div class="pill-row"><span class={recentVodStatusTone(selectedVod.platform)}>{recentVodPlatformLabel(selectedVod.platform)}</span><a class="ghost-button compact" href={selectedVod.watchUrl} rel="noreferrer" target="_blank">Abrir original</a></div>
+                <div class="pill-row"><span class={recentVodStatusTone(selectedVod.platform)}>{recentVodPlatformLabel(selectedVod.platform)}</span>{renderTheaterButton()}<a class="ghost-button compact" href={selectedVod.watchUrl} rel="noreferrer" target="_blank">Abrir original</a></div>
               </div>
               <div class="player-frame embed-stage-frame news-embed-frame">
                 <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(selectedVod.playbackUrl || selectedVod.watchUrl)} title={selectedVod.title} />
@@ -3445,7 +3483,7 @@ export function App() {
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">IPTV ao vivo</p><h2>{selectedChannel?.name || 'Selecione um canal'}</h2></div>
-                <div class="pill-row">{selectedChannel ? <button class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'} type="button" onClick={() => toggleFavorite(selectedChannel.id)}>{favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}</button> : null}<span class="pill">{selectedChannel?.group || 'Sem grupo'}</span></div>
+                <div class="pill-row">{selectedChannel ? <button class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'} type="button" onClick={() => toggleFavorite(selectedChannel.id)}>{favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}</button> : null}<span class="pill">{selectedChannel?.group || 'Sem grupo'}</span>{renderTheaterButton()}</div>
               </div>
               <div class="player-frame"><video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} /></div>
               <div class="player-meta">
@@ -3458,7 +3496,7 @@ export function App() {
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">Noticias ao vivo</p><h2>{selectedNewsLink.name}</h2></div>
-                <div class="pill-row"><span class="pill">{selectedNewsLink.source}</span><a class="ghost-button compact" href={selectedNewsLink.href} rel="noreferrer" target="_blank">Abrir transmissao</a></div>
+                <div class="pill-row"><span class="pill">{selectedNewsLink.source}</span>{renderTheaterButton()}<a class="ghost-button compact" href={selectedNewsLink.href} rel="noreferrer" target="_blank">Abrir transmissao</a></div>
               </div>
               {selectedNewsPlayback ? (
                 <>
@@ -3521,6 +3559,7 @@ export function App() {
                 <div class="pill-row">
                   <span class="pill">{selectedRadioStation.source}</span>
                   <span class="pill">{radioPlaybackBadge}</span>
+                  {renderTheaterButton()}
                   <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">Abrir oficial</a>
                 </div>
               </div>
@@ -3614,7 +3653,7 @@ export function App() {
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">Cinema</p><h2>{selectedMovie.title}</h2></div>
-                <div class="pill-row"><span class="pill">Google Drive</span><a class="ghost-button compact" href={selectedMovie.openUrl} rel="noreferrer" target="_blank">Abrir no Drive</a></div>
+                <div class="pill-row"><span class="pill">Google Drive</span>{renderTheaterButton()}<a class="ghost-button compact" href={selectedMovie.openUrl} rel="noreferrer" target="_blank">Abrir no Drive</a></div>
               </div>
               <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedMovie.previewUrl} title={selectedMovie.title} /></div>
               <div class="player-meta">
@@ -3626,7 +3665,7 @@ export function App() {
             <>
               <div class="panel-heading">
                 <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : activeSurface === 'youtube' ? 'YouTube' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
-                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : activeSurface === 'youtube' ? 'youtube' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span><a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : activeSurface === 'youtube' ? (statusMap[activeEmbed.channel.toLowerCase()]?.watchUrl || `https://www.youtube.com/${activeEmbed.channel.startsWith('@') ? activeEmbed.channel : `@${activeEmbed.channel}`}`) : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
+                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : activeSurface === 'youtube' ? 'youtube' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span>{renderTheaterButton()}<a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : activeSurface === 'youtube' ? (statusMap[activeEmbed.channel.toLowerCase()]?.watchUrl || `https://www.youtube.com/${activeEmbed.channel.startsWith('@') ? activeEmbed.channel : `@${activeEmbed.channel}`}`) : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
               </div>
               <div class="player-frame embed-stage-frame">
                 {activeSurface === 'twitch'
