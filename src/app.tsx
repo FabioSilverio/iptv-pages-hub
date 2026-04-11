@@ -267,6 +267,14 @@ const newsLinks: NewsLink[] = [
     source: 'DW News | YouTube',
     youtubeChannel: '@dwnews',
   },
+  {
+    id: 'trt-world',
+    name: 'TRT World',
+    href: 'https://www.youtube.com/@trtworld/live',
+    note: 'Live oficial da TRT World, resolvida dinamicamente pelo canal oficial no YouTube para abrir rapido no palco.',
+    source: 'TRT World | YouTube',
+    youtubeChannel: '@trtworld',
+  },
     {
       id: 'cnn-us',
       name: 'CNN US',
