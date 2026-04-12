@@ -210,7 +210,6 @@ const globalCatchupCache = new Map<string, Array<{
 }>>()
 const foxNewsTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614615980001')
 const foxBusinessTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614626175001')
-const rtNewsEmbedUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.rt.com/on-air/rumble/')
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -351,10 +350,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'rt-news',
     name: 'RT News English',
-    href: 'https://www.rt.com/on-air/rumble/',
-    note: 'Pagina oficial RT News Rumble aberta dentro do palco do site, usando o player oficial em ingles publicado pela propria RT.',
-    source: 'RT official Rumble player',
-    embedUrl: rtNewsEmbedUrl,
+    href: 'https://www.rt.com/on-air/rt-player/',
+    note: 'Feed HLS oficial da RT News English, em dominio da propria RT, tocando direto no player leve do site.',
+    source: 'RT HLS',
+    streamUrl: 'https://rt-glb.rttv.com/live/rtnews/playlist.m3u8',
   },
   {
     id: 'fox-news',
