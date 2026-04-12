@@ -210,6 +210,7 @@ const globalCatchupCache = new Map<string, Array<{
 }>>()
 const foxNewsTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614615980001')
 const foxBusinessTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614626175001')
+const rtNewsTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.rt.com/on-air/rt-player/')
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -266,6 +267,14 @@ const newsLinks: NewsLink[] = [
     note: 'Live oficial da DW News English, resolvida dinamicamente pelo canal oficial no YouTube.',
     source: 'DW News | YouTube',
     youtubeChannel: '@dwnews',
+  },
+  {
+    id: 'euronews',
+    name: 'Euronews',
+    href: 'https://www.youtube.com/@euronews/live',
+    note: 'Live oficial da Euronews, resolvida dinamicamente pelo canal oficial no YouTube para abrir rapido no palco.',
+    source: 'Euronews | YouTube',
+    youtubeChannel: '@euronews',
   },
   {
     id: 'trt-world',
@@ -338,6 +347,14 @@ const newsLinks: NewsLink[] = [
     note: 'Feed HLS 720p da CNBC ao vivo tocando direto no player leve do site.',
     source: 'CNBC',
     streamUrl: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
+  },
+  {
+    id: 'rt-news',
+    name: 'RT News',
+    href: rtNewsTopLevelUrl,
+    note: 'Pagina oficial RT News player aberta via preview top-level do site, que foi o caminho oficial mais confiavel que consegui validar agora.',
+    source: 'RT | Top-level Preview',
+    topLevelOnly: true,
   },
   {
     id: 'fox-news',
