@@ -283,6 +283,14 @@ const newsLinks: NewsLink[] = [
     source: 'TRT World',
     streamUrl: 'https://tv-trtworld.medya.trt.com.tr/master.m3u8',
   },
+  {
+    id: 'cgtn-news',
+    name: 'CGTN News',
+    href: 'https://www.cgtn.com/tv',
+    note: 'Feed HLS oficial da CGTN News em ingles, resolvido pela propria pagina de TV da emissora e tocando direto no player leve do site.',
+    source: 'CGTN',
+    streamUrl: 'https://english-livebkali.cgtn.com/live/encgtn.m3u8',
+  },
     {
       id: 'cnn-us',
       name: 'CNN US',
