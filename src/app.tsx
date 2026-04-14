@@ -364,6 +364,14 @@ const newsLinks: NewsLink[] = [
     streamUrl: 'https://rt-glb.rttv.com/live/rtnews/playlist.m3u8',
   },
   {
+    id: 'press-tv',
+    name: 'Press TV',
+    href: 'https://www.presstv.ir/live',
+    note: 'Feed HLS oficial da Press TV em ingles, o mesmo carregado pelo player da propria pagina de live da emissora.',
+    source: 'Press TV',
+    streamUrl: 'https://live.presstv.ir/hls/presstv.m3u8',
+  },
+  {
     id: 'fox-news',
     name: 'Fox News',
     href: foxNewsTopLevelUrl,
