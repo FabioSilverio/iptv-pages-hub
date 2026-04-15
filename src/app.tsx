@@ -219,7 +219,6 @@ const globalCatchupCache = new Map<string, Array<{
 const foxNewsHarStreamUrl = 'https://stream.livenewspro.com:1936/fox/fox/playlist.m3u8?dvr&secendtime=1776333749&sechash=K_vzPBzGFzdldlFUYd_xWq55ChIu0FB6VbbvwXxU-Ys=&secstarttime=1776258749'
 const foxBusinessHarStreamUrl = 'https://stream.livenewsplay.com:9555/hls/fox-business/index.m3u8?token=3d58202fee469874510eabd130c230f4&expires=1776302257&sig=3d4e65b8172b02134a31141d7bbddbc00214f63916ac7e521501678e53532117&dvr=true'
 const msNowHarStreamUrl = 'https://stream.livenewspro.com:1936/msnbcpro/msnbcpro/playlist.m3u8?dvr&secendtime=1776345700&sechash=KOoSdK1NQfdZzdWXjlsXMg8x01PRWx9bsUU05s1p_MU=&secstarttime=1776259300'
-const cnbcHarStreamUrl = 'https://stream.livenewspro.com:1936/cnbcpro/cnbcpro/playlist.m3u8?dvr&secendtime=1776334876&sechash=OF9t7VUQ4yTOrBlZjUFpwg0NmqcPDL7x3f5LVC1SDdk=&secstarttime=1776259876'
 const newsmaxHarStreamUrl = 'https://nmx1ota.akamaized.net/hls/live/2107010/Live_1/index.m3u8'
 const newsNationHarStreamUrl = 'https://stream.onlinestreaming.us:9444/hls/newsnation/index.m3u8?token=b3c318fd826c2814580e604c9ad06d3b&expires=1776303103&sig=050227dbf71c45d4f24436b5c5cb09555edeeb34b460a8477b577bcaecd93d40&dvr=true'
 const newsLinks: NewsLink[] = [
@@ -370,10 +369,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'cnbc',
     name: 'CNBC',
-    href: 'https://www.watchnews.pro/channels/cnbc',
-    note: 'Feed HLS da CNBC extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
-    source: 'CNBC / watchnews.pro',
-    streamUrl: cnbcHarStreamUrl,
+    href: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
+    note: 'Feed HLS 720p da CNBC ao vivo tocando direto no player leve do site.',
+    source: 'CNBC',
+    streamUrl: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
   },
   {
     id: 'newsnation',
