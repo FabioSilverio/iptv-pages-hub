@@ -108,6 +108,7 @@ interface RadioReplayState {
 
 interface AppSettings {
   rememberConnection: boolean
+  desktopLiveNotifications: boolean
   twitchClientId: string
   twitchAccessToken: string
   kickClientId: string
@@ -177,6 +178,7 @@ const defaultXtream: XtreamCredentials = {
 const defaultM3U: M3UCredentials = { url: '' }
 const defaultSettings: AppSettings = {
   rememberConnection: true,
+  desktopLiveNotifications: false,
   twitchClientId: '',
   twitchAccessToken: '',
   kickClientId: '',
@@ -536,6 +538,25 @@ function recentVodStatusTone(platform: RecentVodItem['platform']) {
 
 function embedPlatformLabel(platform: EmbedStream['platform']) {
   return platform === 'youtube' ? 'YouTube' : platform === 'kick' ? 'Kick' : 'Twitch'
+}
+
+function isProbablyMobileDevice() {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+
+  const coarsePointer = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(pointer: coarse)').matches
+    : false
+  const compactViewport = typeof window.matchMedia === 'function'
+    ? window.matchMedia('(max-width: 720px)').matches
+    : false
+
+  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent) || (coarsePointer && compactViewport)
+}
+
+function supportsDesktopLiveNotifications() {
+  return typeof window !== 'undefined'
+    && typeof Notification !== 'undefined'
+    && !isProbablyMobileDevice()
 }
 
 function isTokenFresh(expiresAt?: string) {
@@ -1275,6 +1296,10 @@ export function App() {
   const [showNewsPanel, setShowNewsPanel] = useState(true)
   const [showRadioPanel, setShowRadioPanel] = useState(true)
   const [showCinemaPanel, setShowCinemaPanel] = useState(true)
+  const [notificationPermission, setNotificationPermission] = useState<'default' | 'denied' | 'granted' | 'unsupported'>(() => {
+    if (!supportsDesktopLiveNotifications()) return 'unsupported'
+    return Notification.permission
+  })
   const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
   const [newsStripRightReady, setNewsStripRightReady] = useState(false)
   const [newsShortcutLeftReady, setNewsShortcutLeftReady] = useState(false)
@@ -1293,6 +1318,8 @@ export function App() {
   const newsShortcutRef = useRef<HTMLDivElement | null>(null)
   const mediaStripRef = useRef<HTMLDivElement | null>(null)
   const twitchPlayerHostRef = useRef<HTMLDivElement | null>(null)
+  const previousLiveStatesRef = useRef<Record<string, LiveState>>({})
+  const hasPrimedLiveNotificationsRef = useRef(false)
   const hlsRef = useRef<Hls | null>(null)
   const twitchPlayerRef = useRef<{
     destroy?: () => void
@@ -1398,6 +1425,11 @@ export function App() {
     () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
     [sortedKickEmbeds, statusMap],
   )
+  const desktopNotificationsSupported = useMemo(
+    () => supportsDesktopLiveNotifications(),
+    [],
+  )
+  const desktopNotificationsEnabled = desktopNotificationsSupported && settings.desktopLiveNotifications
   const favoriteChannels = useMemo(
     () =>
       favorites
@@ -1759,6 +1791,23 @@ export function App() {
   useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
   useEffect(() => saveJson(ACTIVE_SURFACE_KEY, activeSurface), [activeSurface])
   useEffect(() => saveJson(SHOW_LIVE_NOW_KEY, showLiveNowPanel), [showLiveNowPanel])
+  useEffect(() => {
+    if (!desktopNotificationsSupported) {
+      setNotificationPermission('unsupported')
+      return
+    }
+
+    const syncPermission = () => setNotificationPermission(Notification.permission)
+    syncPermission()
+
+    window.addEventListener('focus', syncPermission)
+    document.addEventListener('visibilitychange', syncPermission)
+
+    return () => {
+      window.removeEventListener('focus', syncPermission)
+      document.removeEventListener('visibilitychange', syncPermission)
+    }
+  }, [desktopNotificationsSupported])
   useEffect(() => {
     if (activeSurface !== 'news') {
       syncNewsStripState()
@@ -2402,7 +2451,11 @@ export function App() {
     let isActive = true
 
     const refresh = async () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      if (
+        typeof document !== 'undefined'
+        && document.visibilityState === 'hidden'
+        && !desktopNotificationsEnabled
+      ) {
         return
       }
 
@@ -2598,7 +2651,56 @@ export function App() {
     settings.kickClientSecret,
     settings.twitchAccessToken,
     settings.twitchClientId,
+    desktopNotificationsEnabled,
   ])
+
+  useEffect(() => {
+    const trackedEmbeds = embeds.filter((item) => item.platform === 'twitch' || item.platform === 'kick')
+    const nextStates: Record<string, LiveState> = {}
+
+    trackedEmbeds.forEach((item) => {
+      const key = `${item.platform}:${item.channel.trim().toLowerCase()}`
+      nextStates[key] = statusMap[item.channel.trim().toLowerCase()]?.state || 'unknown'
+    })
+
+    if (!hasPrimedLiveNotificationsRef.current) {
+      previousLiveStatesRef.current = nextStates
+      hasPrimedLiveNotificationsRef.current = true
+      return
+    }
+
+    if (!desktopNotificationsEnabled || notificationPermission !== 'granted') {
+      previousLiveStatesRef.current = nextStates
+      return
+    }
+
+    trackedEmbeds.forEach((item) => {
+      const channelKey = item.channel.trim().toLowerCase()
+      const key = `${item.platform}:${channelKey}`
+      const previousState = previousLiveStatesRef.current[key] || 'unknown'
+      const currentState = nextStates[key]
+      const status = statusMap[channelKey]
+
+      if (currentState === 'online' && previousState !== 'online') {
+        const notification = new Notification(
+          `${embedDisplayName(item, status)} entrou ao vivo`,
+          {
+            body: `${embedPlatformLabel(item.platform)} ao vivo agora no seu painel.`,
+            icon: status?.avatarUrl,
+            tag: key,
+          },
+        )
+
+        notification.onclick = () => {
+          window.focus()
+          activateEmbed(item)
+          notification.close()
+        }
+      }
+    })
+
+    previousLiveStatesRef.current = nextStates
+  }, [desktopNotificationsEnabled, embeds, notificationPermission, statusMap])
 
   useEffect(() => {
     let isActive = true
@@ -2830,6 +2932,28 @@ export function App() {
 
   function connectTwitch() {
     if (settings.twitchClientId.trim()) window.location.href = buildTwitchAuthUrl(settings.twitchClientId)
+  }
+
+  async function enableDesktopLiveNotifications() {
+    if (!desktopNotificationsSupported) return
+
+    const permission = await Notification.requestPermission()
+    setNotificationPermission(permission)
+
+    if (permission === 'granted') {
+      setSettings((current) => ({ ...current, desktopLiveNotifications: true }))
+    }
+  }
+
+  function setDesktopLiveNotificationsEnabled(nextValue: boolean) {
+    if (!desktopNotificationsSupported) return
+
+    if (nextValue && notificationPermission !== 'granted') {
+      void enableDesktopLiveNotifications()
+      return
+    }
+
+    setSettings((current) => ({ ...current, desktopLiveNotifications: nextValue }))
   }
 
   function setSurface(surface: MediaSurface) {
@@ -3990,6 +4114,41 @@ export function App() {
                   <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
                 </div>
                 <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
+                <div class="subtle-card stack compact-card notification-settings-card">
+                  <label class="check-row">
+                    <input
+                      checked={desktopNotificationsEnabled}
+                      disabled={!desktopNotificationsSupported}
+                      type="checkbox"
+                      onChange={(event) => setDesktopLiveNotificationsEnabled((event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    <span>Notificar no desktop quando Twitch ou Kick entrar ao vivo</span>
+                  </label>
+                  <div class="button-row">
+                    <button
+                      class="ghost-button compact"
+                      disabled={!desktopNotificationsSupported || notificationPermission === 'granted'}
+                      type="button"
+                      onClick={() => void enableDesktopLiveNotifications()}
+                    >
+                      {notificationPermission === 'granted'
+                        ? 'Permissao liberada'
+                        : notificationPermission === 'denied'
+                          ? 'Permissao bloqueada'
+                          : 'Permitir notificacoes'}
+                    </button>
+                    <span class="pill soft">
+                      {notificationPermission === 'unsupported'
+                        ? 'Somente desktop'
+                        : notificationPermission === 'granted'
+                          ? 'Desktop ativo'
+                          : notificationPermission === 'denied'
+                            ? 'Bloqueado no navegador'
+                            : 'Aguardando permissao'}
+                    </span>
+                  </div>
+                  <p class="helper-copy">Esse alerta usa a notificacao do proprio navegador e so roda em desktop. No mobile ele fica desativado de proposito.</p>
+                </div>
                 <p class="helper-copy">Twitch usa OAuth do navegador. YouTube nao precisa de API key e a leitura do status vem da pagina /live via proxy. Na Kick, o site ja consulta o status oficial pelo worker do app.</p>
               </div>
               <div class="subtle-card stack compact-card">
