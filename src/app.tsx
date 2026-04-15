@@ -208,7 +208,7 @@ const globalCatchupCache = new Map<string, Array<{
   durationSeconds: number
   source: string
 }>>()
-const foxNewsTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614615980001')
+const foxNewsHarStreamUrl = 'https://stream.livenewspro.com:1936/fox/fox/playlist.m3u8?dvr&secendtime=1776333749&sechash=K_vzPBzGFzdldlFUYd_xWq55ChIu0FB6VbbvwXxU-Ys=&secstarttime=1776258749'
 const foxBusinessTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614626175001')
 const newsLinks: NewsLink[] = [
   {
@@ -374,10 +374,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-news',
     name: 'Fox News',
-    href: foxNewsTopLevelUrl,
-    note: 'Pagina oficial da Fox News aberta pelo worker do site em contexto top-level, que foi o unico fluxo validado sem depender da playlist IPTV.',
-    source: 'Fox News / Top-level Preview',
-    topLevelOnly: true,
+    href: 'https://www.watchnews.pro/channels/fox-news',
+    note: 'Feed HLS da Fox News extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
+    source: 'Fox News / watchnews.pro',
+    streamUrl: foxNewsHarStreamUrl,
   },
   {
     id: 'fox-business',
