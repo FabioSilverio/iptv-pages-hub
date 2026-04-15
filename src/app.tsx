@@ -210,6 +210,7 @@ const globalCatchupCache = new Map<string, Array<{
 }>>()
 const foxNewsHarStreamUrl = 'https://stream.livenewspro.com:1936/fox/fox/playlist.m3u8?dvr&secendtime=1776333749&sechash=K_vzPBzGFzdldlFUYd_xWq55ChIu0FB6VbbvwXxU-Ys=&secstarttime=1776258749'
 const foxBusinessHarStreamUrl = 'https://stream.livenewsplay.com:9555/hls/fox-business/index.m3u8?token=3d58202fee469874510eabd130c230f4&expires=1776302257&sig=3d4e65b8172b02134a31141d7bbddbc00214f63916ac7e521501678e53532117&dvr=true'
+const msNowHarStreamUrl = 'https://stream.livenewspro.com:1936/msnbcpro/msnbcpro/playlist.m3u8?dvr&secendtime=1776345700&sechash=KOoSdK1NQfdZzdWXjlsXMg8x01PRWx9bsUU05s1p_MU=&secstarttime=1776259300'
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -234,6 +235,14 @@ const newsLinks: NewsLink[] = [
     note: 'Feed HLS oficial da NBC News NOW tocando direto no player do site.',
     source: 'NBC News',
     streamUrl: 'https://nnaa-nbcnn-lzaj01.fast.nbcuni.com/live/master.m3u8',
+  },
+  {
+    id: 'ms-now',
+    name: 'MS Now',
+    href: 'https://www.watchnews.pro/channels/msnbc-news',
+    note: 'Feed HLS da MS Now extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
+    source: 'MS Now / watchnews.pro',
+    streamUrl: msNowHarStreamUrl,
   },
   {
     id: 'cbs-news-247',
