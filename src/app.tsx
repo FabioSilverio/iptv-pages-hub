@@ -54,6 +54,14 @@ const CHANNEL_BATCH_STEP = 240
 const LIVE_STATUS_REFRESH_MS = 60_000
 const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
 const PT_BR_COLLATOR = new Intl.Collator('pt-BR')
+const NEWS_POSTER_TONES = [
+  'news-tone-aurora',
+  'news-tone-cobalt',
+  'news-tone-crimson',
+  'news-tone-sunset',
+  'news-tone-emerald',
+  'news-tone-violet',
+] as const
 
 type MediaSurface = 'iptv' | 'twitch' | 'youtube' | 'kick' | 'news' | 'radio' | 'cinema'
 
@@ -211,6 +219,9 @@ const globalCatchupCache = new Map<string, Array<{
 const foxNewsHarStreamUrl = 'https://stream.livenewspro.com:1936/fox/fox/playlist.m3u8?dvr&secendtime=1776333749&sechash=K_vzPBzGFzdldlFUYd_xWq55ChIu0FB6VbbvwXxU-Ys=&secstarttime=1776258749'
 const foxBusinessHarStreamUrl = 'https://stream.livenewsplay.com:9555/hls/fox-business/index.m3u8?token=3d58202fee469874510eabd130c230f4&expires=1776302257&sig=3d4e65b8172b02134a31141d7bbddbc00214f63916ac7e521501678e53532117&dvr=true'
 const msNowHarStreamUrl = 'https://stream.livenewspro.com:1936/msnbcpro/msnbcpro/playlist.m3u8?dvr&secendtime=1776345700&sechash=KOoSdK1NQfdZzdWXjlsXMg8x01PRWx9bsUU05s1p_MU=&secstarttime=1776259300'
+const cnbcHarStreamUrl = 'https://stream.livenewspro.com:1936/cnbcpro/cnbcpro/playlist.m3u8?dvr&secendtime=1776334876&sechash=OF9t7VUQ4yTOrBlZjUFpwg0NmqcPDL7x3f5LVC1SDdk=&secstarttime=1776259876'
+const newsmaxHarStreamUrl = 'https://nmx1ota.akamaized.net/hls/live/2107010/Live_1/index.m3u8'
+const newsNationHarStreamUrl = 'https://stream.onlinestreaming.us:9444/hls/newsnation/index.m3u8?token=b3c318fd826c2814580e604c9ad06d3b&expires=1776303103&sig=050227dbf71c45d4f24436b5c5cb09555edeeb34b460a8477b577bcaecd93d40&dvr=true'
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -351,18 +362,26 @@ const newsLinks: NewsLink[] = [
   {
     id: 'newsmax',
     name: 'Newsmax',
-    href: 'https://newsmax-samsungus.amagi.tv/playlist.m3u8',
-    note: 'Feed HLS da Newsmax TV via Amagi/Samsung, tocando direto no player leve do site.',
-    source: 'Newsmax / Amagi',
-    streamUrl: 'https://newsmax-samsungus.amagi.tv/playlist.m3u8',
+    href: 'https://www.watchnews.pro/channels/newsmax',
+    note: 'Feed HLS da Newsmax extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
+    source: 'Newsmax / watchnews.pro',
+    streamUrl: newsmaxHarStreamUrl,
   },
   {
     id: 'cnbc',
     name: 'CNBC',
-    href: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
-    note: 'Feed HLS 720p da CNBC ao vivo tocando direto no player leve do site.',
-    source: 'CNBC',
-    streamUrl: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
+    href: 'https://www.watchnews.pro/channels/cnbc',
+    note: 'Feed HLS da CNBC extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
+    source: 'CNBC / watchnews.pro',
+    streamUrl: cnbcHarStreamUrl,
+  },
+  {
+    id: 'newsnation',
+    name: 'NewsNation',
+    href: 'https://www.watchnews.pro/channels/newsnation',
+    note: 'Feed HLS da NewsNation extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
+    source: 'NewsNation / watchnews.pro',
+    streamUrl: newsNationHarStreamUrl,
   },
   {
     id: 'rt-news',
@@ -451,6 +470,43 @@ function embedDisplayName(item: EmbedStream, status: EmbedStatus | undefined) {
   return status?.displayName?.trim() || item.title
 }
 
+function hashString(value: string) {
+  let hash = 0
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0
+  }
+
+  return hash
+}
+
+function newsPosterToneClass(link: NewsLink) {
+  return NEWS_POSTER_TONES[hashString(link.id) % NEWS_POSTER_TONES.length]
+}
+
+function newsPosterMonogram(name: string) {
+  const parts = name
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+
+  if (!parts.length) return name.slice(0, 2).toUpperCase()
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase()
+}
+
+function newsPlaybackLabel(link: NewsLink) {
+  if (link.playbackEngine === 'dash') return 'DASH'
+  if (link.streamUrl) return 'PLAY'
+  if (link.embedUrl || link.embedResolver || link.youtubeChannel) return 'EMBED'
+  if (link.topLevelOnly) return 'ABRIR'
+  return 'LINK'
+}
+
+function newsSourceLabel(link: NewsLink) {
+  return link.source.split('/')[0]?.trim() || 'News'
+}
+
 function formatRecentVodAge(value: string) {
   const timestamp = Date.parse(value)
   if (!Number.isFinite(timestamp)) return 'Agora'
@@ -477,6 +533,10 @@ function recentVodPlatformLabel(platform: RecentVodItem['platform']) {
 
 function recentVodStatusTone(platform: RecentVodItem['platform']) {
   return statusTone('online', platform)
+}
+
+function embedPlatformLabel(platform: EmbedStream['platform']) {
+  return platform === 'youtube' ? 'YouTube' : platform === 'kick' ? 'Kick' : 'Twitch'
 }
 
 function isTokenFresh(expiresAt?: string) {
@@ -3194,6 +3254,83 @@ export function App() {
             </div>
       </header>
 
+      <section class="mobile-showcase" aria-label="Destaques mobile">
+        <div class="mobile-showcase-card">
+          <div class="mobile-showcase-heading">
+            <div>
+              <p class="section-tag">Ao vivo agora</p>
+              <h2>Stories de live</h2>
+            </div>
+            <span class="pill soft">{liveEmbeds.length ? `${liveEmbeds.length} no ar` : 'Sem lives'}</span>
+          </div>
+          {liveEmbeds.length ? (
+            <div class="mobile-live-story-row">
+              {liveEmbeds.map((item) => {
+                const status = statusMap[item.channel.toLowerCase()]
+                const avatarUrl = embedAvatarUrl(status)
+
+                return (
+                  <button
+                    key={item.id}
+                    class={activeEmbed?.id === item.id ? 'mobile-live-story active' : 'mobile-live-story'}
+                    type="button"
+                    onClick={() => activateEmbed(item)}
+                  >
+                    <div class={classNames('mobile-live-story-shell', `platform-${item.platform}`)}>
+                      <div class={classNames('mobile-live-story-avatar', avatarUrl ? 'has-image' : '')}>
+                        {avatarUrl ? <img alt={embedDisplayName(item, status)} loading="lazy" src={avatarUrl} /> : <span>{embedAvatarText(item)}</span>}
+                      </div>
+                      <span class="mobile-live-story-badge">LIVE</span>
+                    </div>
+                    <strong>{embedDisplayName(item, status)}</strong>
+                    <span>{embedPlatformLabel(item.platform)}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <div class="empty-state compact-empty mobile-empty-state">
+              <strong>Nenhuma live detectada agora.</strong>
+              <span>Twitch, YouTube e Kick entram aqui automaticamente quando o status vier online.</span>
+            </div>
+          )}
+        </div>
+
+        <div class="mobile-showcase-card">
+          <div class="mobile-showcase-heading">
+            <div>
+              <p class="section-tag">Noticias</p>
+              <h2>Miniaturas dos canais</h2>
+            </div>
+            <span class="pill soft">{newsLinks.length} canais</span>
+          </div>
+          <div class="mobile-news-card-row">
+            {orderedNewsLinks.map((item) => (
+              <button
+                key={item.id}
+                class={classNames('mobile-news-card', newsPosterToneClass(item), selectedNewsLink.id === item.id && activeSurface === 'news' && 'active')}
+                type="button"
+                onClick={() => {
+                  setSelectedVod(null)
+                  setSelectedNewsId(item.id)
+                  setSurface('news')
+                }}
+              >
+                <div class="mobile-news-card-poster">
+                  <span class="mobile-news-card-badge">{newsPlaybackLabel(item)}</span>
+                  <span class="mobile-news-card-source">{newsSourceLabel(item)}</span>
+                  <strong>{newsPosterMonogram(item.name)}</strong>
+                </div>
+                <div class="mobile-news-card-copy">
+                  <strong>{item.name}</strong>
+                  <span>{item.streamUrl ? 'Player rapido' : item.embedUrl ? 'Embed leve' : 'Abrir origem'}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <div class="feed-strip-shell news-shortcuts-shell">
         <button aria-label="Ver canais anteriores" class="feed-strip-nav" disabled={!newsShortcutLeftReady} type="button" onClick={() => scrollNewsShortcut('left')}>
           <span aria-hidden="true">‹</span>
@@ -3584,8 +3721,13 @@ export function App() {
               )}
               <div class="feed-chip-grid news-link-grid">
                 {newsLinks.map((item) => (
-                  <article class="feed-chip-card" key={item.id}>
-                    <div>
+                  <article class={classNames('feed-chip-card', 'news-tile-card', newsPosterToneClass(item))} key={item.id}>
+                    <div class="news-tile-poster">
+                      <span class="news-tile-badge">{newsPlaybackLabel(item)}</span>
+                      <span class="news-tile-source">{newsSourceLabel(item)}</span>
+                      <strong>{newsPosterMonogram(item.name)}</strong>
+                    </div>
+                    <div class="news-tile-copy">
                       <p class="section-tag">{item.source}</p>
                       <h3>{item.name}</h3>
                       <p class="helper-copy">{item.note}</p>
