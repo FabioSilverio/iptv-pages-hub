@@ -209,7 +209,7 @@ const globalCatchupCache = new Map<string, Array<{
   source: string
 }>>()
 const foxNewsHarStreamUrl = 'https://stream.livenewspro.com:1936/fox/fox/playlist.m3u8?dvr&secendtime=1776333749&sechash=K_vzPBzGFzdldlFUYd_xWq55ChIu0FB6VbbvwXxU-Ys=&secstarttime=1776258749'
-const foxBusinessTopLevelUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, 'https://www.foxnews.com/video/5614626175001')
+const foxBusinessHarStreamUrl = 'https://stream.livenewsplay.com:9555/hls/fox-business/index.m3u8?token=3d58202fee469874510eabd130c230f4&expires=1776302257&sig=3d4e65b8172b02134a31141d7bbddbc00214f63916ac7e521501678e53532117&dvr=true'
 const newsLinks: NewsLink[] = [
   {
     id: 'bbc-news',
@@ -382,10 +382,10 @@ const newsLinks: NewsLink[] = [
   {
     id: 'fox-business',
     name: 'Fox Business',
-    href: foxBusinessTopLevelUrl,
-    note: 'Pagina Fox Business Go aberta pelo worker do site em contexto top-level, a unica variante oficial validada com preview pass publico.',
-    source: 'Fox Business / Top-level Preview',
-    topLevelOnly: true,
+    href: 'https://www.watchnews.pro/channels/fox-business',
+    note: 'Feed HLS da Fox Business extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
+    source: 'Fox Business / watchnews.pro',
+    streamUrl: foxBusinessHarStreamUrl,
   },
 ]
 
