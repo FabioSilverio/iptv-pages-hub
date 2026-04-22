@@ -52,6 +52,7 @@ const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.wo
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
 const LIVE_STATUS_REFRESH_MS = 60_000
+const BRIEFING_REFRESH_MS = 10 * 60_000
 const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
 const PT_BR_COLLATOR = new Intl.Collator('pt-BR')
 const NEWS_POSTER_TONES = [
@@ -88,6 +89,15 @@ interface NewsLink {
   mirrorServers?: string[]
   playbackEngine?: 'dash'
   proxyOverride?: string
+}
+
+interface BriefingItem {
+  id: string
+  title: string
+  summary: string
+  href: string
+  source: string
+  publishedAt: string
 }
 
 interface MarketQuote {
@@ -471,6 +481,24 @@ function embedDisplayName(item: EmbedStream, status: EmbedStatus | undefined) {
   return status?.displayName?.trim() || item.title
 }
 
+const DAILY_BRIEFING_SOURCES = [
+  {
+    id: 'google-br',
+    label: 'Google News Brasil',
+    url: 'https://news.google.com/rss?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+  },
+  {
+    id: 'google-world',
+    label: 'Google News Mundo',
+    url: 'https://news.google.com/rss/headlines/section/topic/WORLD?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+  },
+  {
+    id: 'google-business',
+    label: 'Google News Economia',
+    url: 'https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+  },
+] as const
+
 function hashString(value: string) {
   let hash = 0
 
@@ -540,6 +568,105 @@ function embedPlatformLabel(platform: EmbedStream['platform']) {
   return platform === 'youtube' ? 'YouTube' : platform === 'kick' ? 'Kick' : 'Twitch'
 }
 
+function decodeHtmlEntities(value: string) {
+  if (typeof document === 'undefined') return value
+
+  const textarea = document.createElement('textarea')
+  textarea.innerHTML = value
+  return textarea.value
+}
+
+function stripHtml(value: string) {
+  return decodeHtmlEntities(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim()
+}
+
+function truncateText(value: string, maxLength: number) {
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`
+}
+
+function normalizeBriefingSummary(value: string) {
+  const clean = stripHtml(value)
+    .replace(/^By\s+[^.]+\.\s*/i, '')
+    .replace(/Continue reading.*$/i, '')
+    .trim()
+
+  return truncateText(clean, 180)
+}
+
+function parseFeedDate(rawValue?: string | null) {
+  const timestamp = Date.parse(String(rawValue || ''))
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : new Date().toISOString()
+}
+
+function createBriefingId(source: string, title: string, href: string) {
+  return `${source}:${hashString(`${title}|${href}`)}`
+}
+
+function parseBriefingFeed(xmlText: string, sourceLabel: string) {
+  if (typeof DOMParser === 'undefined') return [] as BriefingItem[]
+
+  const doc = new DOMParser().parseFromString(xmlText, 'text/xml')
+  const items = Array.from(doc.querySelectorAll('item'))
+
+  return items.map((item) => {
+    const title = stripHtml(item.querySelector('title')?.textContent || '').trim()
+    const href = stripHtml(item.querySelector('link')?.textContent || '').trim()
+    const description = item.querySelector('description')?.textContent || item.querySelector('content\\:encoded')?.textContent || ''
+    const publishedAt = parseFeedDate(item.querySelector('pubDate')?.textContent || item.querySelector('published')?.textContent)
+
+    return {
+      id: createBriefingId(sourceLabel, title, href),
+      title,
+      summary: normalizeBriefingSummary(description || title),
+      href,
+      source: sourceLabel,
+      publishedAt,
+    }
+  }).filter((item) => item.title && item.href)
+}
+
+function isTodayInBrazil(isoValue: string) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+
+  return formatter.format(new Date(isoValue)) === formatter.format(new Date())
+}
+
+function dedupeBriefingItems(items: BriefingItem[]) {
+  const seen = new Set<string>()
+
+  return items.filter((item) => {
+    const key = stripHtml(item.title).toLowerCase()
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function formatBriefingTime(value: string) {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return 'Agora'
+
+  const diffMinutes = Math.max(1, Math.round((Date.now() - timestamp) / 60_000))
+  if (diffMinutes < 60) return `há ${diffMinutes} min`
+
+  const diffHours = Math.round(diffMinutes / 60)
+  if (diffHours < 24) return `há ${diffHours}h`
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: 'America/Sao_Paulo',
+  }).format(new Date(timestamp))
+}
+
 function isProbablyMobileDevice() {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
 
@@ -557,6 +684,23 @@ function supportsDesktopLiveNotifications() {
   return typeof window !== 'undefined'
     && typeof Notification !== 'undefined'
     && !isProbablyMobileDevice()
+}
+
+function buildWelcomeMultiviewChannel(link: NewsLink | null): Channel | null {
+  if (!link?.streamUrl) return null
+
+  return {
+    id: `welcome:${link.id}`,
+    name: link.name,
+    group: 'Noticias',
+    streamUrl: buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, link.streamUrl),
+  }
+}
+
+function summarizeBriefingSources(items: BriefingItem[]) {
+  return Array.from(new Set(items.map((item) => item.source).filter(Boolean)))
+    .slice(0, 3)
+    .join(' + ')
 }
 
 function isTokenFresh(expiresAt?: string) {
@@ -1245,6 +1389,136 @@ function LiveDashboardMeta() {
   )
 }
 
+function WelcomeMultiviewTile({
+  options,
+  selectedId,
+  slotLabel,
+  onSelect,
+}: {
+  options: NewsLink[]
+  selectedId: string
+  slotLabel: string
+  onSelect: (nextId: string) => void
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const hlsRef = useRef<Hls | null>(null)
+  const [tileState, setTileState] = useState('Conectando...')
+
+  const selectedLink = useMemo(
+    () => options.find((item) => item.id === selectedId) ?? options[0] ?? null,
+    [options, selectedId],
+  )
+
+  useEffect(() => {
+    const media = videoRef.current
+    const channel = buildWelcomeMultiviewChannel(selectedLink)
+    if (!media || !channel) return
+
+    let cancelled = false
+    setTileState('Conectando...')
+
+    media.defaultMuted = true
+    media.muted = true
+    media.autoplay = true
+    media.playsInline = true
+
+    const cleanup = () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy()
+        hlsRef.current = null
+      }
+      media.pause()
+      media.removeAttribute('src')
+      media.load()
+    }
+
+    const boot = async () => {
+      cleanup()
+
+      if (media.canPlayType('application/vnd.apple.mpegurl')) {
+        media.src = channel.streamUrl
+        media.load()
+        void media.play().catch(() => {})
+        setTileState('Ao vivo')
+        return
+      }
+
+      const { default: HlsModule } = await import('hls.js')
+
+      if (!HlsModule.isSupported()) {
+        setTileState('Sem suporte')
+        return
+      }
+
+      const hls = new HlsModule({
+        lowLatencyMode: true,
+        enableWorker: true,
+      })
+
+      hlsRef.current = hls
+      hls.attachMedia(media)
+      hls.on(HlsModule.Events.MEDIA_ATTACHED, () => {
+        hls.loadSource(channel.streamUrl)
+      })
+      hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
+        if (cancelled) return
+        setTileState('Ao vivo')
+        void media.play().catch(() => {})
+      })
+      hls.on(HlsModule.Events.ERROR, (_event, data: { fatal?: boolean }) => {
+        if (!data?.fatal || cancelled) return
+        setTileState('Falha no feed')
+      })
+    }
+
+    void boot()
+
+    return () => {
+      cancelled = true
+      cleanup()
+    }
+  }, [selectedLink])
+
+  if (!selectedLink) {
+    return (
+      <article class="welcome-multiview-card">
+        <div class="welcome-multiview-topline">
+          <span class="section-tag">{slotLabel}</span>
+        </div>
+        <div class="welcome-multiview-empty">
+          <strong>Nenhum canal pronto para multiview.</strong>
+        </div>
+      </article>
+    )
+  }
+
+  return (
+    <article class="welcome-multiview-card">
+      <div class="welcome-multiview-topline">
+        <span class="section-tag">{slotLabel}</span>
+        <label class="welcome-multiview-picker">
+          <span>Canal</span>
+          <select value={selectedLink.id} onChange={(event) => onSelect((event.currentTarget as HTMLSelectElement).value)}>
+            {options.map((item) => (
+              <option key={item.id} value={item.id}>{item.name}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div class="welcome-multiview-stage">
+        <video autoPlay muted playsInline ref={videoRef} />
+      </div>
+      <div class="welcome-multiview-meta">
+        <div>
+          <strong>{selectedLink.name}</strong>
+          <span>{selectedLink.source}</span>
+        </div>
+        <span class="pill soft">{tileState}</span>
+      </div>
+    </article>
+  )
+}
+
 export function App() {
   const [sourceTab, setSourceTab] = useState<'xtream' | 'm3u'>('xtream')
   const [xtream, setXtream] = useState<XtreamCredentials>(defaultXtream)
@@ -1276,6 +1550,15 @@ export function App() {
   const [recentVods, setRecentVods] = useState<RecentVodItem[]>([])
   const [recentVodsLoading, setRecentVodsLoading] = useState(false)
   const [recentVodsError, setRecentVodsError] = useState('')
+  const [welcomeTick, setWelcomeTick] = useState(() => Date.now())
+  const [showDailyBriefingModal, setShowDailyBriefingModal] = useState(true)
+  const [briefingItems, setBriefingItems] = useState<BriefingItem[]>([])
+  const [briefingState, setBriefingState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [briefingError, setBriefingError] = useState('')
+  const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
+  const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
+  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
+  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
   const [isTheaterMode, setIsTheaterMode] = useState(false)
   const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
   const [resolvedNewsEmbedUrl, setResolvedNewsEmbedUrl] = useState('')
@@ -1475,6 +1758,44 @@ export function App() {
     () => prioritizeCurrentItem(newsLinks, selectedNewsLink.id),
     [selectedNewsLink.id],
   )
+  const welcomeMultiviewOptions = useMemo(
+    () => newsLinks.filter((item) => item.streamUrl && isLikelyHlsStream(item.streamUrl)),
+    [],
+  )
+  const welcomeLeftLink = useMemo(
+    () => welcomeMultiviewOptions.find((item) => item.id === welcomeLeftNewsId) ?? welcomeMultiviewOptions[0] ?? null,
+    [welcomeLeftNewsId, welcomeMultiviewOptions],
+  )
+  const welcomeRightLink = useMemo(
+    () => welcomeMultiviewOptions.find((item) => item.id === welcomeRightNewsId) ?? welcomeMultiviewOptions[1] ?? welcomeMultiviewOptions[0] ?? null,
+    [welcomeRightNewsId, welcomeMultiviewOptions],
+  )
+  const welcomeDateLabel = useMemo(
+    () => new Intl.DateTimeFormat('pt-BR', {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'America/Sao_Paulo',
+    }).format(new Date(welcomeTick)),
+    [welcomeTick],
+  )
+  const welcomeTimeLabel = useMemo(
+    () => new Intl.DateTimeFormat('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'America/Sao_Paulo',
+    }).format(new Date(welcomeTick)),
+    [welcomeTick],
+  )
+  const welcomeLeadBriefing = briefingItems[0] ?? null
+  const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 6), [briefingItems])
+  const welcomeBriefingSidebarItems = useMemo(() => briefingItems.slice(1, 4), [briefingItems])
+  const briefingSourceSummary = useMemo(
+    () => summarizeBriefingSources(briefingItems),
+    [briefingItems],
+  )
   const selectedRadioStation = useMemo<RadioStation | null>(
     () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
     [selectedRadioId],
@@ -1664,6 +1985,74 @@ export function App() {
   useEffect(() => {
     setVisibleCount(INITIAL_CHANNEL_BATCH)
   }, [playlist?.id, groupFilter, searchTerm])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setWelcomeTick(Date.now())
+    }, 1_000)
+
+    return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadBriefing = async () => {
+      setBriefingState((current) => (current === 'ready' ? 'ready' : 'loading'))
+      setBriefingError('')
+
+      const settled = await Promise.allSettled(
+        DAILY_BRIEFING_SOURCES.map(async (source) => {
+          const response = await fetch(buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, source.url), {
+            headers: {
+              accept:
+                'application/rss+xml, application/xml, text/xml;q=0.9, text/plain;q=0.8, */*;q=0.5',
+            },
+          })
+
+          if (!response.ok) {
+            throw new Error(`${source.label} respondeu ${response.status}.`)
+          }
+
+          const xmlText = await response.text()
+          return parseBriefingFeed(xmlText, source.label)
+        }),
+      )
+
+      if (cancelled) return
+
+      const prioritized = dedupeBriefingItems(
+        settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : [])),
+      )
+        .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
+        .sort(
+          (left, right) =>
+            Number(isTodayInBrazil(right.publishedAt)) - Number(isTodayInBrazil(left.publishedAt)),
+        )
+        .slice(0, 8)
+
+      if (prioritized.length) {
+        setBriefingItems(prioritized)
+        setBriefingState('ready')
+        return
+      }
+
+      setBriefingState('error')
+      setBriefingError(
+        'Nao consegui montar o briefing automatico agora. O multiview e os canais ao vivo seguem disponiveis normalmente.',
+      )
+    }
+
+    void loadBriefing()
+    const interval = window.setInterval(() => {
+      void loadBriefing()
+    }, BRIEFING_REFRESH_MS)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -3359,11 +3748,105 @@ export function App() {
 
   return (
     <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
+      {showDailyBriefingModal ? (
+        <div
+          aria-hidden="true"
+          class="daily-briefing-modal-backdrop"
+          onClick={() => setShowDailyBriefingModal(false)}
+        >
+          <section
+            aria-labelledby="daily-briefing-title"
+            aria-modal="true"
+            class="daily-briefing-modal"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div class="daily-briefing-modal-topline">
+              <div>
+                <p class="section-tag">Briefing de abertura</p>
+                <h2 id="daily-briefing-title">As noticias mais fortes do dia</h2>
+                <p class="helper-copy">
+                  {briefingSourceSummary
+                    ? `Atualizado com ${briefingSourceSummary}.`
+                    : 'Atualizando os feeds de noticias agora.'}
+                </p>
+              </div>
+              <div class="daily-briefing-modal-actions">
+                <button
+                  class="ghost-button compact"
+                  type="button"
+                  onClick={() => {
+                    setSurface('news')
+                    setShowDailyBriefingModal(false)
+                  }}
+                >
+                  Ir para Noticias
+                </button>
+                <button
+                  aria-label="Fechar resumo do dia"
+                  class="ghost-button compact"
+                  type="button"
+                  onClick={() => setShowDailyBriefingModal(false)}
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+
+            {welcomeLeadBriefing ? (
+              <article class="daily-briefing-lead">
+                <div class="daily-briefing-lead-copy">
+                  <span class="pill soft">{welcomeLeadBriefing.source}</span>
+                  <h3>{welcomeLeadBriefing.title}</h3>
+                  <p>{welcomeLeadBriefing.summary}</p>
+                </div>
+                <div class="daily-briefing-lead-meta">
+                  <span class="pill">{formatBriefingTime(welcomeLeadBriefing.publishedAt)}</span>
+                  <a
+                    class="primary-button briefing-link-button"
+                    href={welcomeLeadBriefing.href}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    Ler origem
+                  </a>
+                </div>
+              </article>
+            ) : (
+              <div class="empty-state compact-empty">
+                <strong>
+                  {briefingState === 'loading' ? 'Montando o resumo do dia...' : 'Resumo indisponivel agora.'}
+                </strong>
+                <span>
+                  {briefingError || 'Assim que os feeds responderem, as manchetes entram aqui automaticamente.'}
+                </span>
+              </div>
+            )}
+
+            <div class="daily-briefing-list">
+              {welcomeBriefingHighlights.slice(1).map((item) => (
+                <article class="headline-card briefing-modal-card" key={item.id}>
+                  <div class="headline-card-meta">
+                    <span>{item.source}</span>
+                    <span>{formatBriefingTime(item.publishedAt)}</span>
+                  </div>
+                  <h3>{item.title}</h3>
+                  <p>{item.summary}</p>
+                  <a href={item.href} rel="noreferrer" target="_blank">
+                    Abrir cobertura
+                  </a>
+                </article>
+              ))}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
         <header class="topbar">
           <div>
             <p class="eyebrow">IPTV Pages Hub</p>
-            <h1>links e canais ao vivo num painel rapido e limpo</h1>
-            <p class="hero-subcopy">Horario no Brasil, em Londres, em Chicago, em Paris, em LA e em NY no topo. IPTV, noticias e agora radios entram no mesmo palco leve para manter a navegacao agil.</p>
+            <h1>Entre no site e ja caia dentro do briefing ao vivo</h1>
+            <p class="hero-subcopy">A welcome agora abre com leitura rapida das manchetes, relogio ao vivo e um multiview central para acompanhar dois canais de noticias ao mesmo tempo sem perder agilidade.</p>
             <LiveDashboardMeta />
           </div>
             <div class="surface-switch hero-surface-switch">
@@ -3376,6 +3859,134 @@ export function App() {
               <button class={activeSurface === 'cinema' ? 'active cinema-tab' : 'cinema-tab'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
             </div>
       </header>
+
+      <section class="welcome-overview">
+        <article class="welcome-panel welcome-intro-card">
+          <div class="welcome-intro-grid">
+            <div>
+              <p class="section-tag">Welcome screen</p>
+              <h2>Panorama do dia</h2>
+              <p class="helper-copy">Abra o hub e pegue logo a temperatura do noticiario com leitura curta, descricoes objetivas e tudo organizado para escanear rapido.</p>
+            </div>
+            <div class="welcome-clock-grid">
+              <div class="welcome-clock-card">
+                <span>Data</span>
+                <strong>{welcomeDateLabel}</strong>
+              </div>
+              <div class="welcome-clock-card">
+                <span>Hora agora</span>
+                <strong>{welcomeTimeLabel}</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="welcome-lead-story">
+            {welcomeLeadBriefing ? (
+              <>
+                <div class="welcome-lead-story-copy">
+                  <span class="pill soft">{welcomeLeadBriefing.source}</span>
+                  <h3>{welcomeLeadBriefing.title}</h3>
+                  <p>{welcomeLeadBriefing.summary}</p>
+                </div>
+                <div class="welcome-lead-story-actions">
+                  <span class="pill">{formatBriefingTime(welcomeLeadBriefing.publishedAt)}</span>
+                  <button class="ghost-button compact" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir modal</button>
+                  <a class="ghost-button compact" href={welcomeLeadBriefing.href} rel="noreferrer" target="_blank">Ler origem</a>
+                </div>
+              </>
+            ) : (
+              <div class="empty-state compact-empty">
+                <strong>{briefingState === 'loading' ? 'Atualizando o briefing do dia...' : 'Sem manchetes carregadas agora.'}</strong>
+                <span>{briefingError || 'Assim que os feeds responderem, a leitura do dia entra aqui automaticamente.'}</span>
+              </div>
+            )}
+          </div>
+        </article>
+
+        <article class="welcome-panel welcome-multiview-panel">
+          <div class="welcome-multiview-heading">
+            <div>
+              <p class="section-tag">Multiview central</p>
+              <h2>Duas telas em mute para acompanhar breaking news</h2>
+            </div>
+            <div class="welcome-multiview-actions">
+              <button
+                class="ghost-button compact"
+                type="button"
+                onClick={() => {
+                  setSelectedVod(null)
+                  setSelectedNewsId(welcomeLeftLink?.id || welcomeRightLink?.id || selectedNewsId)
+                  setSurface('news')
+                }}
+              >
+                Abrir no palco
+              </button>
+              <button class="ghost-button compact" type="button" onClick={() => setShowDailyBriefingModal(true)}>Resumo do dia</button>
+            </div>
+          </div>
+          <div class="welcome-multiview-grid">
+            <WelcomeMultiviewTile
+              onSelect={setWelcomeLeftNewsId}
+              options={welcomeMultiviewOptions}
+              selectedId={welcomeLeftNewsId}
+              slotLabel="Canal A"
+            />
+            <WelcomeMultiviewTile
+              onSelect={setWelcomeRightNewsId}
+              options={welcomeMultiviewOptions}
+              selectedId={welcomeRightNewsId}
+              slotLabel="Canal B"
+            />
+          </div>
+          <div class="welcome-multiview-footnote">
+            <span class="pill soft">Autoplay em mute para manter a entrada fluida</span>
+            <span class="helper-copy">Troque CNN, BBC, Sky, NBC e outros feeds a qualquer momento nos seletores acima.</span>
+          </div>
+        </article>
+
+        <article class="welcome-panel welcome-briefing-card">
+          <div class="welcome-briefing-heading">
+            <div>
+              <p class="section-tag">Leitura rapida</p>
+              <h2>Impacto em poucos segundos</h2>
+            </div>
+            <span class="pill soft">{briefingSourceSummary || (briefingState === 'loading' ? 'Buscando feeds' : 'Sem feed')}</span>
+          </div>
+          {welcomeBriefingSidebarItems.length ? (
+            <div class="welcome-briefing-list">
+              {welcomeBriefingSidebarItems.map((item) => (
+                <article class="welcome-briefing-list-item" key={item.id}>
+                  <div class="headline-card-meta">
+                    <span>{item.source}</span>
+                    <span>{formatBriefingTime(item.publishedAt)}</span>
+                  </div>
+                  <h3>{item.title}</h3>
+                  <p>{item.summary}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div class="empty-state compact-empty">
+              <strong>{briefingState === 'loading' ? 'Lendo os feeds agora...' : 'Nao achei manchetes para listar.'}</strong>
+              <span>{briefingError || 'Quando os RSS responderem, as descricoes entram aqui automaticamente.'}</span>
+            </div>
+          )}
+        </article>
+      </section>
+
+      <section class="welcome-headlines-grid" aria-label="Manchetes em destaque">
+        {welcomeBriefingHighlights.map((item) => (
+          <article class="headline-card" key={item.id}>
+            <div class="headline-card-meta">
+              <span>{item.source}</span>
+              <span>{formatBriefingTime(item.publishedAt)}</span>
+            </div>
+            <h3>{item.title}</h3>
+            <p>{item.summary}</p>
+            <a href={item.href} rel="noreferrer" target="_blank">Abrir cobertura</a>
+          </article>
+        ))}
+      </section>
 
       <section class="mobile-showcase" aria-label="Destaques mobile">
         <div class="mobile-showcase-card">
@@ -3471,8 +4082,34 @@ export function App() {
         </button>
       </div>
 
-      <main class="hub-grid">
-        <aside class="panel sidebar-panel">
+      <main class={classNames('hub-grid', leftSidebarCollapsed && 'left-collapsed', rightSidebarCollapsed && 'right-collapsed')}>
+        <aside class={classNames('panel sidebar-panel', leftSidebarCollapsed && 'collapsed')}>
+          <div class="sidebar-panel-topline">
+            {leftSidebarCollapsed ? null : (
+              <div>
+                <p class="section-tag">Menu esquerdo</p>
+                <h2>Navegacao</h2>
+              </div>
+            )}
+            <button
+              class="ghost-button compact sidebar-collapse-button"
+              type="button"
+              onClick={() => setLeftSidebarCollapsed((current) => !current)}
+            >
+              {leftSidebarCollapsed ? 'Abrir' : 'Colapsar'}
+            </button>
+          </div>
+          {leftSidebarCollapsed ? (
+            <div class="sidebar-mini-stack">
+              <button class={activeSurface === 'news' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('news')}>News</button>
+              <button class={activeSurface === 'iptv' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+              <button class={activeSurface === 'twitch' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>TW</button>
+              <button class={activeSurface === 'youtube' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YT</button>
+              <button class={activeSurface === 'kick' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
+              <button class={activeSurface === 'radio' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('radio')}>Radio</button>
+              <button class={activeSurface === 'cinema' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
+            </div>
+          ) : (
           <div class="sidebar-stack">
             <div class="sidebar-section active">
               <button class={showLiveNowPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowLiveNowPanel((current) => !current)}>
@@ -3699,6 +4336,7 @@ export function App() {
               {showCinemaPanel ? <div class="sidebar-content"><div class="sidebar-list">{movies.length ? movies.map((item) => <button key={item.id} class={selectedMovie?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}><div class="list-row-copy"><strong>{item.title}</strong><span>Google Drive preview</span></div><span class="status-chip unknown">Drive</span></button>) : <div class="empty-state compact-empty"><strong>Nenhum filme cadastrado.</strong><span>Cole um link compartilhado do Drive no painel da direita.</span></div>}</div></div> : null}
             </div>
           </div>
+          )}
         </aside>
 
         <section class="panel stage-panel">
@@ -3998,8 +4636,39 @@ export function App() {
           ) : <div class="empty-stage"><strong>Nenhum feed selecionado.</strong><span>Escolha um canal ou feed na sidebar.</span></div>}
         </section>
 
-        {activeSurface === 'radio' && selectedRadioStation ? (
+        {rightSidebarCollapsed ? (
+          <section class="panel manager-panel collapsed">
+            <div class="sidebar-panel-topline manager-panel-topline">
+              <button
+                class="ghost-button compact sidebar-collapse-button"
+                type="button"
+                onClick={() => setRightSidebarCollapsed(false)}
+              >
+                Abrir
+              </button>
+            </div>
+            <div class="sidebar-mini-stack manager-mini-stack">
+              <button class="sidebar-rail-button active" type="button" onClick={() => setShowDailyBriefingModal(true)}>Briefing</button>
+              <button class="sidebar-rail-button" type="button" onClick={() => setSurface('news')}>Canais</button>
+              <span class="pill soft">{embeds.length} feeds</span>
+              <span class="pill soft">{movies.length} filmes</span>
+            </div>
+          </section>
+        ) : activeSurface === 'radio' && selectedRadioStation ? (
           <section class="panel manager-panel radio-side-panel">
+            <div class="sidebar-panel-topline manager-panel-topline">
+              <div>
+                <p class="section-tag">Menu direito</p>
+                <h2>Biblioteca e controle</h2>
+              </div>
+              <button
+                class="ghost-button compact sidebar-collapse-button"
+                type="button"
+                onClick={() => setRightSidebarCollapsed(true)}
+              >
+                Colapsar
+              </button>
+            </div>
             <div class="panel-heading">
               <div><p class="section-tag">Biblioteca de radios</p><h2>{selectedRadioStation.name}</h2></div>
               <span class="pill">{selectedRadioStation.source}</span>
@@ -4099,6 +4768,19 @@ export function App() {
           </section>
         ) : (
           <section class="panel manager-panel">
+            <div class="sidebar-panel-topline manager-panel-topline">
+              <div>
+                <p class="section-tag">Menu direito</p>
+                <h2>Gerenciamento</h2>
+              </div>
+              <button
+                class="ghost-button compact sidebar-collapse-button"
+                type="button"
+                onClick={() => setRightSidebarCollapsed(true)}
+              >
+                Colapsar
+              </button>
+            </div>
             <div class="panel-heading">
               <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch, YouTube, Kick e Cinema</h2></div>
               <span class="pill">{embeds.length} feeds cadastrados</span>
