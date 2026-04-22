@@ -499,6 +499,19 @@ const DAILY_BRIEFING_SOURCES = [
   },
 ] as const
 
+interface BriefingJsonItem {
+  title?: string
+  link?: string
+  description?: string
+  content?: string
+  pubDate?: string
+}
+
+interface BriefingJsonPayload {
+  status?: string
+  items?: BriefingJsonItem[]
+}
+
 function hashString(value: string) {
   let hash = 0
 
@@ -603,6 +616,10 @@ function createBriefingId(source: string, title: string, href: string) {
   return `${source}:${hashString(`${title}|${href}`)}`
 }
 
+function buildRss2JsonUrl(feedUrl: string) {
+  return `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`
+}
+
 function parseBriefingFeed(xmlText: string, sourceLabel: string) {
   if (typeof DOMParser === 'undefined') return [] as BriefingItem[]
 
@@ -624,6 +641,110 @@ function parseBriefingFeed(xmlText: string, sourceLabel: string) {
       publishedAt,
     }
   }).filter((item) => item.title && item.href)
+}
+
+function parseBriefingJsonFeed(payload: BriefingJsonPayload, sourceLabel: string) {
+  const items = Array.isArray(payload.items) ? payload.items : []
+
+  return items
+    .map((item) => {
+      const title = stripHtml(item.title || '').trim()
+      const href = stripHtml(item.link || '').trim()
+      const summary = normalizeBriefingSummary(item.description || item.content || title)
+      const publishedAt = parseFeedDate(item.pubDate)
+
+      return {
+        id: createBriefingId(sourceLabel, title, href),
+        title,
+        summary,
+        href,
+        source: sourceLabel,
+        publishedAt,
+      }
+    })
+    .filter((item) => item.title && item.href)
+}
+
+async function fetchBriefingSource(source: (typeof DAILY_BRIEFING_SOURCES)[number]) {
+  const attempts = [
+    async () => {
+      const response = await fetch(buildRss2JsonUrl(source.url), {
+        cache: 'no-store',
+        headers: {
+          Accept: 'application/json, text/plain;q=0.9, */*;q=0.8',
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`rss2json respondeu ${response.status}.`)
+      }
+
+      const payload = (await response.json()) as BriefingJsonPayload
+      const items = parseBriefingJsonFeed(payload, source.label)
+
+      if (!items.length) {
+        throw new Error('rss2json voltou sem itens validos.')
+      }
+
+      return items
+    },
+    async () => {
+      const response = await fetch(buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, source.url), {
+        cache: 'no-store',
+        headers: {
+          accept:
+            'application/rss+xml, application/xml, text/xml;q=0.9, text/plain;q=0.8, */*;q=0.5',
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`proxy respondeu ${response.status}.`)
+      }
+
+      const xmlText = await response.text()
+      const items = parseBriefingFeed(xmlText, source.label)
+
+      if (!items.length) {
+        throw new Error('proxy voltou sem itens validos.')
+      }
+
+      return items
+    },
+    async () => {
+      const response = await fetch(source.url, {
+        cache: 'no-store',
+        headers: {
+          accept:
+            'application/rss+xml, application/xml, text/xml;q=0.9, text/plain;q=0.8, */*;q=0.5',
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`fonte direta respondeu ${response.status}.`)
+      }
+
+      const xmlText = await response.text()
+      const items = parseBriefingFeed(xmlText, source.label)
+
+      if (!items.length) {
+        throw new Error('fonte direta voltou sem itens validos.')
+      }
+
+      return items
+    },
+  ] as const
+
+  const errors: string[] = []
+
+  for (const attempt of attempts) {
+    try {
+      return await attempt()
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'falha desconhecida')
+    }
+  }
+
+  throw new Error(`${source.label}: ${errors.join(' | ')}`)
 }
 
 function isTodayInBrazil(isoValue: string) {
@@ -1413,12 +1534,10 @@ function WelcomeMultiviewTile({
   options,
   selectedId,
   slotLabel,
-  onSelect,
 }: {
   options: NewsLink[]
   selectedId: string
   slotLabel: string
-  onSelect: (nextId: string) => void
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -1502,11 +1621,8 @@ function WelcomeMultiviewTile({
   if (!selectedLink) {
     return (
       <article class="welcome-multiview-card">
-        <div class="welcome-multiview-topline">
-          <span class="section-tag">{slotLabel}</span>
-        </div>
         <div class="welcome-multiview-empty">
-          <strong>Nenhum canal pronto para multiview.</strong>
+          <strong>{slotLabel}: nenhum canal pronto para multiview.</strong>
         </div>
       </article>
     )
@@ -1514,25 +1630,12 @@ function WelcomeMultiviewTile({
 
   return (
     <article class="welcome-multiview-card">
-      <div class="welcome-multiview-topline">
-        <span class="section-tag">{slotLabel}</span>
-        <label class="welcome-multiview-picker">
-          <span>Canal</span>
-          <select value={selectedLink.id} onChange={(event) => onSelect((event.currentTarget as HTMLSelectElement).value)}>
-            {options.map((item) => (
-              <option key={item.id} value={item.id}>{item.name}</option>
-            ))}
-          </select>
-        </label>
-      </div>
       <div class="welcome-multiview-stage">
         <video autoPlay muted playsInline ref={videoRef} />
       </div>
       <div class="welcome-multiview-meta">
-        <div>
-          <strong>{selectedLink.name}</strong>
-          <span>{selectedLink.source}</span>
-        </div>
+        <span class="section-tag">{slotLabel}</span>
+        <strong>{selectedLink.name}</strong>
         <span class="pill soft">{tileState}</span>
       </div>
     </article>
@@ -1816,6 +1919,14 @@ export function App() {
   }, [welcomeTick, welcomeTimeLabel])
   const welcomeLeadBriefing = briefingItems[0] ?? null
   const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 9), [briefingItems])
+  const welcomeLeftSelectedLink = useMemo(
+    () => welcomeMultiviewOptions.find((item) => item.id === welcomeLeftNewsId) ?? welcomeMultiviewOptions[0] ?? null,
+    [welcomeLeftNewsId, welcomeMultiviewOptions],
+  )
+  const welcomeRightSelectedLink = useMemo(
+    () => welcomeMultiviewOptions.find((item) => item.id === welcomeRightNewsId) ?? welcomeMultiviewOptions[0] ?? null,
+    [welcomeRightNewsId, welcomeMultiviewOptions],
+  )
   const briefingSourceSummary = useMemo(
     () => summarizeBriefingSources(briefingItems),
     [briefingItems],
@@ -2037,21 +2148,7 @@ export function App() {
       setBriefingError('')
 
       const settled = await Promise.allSettled(
-        DAILY_BRIEFING_SOURCES.map(async (source) => {
-          const response = await fetch(buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, source.url), {
-            headers: {
-              accept:
-                'application/rss+xml, application/xml, text/xml;q=0.9, text/plain;q=0.8, */*;q=0.5',
-            },
-          })
-
-          if (!response.ok) {
-            throw new Error(`${source.label} respondeu ${response.status}.`)
-          }
-
-          const xmlText = await response.text()
-          return parseBriefingFeed(xmlText, source.label)
-        }),
+        DAILY_BRIEFING_SOURCES.map((source) => fetchBriefingSource(source)),
       )
 
       if (cancelled) return
@@ -2064,7 +2161,7 @@ export function App() {
           (left, right) =>
             Number(isTodayInBrazil(right.publishedAt)) - Number(isTodayInBrazil(left.publishedAt)),
         )
-        .slice(0, 8)
+        .slice(0, 9)
 
       if (prioritized.length) {
         setBriefingItems(prioritized)
@@ -2072,9 +2169,14 @@ export function App() {
         return
       }
 
+      const failures = settled
+        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+        .map((result) => result.reason instanceof Error ? result.reason.message : 'falha desconhecida')
+        .join(' | ')
+
       setBriefingState('error')
       setBriefingError(
-        'Nao consegui montar o briefing automatico agora. O multiview e os canais ao vivo seguem disponiveis normalmente.',
+        failures || 'Nao consegui montar o briefing automatico agora. O multiview e os canais ao vivo seguem disponiveis normalmente.',
       )
     }
 
@@ -3914,19 +4016,53 @@ export function App() {
           <section class="welcome-mock-multiview" aria-label="Multiview de noticias">
             <div class="welcome-mock-player-shell">
               <WelcomeMultiviewTile
-                onSelect={setWelcomeLeftNewsId}
                 options={welcomeMultiviewOptions}
                 selectedId={welcomeLeftNewsId}
                 slotLabel="Canal A"
               />
+              <div class="welcome-mock-channel-toolbar">
+                <div class="welcome-mock-channel-summary">
+                  <span class="section-tag">Canal A</span>
+                  <strong>{welcomeLeftSelectedLink?.name || 'Selecione um canal'}</strong>
+                </div>
+                <div class="welcome-mock-channel-buttons" role="group" aria-label="Trocar canal do player esquerdo">
+                  {welcomeMultiviewOptions.map((item) => (
+                    <button
+                      class={item.id === welcomeLeftNewsId ? 'active' : ''}
+                      key={`left-${item.id}`}
+                      type="button"
+                      onClick={() => setWelcomeLeftNewsId(item.id)}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
             <div class="welcome-mock-player-shell">
               <WelcomeMultiviewTile
-                onSelect={setWelcomeRightNewsId}
                 options={welcomeMultiviewOptions}
                 selectedId={welcomeRightNewsId}
                 slotLabel="Canal B"
               />
+              <div class="welcome-mock-channel-toolbar">
+                <div class="welcome-mock-channel-summary">
+                  <span class="section-tag">Canal B</span>
+                  <strong>{welcomeRightSelectedLink?.name || 'Selecione um canal'}</strong>
+                </div>
+                <div class="welcome-mock-channel-buttons" role="group" aria-label="Trocar canal do player direito">
+                  {welcomeMultiviewOptions.map((item) => (
+                    <button
+                      class={item.id === welcomeRightNewsId ? 'active' : ''}
+                      key={`right-${item.id}`}
+                      type="button"
+                      onClick={() => setWelcomeRightNewsId(item.id)}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </section>
 

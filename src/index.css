@@ -3784,7 +3784,7 @@ body {
 .welcome-mock-page {
   position: relative;
   display: grid;
-  gap: 36px;
+  gap: 28px;
   width: min(1720px, calc(100% - 64px));
   margin: 28px auto 48px;
   padding: 28px 32px 40px;
@@ -3897,14 +3897,21 @@ body {
   z-index: 1;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 60px;
+  gap: 32px;
+  align-items: start;
 }
 
 .welcome-mock-player-shell {
+  display: grid;
+  gap: 14px;
+  align-content: start;
   min-width: 0;
 }
 
 .welcome-mock-player-shell .welcome-multiview-card {
+  display: grid !important;
+  gap: 12px !important;
+  grid-template-rows: auto auto !important;
   padding: 0 !important;
   border: 0 !important;
   border-radius: 0 !important;
@@ -3912,14 +3919,9 @@ body {
   box-shadow: none !important;
 }
 
-.welcome-mock-player-shell .welcome-multiview-topline,
-.welcome-mock-player-shell .welcome-multiview-meta {
-  display: none !important;
-}
-
 .welcome-mock-player-shell .welcome-multiview-stage {
   aspect-ratio: 16 / 9 !important;
-  min-height: 0 !important;
+  min-height: auto !important;
   border-radius: 0 !important;
   border: 0 !important;
   background: rgba(255, 255, 255, 0.08) !important;
@@ -3933,11 +3935,80 @@ body {
   background: #111 !important;
 }
 
+.welcome-mock-player-shell .welcome-multiview-meta {
+  display: flex !important;
+  justify-content: space-between;
+  align-items: center !important;
+  gap: 12px;
+  padding-top: 0 !important;
+}
+
+.welcome-mock-player-shell .welcome-multiview-meta strong {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.02rem !important;
+  color: #fff;
+}
+
+.welcome-mock-player-shell .welcome-multiview-meta .section-tag {
+  flex: 0 0 auto;
+}
+
+.welcome-mock-channel-toolbar {
+  display: grid;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.welcome-mock-channel-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.welcome-mock-channel-summary strong {
+  margin: 0;
+  color: #fff;
+  font-size: 1rem;
+  text-align: right;
+}
+
+.welcome-mock-channel-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.welcome-mock-channel-buttons button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 0.88rem;
+  transition: 180ms ease;
+}
+
+.welcome-mock-channel-buttons button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 121, 200, 0.42);
+  background: rgba(255, 121, 200, 0.12);
+}
+
+.welcome-mock-channel-buttons button.active {
+  border-color: rgba(255, 156, 56, 0.46);
+  background: linear-gradient(135deg, rgba(255, 77, 216, 0.18), rgba(255, 156, 56, 0.16));
+  color: #fff;
+  box-shadow: 0 10px 26px rgba(255, 77, 216, 0.14);
+}
+
 .welcome-mock-news-section {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 22px;
+  gap: 18px;
 }
 
 .welcome-mock-news-section h2 {
@@ -4025,5 +4096,14 @@ body {
   .welcome-mock-multiview,
   .welcome-mock-news-grid {
     grid-template-columns: 1fr;
+  }
+
+  .welcome-mock-channel-summary {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .welcome-mock-channel-summary strong {
+    text-align: left;
   }
 }
