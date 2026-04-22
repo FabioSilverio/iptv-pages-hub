@@ -703,6 +703,21 @@ function summarizeBriefingSources(items: BriefingItem[]) {
     .join(' + ')
 }
 
+function buildWelcomeGreeting(now: Date) {
+  const hour = Number(
+    new Intl.DateTimeFormat('en-US', {
+      hour: '2-digit',
+      hour12: false,
+      timeZone: 'America/Sao_Paulo',
+    }).format(now),
+  )
+
+  if (hour >= 5 && hour < 12) return 'Bom dia'
+  if (hour >= 12 && hour < 18) return 'Boa tarde'
+  if (hour >= 18 && hour < 24) return 'Boa noite'
+  return 'Boa madrugada'
+}
+
 function isTokenFresh(expiresAt?: string) {
   if (!expiresAt) return false
   const expiry = Date.parse(expiresAt)
@@ -1788,6 +1803,10 @@ export function App() {
       second: '2-digit',
       timeZone: 'America/Sao_Paulo',
     }).format(new Date(welcomeTick)),
+    [welcomeTick],
+  )
+  const welcomeGreeting = useMemo(
+    () => buildWelcomeGreeting(new Date(welcomeTick)),
     [welcomeTick],
   )
   const welcomeLeadBriefing = briefingItems[0] ?? null
@@ -3847,7 +3866,7 @@ export function App() {
         <header class={classNames('topbar', sitePage === 'welcome' && 'welcome-page-topbar')}>
           <div>
             <p class="eyebrow">{sitePage === 'welcome' ? 'Neon Briefing' : 'IPTV Pages Hub'}</p>
-            <h1>{sitePage === 'welcome' ? 'Entre no site e caia no multiview antes do resto' : 'Hub completo de canais, streams e players'}</h1>
+            <h1>{sitePage === 'welcome' ? `${welcomeGreeting}! Entre no site e caia no multiview antes do resto` : 'Hub completo de canais, streams e players'}</h1>
             <p class="hero-subcopy">
               {sitePage === 'welcome'
                 ? 'A welcome agora e uma pagina propria: leitura rapida, relogio ao vivo e um multiview central grande para entrar no ritmo do dia.'
