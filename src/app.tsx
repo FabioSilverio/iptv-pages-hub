@@ -718,6 +718,11 @@ function buildWelcomeGreeting(now: Date) {
   return 'Boa madrugada'
 }
 
+function readSitePageFromHash() {
+  if (typeof window === 'undefined') return 'welcome' as const
+  return window.location.hash.replace(/^#/, '') === 'hub' ? 'hub' as const : 'welcome' as const
+}
+
 function isTokenFresh(expiresAt?: string) {
   if (!expiresAt) return false
   const expiry = Date.parse(expiresAt)
@@ -1570,7 +1575,7 @@ export function App() {
   const [briefingItems, setBriefingItems] = useState<BriefingItem[]>([])
   const [briefingState, setBriefingState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [briefingError, setBriefingError] = useState('')
-  const [sitePage, setSitePage] = useState<'welcome' | 'hub'>('welcome')
+  const [sitePage, setSitePage] = useState<'welcome' | 'hub'>(() => readSitePageFromHash())
   const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
   const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
@@ -1778,17 +1783,8 @@ export function App() {
     () => newsLinks.filter((item) => item.streamUrl && isLikelyHlsStream(item.streamUrl)),
     [],
   )
-  const welcomeLeftLink = useMemo(
-    () => welcomeMultiviewOptions.find((item) => item.id === welcomeLeftNewsId) ?? welcomeMultiviewOptions[0] ?? null,
-    [welcomeLeftNewsId, welcomeMultiviewOptions],
-  )
-  const welcomeRightLink = useMemo(
-    () => welcomeMultiviewOptions.find((item) => item.id === welcomeRightNewsId) ?? welcomeMultiviewOptions[1] ?? welcomeMultiviewOptions[0] ?? null,
-    [welcomeRightNewsId, welcomeMultiviewOptions],
-  )
-  const welcomeDateLabel = useMemo(
+  const welcomeDateTitleLabel = useMemo(
     () => new Intl.DateTimeFormat('pt-BR', {
-      weekday: 'long',
       day: '2-digit',
       month: 'long',
       year: 'numeric',
@@ -1809,9 +1805,17 @@ export function App() {
     () => buildWelcomeGreeting(new Date(welcomeTick)),
     [welcomeTick],
   )
+  const welcomeClockRows = useMemo(() => {
+    const byLabel = new Map(buildDashboardTimes(new Date(welcomeTick)).map((entry) => [entry.label, entry.value]))
+    return [
+      { label: 'Hora ao vivo aqui', value: byLabel.get('Brasil') || welcomeTimeLabel },
+      { label: 'Hora em NY', value: byLabel.get('NY') || '' },
+      { label: 'Hora em LA', value: byLabel.get('LA') || '' },
+      { label: 'Hora em Londres', value: byLabel.get('Londres') || '' },
+    ]
+  }, [welcomeTick, welcomeTimeLabel])
   const welcomeLeadBriefing = briefingItems[0] ?? null
-  const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 6), [briefingItems])
-  const welcomeBriefingSidebarItems = useMemo(() => briefingItems.slice(1, 4), [briefingItems])
+  const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 9), [briefingItems])
   const briefingSourceSummary = useMemo(
     () => summarizeBriefingSources(briefingItems),
     [briefingItems],
@@ -2012,6 +2016,17 @@ export function App() {
     }, 1_000)
 
     return () => window.clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
+    const syncFromHash = () => setSitePage(readSitePageFromHash())
+
+    syncFromHash()
+    window.addEventListener('hashchange', syncFromHash)
+
+    return () => {
+      window.removeEventListener('hashchange', syncFromHash)
+    }
   }, [])
 
   useEffect(() => {
@@ -3766,6 +3781,15 @@ export function App() {
     }
   }
 
+  function navigateSitePage(next: 'welcome' | 'hub') {
+    setSitePage(next)
+
+    const nextHash = next === 'hub' ? '#hub' : '#welcome'
+    if (window.location.hash !== nextHash) {
+      window.location.hash = nextHash
+    }
+  }
+
   return (
     <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
       {sitePage === 'welcome' && showDailyBriefingModal ? (
@@ -3796,7 +3820,7 @@ export function App() {
                   class="ghost-button compact"
                   type="button"
                   onClick={() => {
-                    setSitePage('hub')
+                    navigateSitePage('hub')
                     setSurface('news')
                     setShowDailyBriefingModal(false)
                   }}
@@ -3863,153 +3887,93 @@ export function App() {
         </div>
       ) : null}
 
-        <header class={classNames('topbar', sitePage === 'welcome' && 'welcome-page-topbar')}>
-          <div>
-            <p class="eyebrow">{sitePage === 'welcome' ? 'Neon Briefing' : 'IPTV Pages Hub'}</p>
-            <h1>{sitePage === 'welcome' ? `${welcomeGreeting}! Entre no site e caia no multiview antes do resto` : 'Hub completo de canais, streams e players'}</h1>
-            <p class="hero-subcopy">
-              {sitePage === 'welcome'
-                ? 'A welcome agora e uma pagina propria: leitura rapida, relogio ao vivo e um multiview central grande para entrar no ritmo do dia.'
-                : 'O restante do site segue em modo hub com players, sidebars e gerenciamento completo.'}
-            </p>
-            <LiveDashboardMeta />
-          </div>
-          {sitePage === 'welcome' ? (
-            <div class="welcome-enter-actions">
-              <button class="primary-button" type="button" onClick={() => setSitePage('hub')}>Entrar no hub</button>
-              <button class="ghost-button" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir resumo</button>
-            </div>
-          ) : (
-            <div class="surface-switch hero-surface-switch">
-              <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
-              <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
-              <button class={activeSurface === 'youtube' ? 'active youtube-tab' : 'youtube-tab'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YouTube</button>
-              <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
-              <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
-              <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
-              <button class={activeSurface === 'cinema' ? 'active cinema-tab' : 'cinema-tab'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
-              <button class="ghost-button compact hero-back-button" type="button" onClick={() => setSitePage('welcome')}>Welcome</button>
-            </div>
-          )}
-      </header>
-
       {sitePage === 'welcome' ? (
-      <section class="welcome-overview">
-        <article class="welcome-panel welcome-intro-card">
-          <div class="welcome-intro-grid">
-            <div>
-              <p class="section-tag">Welcome screen</p>
-              <h2>Panorama do dia</h2>
-              <p class="helper-copy">Abra o hub e bata o olho no que importa: hora, manchete principal e leitura rapida para entrar no contexto antes mesmo de abrir um player maior.</p>
-            </div>
-            <div class="welcome-clock-grid">
-              <div class="welcome-clock-card">
-                <span>Data</span>
-                <strong>{welcomeDateLabel}</strong>
-              </div>
-              <div class="welcome-clock-card">
-                <span>Hora agora</span>
-                <strong>{welcomeTimeLabel}</strong>
-              </div>
-            </div>
+        <section class="welcome-mock-page">
+          <div class="welcome-mock-actions">
+            <button class="primary-button" type="button" onClick={() => navigateSitePage('hub')}>Entrar no hub</button>
+            <button class="ghost-button" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir resumo</button>
           </div>
 
-          <div class="welcome-lead-story">
-            {welcomeLeadBriefing ? (
-              <>
-                <div class="welcome-lead-story-copy">
-                  <span class="pill soft">{welcomeLeadBriefing.source}</span>
-                  <h3>{welcomeLeadBriefing.title}</h3>
-                  <p>{welcomeLeadBriefing.summary}</p>
+          <section class="welcome-mock-hero">
+            <div class="welcome-mock-greeting">
+              <p class="eyebrow">Neon Briefing</p>
+              <h1>{welcomeGreeting}, Fábio!</h1>
+              <p>hoje é dia {welcomeDateTitleLabel}</p>
+            </div>
+
+            <div class="welcome-mock-times">
+              {welcomeClockRows.map((item) => (
+                <div class="welcome-mock-time-row" key={item.label}>
+                  <span>{item.label}</span>
+                  <strong>{item.value}</strong>
                 </div>
-                <div class="welcome-lead-story-actions">
-                  <span class="pill">{formatBriefingTime(welcomeLeadBriefing.publishedAt)}</span>
-                  <button class="ghost-button compact" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir modal</button>
-                  <a class="ghost-button compact" href={welcomeLeadBriefing.href} rel="noreferrer" target="_blank">Ler origem</a>
-                </div>
-              </>
-            ) : (
-              <div class="empty-state compact-empty">
-                <strong>{briefingState === 'loading' ? 'Atualizando o briefing do dia...' : 'Sem manchetes carregadas agora.'}</strong>
-                <span>{briefingError || 'Assim que os feeds responderem, a leitura do dia entra aqui automaticamente.'}</span>
-              </div>
-            )}
-          </div>
-        </article>
-
-        <article class="welcome-panel welcome-multiview-panel">
-          <div class="welcome-multiview-heading">
-            <div>
-              <p class="section-tag">Multiview central</p>
-              <h2>Duas telas grandes em mute para acompanhar breaking news</h2>
-            </div>
-            <div class="welcome-multiview-actions">
-              <button
-                class="ghost-button compact"
-                type="button"
-                onClick={() => {
-                  setSelectedVod(null)
-                  setSelectedNewsId(welcomeLeftLink?.id || welcomeRightLink?.id || selectedNewsId)
-                  setSurface('news')
-                  setSitePage('hub')
-                }}
-              >
-                Abrir no palco
-              </button>
-              <button class="ghost-button compact" type="button" onClick={() => setShowDailyBriefingModal(true)}>Resumo do dia</button>
-            </div>
-          </div>
-          <div class="welcome-multiview-grid">
-            <WelcomeMultiviewTile
-              onSelect={setWelcomeLeftNewsId}
-              options={welcomeMultiviewOptions}
-              selectedId={welcomeLeftNewsId}
-              slotLabel="Canal A"
-            />
-            <WelcomeMultiviewTile
-              onSelect={setWelcomeRightNewsId}
-              options={welcomeMultiviewOptions}
-              selectedId={welcomeRightNewsId}
-              slotLabel="Canal B"
-            />
-          </div>
-          <div class="welcome-multiview-footnote">
-            <span class="pill soft">Autoplay em mute para manter a entrada fluida</span>
-            <span class="helper-copy">Troque CNN, BBC, Sky, NBC e outros feeds a qualquer momento nos seletores acima.</span>
-          </div>
-        </article>
-
-        <article class="welcome-panel welcome-briefing-card">
-          <div class="welcome-briefing-heading">
-            <div>
-              <p class="section-tag">Leitura rapida</p>
-              <h2>Impacto em poucos segundos</h2>
-            </div>
-            <span class="pill soft">{briefingSourceSummary || (briefingState === 'loading' ? 'Buscando feeds' : 'Sem feed')}</span>
-          </div>
-          {welcomeBriefingSidebarItems.length ? (
-            <div class="welcome-briefing-list">
-              {welcomeBriefingSidebarItems.map((item) => (
-                <a class="welcome-briefing-list-item welcome-briefing-link-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
-                  <div class="headline-card-meta">
-                    <span>{item.source}</span>
-                    <span>{formatBriefingTime(item.publishedAt)}</span>
-                  </div>
-                  <h3>{item.title}</h3>
-                  <p>{item.summary}</p>
-                  <span class="welcome-briefing-link-copy">Abrir cobertura</span>
-                </a>
               ))}
             </div>
-          ) : (
-            <div class="empty-state compact-empty">
-              <strong>{briefingState === 'loading' ? 'Lendo os feeds agora...' : 'Nao achei manchetes para listar.'}</strong>
-              <span>{briefingError || 'Quando os RSS responderem, as descricoes entram aqui automaticamente.'}</span>
+          </section>
+
+          <section class="welcome-mock-multiview" aria-label="Multiview de noticias">
+            <div class="welcome-mock-player-shell">
+              <WelcomeMultiviewTile
+                onSelect={setWelcomeLeftNewsId}
+                options={welcomeMultiviewOptions}
+                selectedId={welcomeLeftNewsId}
+                slotLabel="Canal A"
+              />
             </div>
-          )}
-        </article>
-      </section>
-      ) : null}
+            <div class="welcome-mock-player-shell">
+              <WelcomeMultiviewTile
+                onSelect={setWelcomeRightNewsId}
+                options={welcomeMultiviewOptions}
+                selectedId={welcomeRightNewsId}
+                slotLabel="Canal B"
+              />
+            </div>
+          </section>
+
+          <section class="welcome-mock-news-section" aria-label="Noticias do dia">
+            <h2>Veja as noticias do dia:</h2>
+            <div class="welcome-mock-news-grid">
+              {welcomeBriefingHighlights.length ? (
+                welcomeBriefingHighlights.map((item) => (
+                  <a class="welcome-mock-news-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
+                    <div class="welcome-mock-news-meta">
+                      <span>{item.source}</span>
+                      <small>{formatBriefingTime(item.publishedAt)}</small>
+                    </div>
+                    <strong>{item.title}</strong>
+                    <p>{item.summary}</p>
+                    <span class="welcome-mock-news-link">Abrir cobertura</span>
+                  </a>
+                ))
+              ) : (
+                <article class="welcome-mock-news-card empty">
+                  <strong>{briefingState === 'loading' ? 'Carregando noticias do dia...' : 'Noticias indisponiveis agora.'}</strong>
+                  <p>{briefingError || 'Assim que os feeds responderem, os cards de leitura entram aqui automaticamente.'}</p>
+                </article>
+              )}
+            </div>
+          </section>
+        </section>
+      ) : (
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">IPTV Pages Hub</p>
+            <h1>Hub completo de canais, streams e players</h1>
+            <p class="hero-subcopy">O restante do site segue em modo hub com players, sidebars e gerenciamento completo.</p>
+            <LiveDashboardMeta />
+          </div>
+          <div class="surface-switch hero-surface-switch">
+            <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+            <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
+            <button class={activeSurface === 'youtube' ? 'active youtube-tab' : 'youtube-tab'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YouTube</button>
+            <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
+            <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
+            <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
+            <button class={activeSurface === 'cinema' ? 'active cinema-tab' : 'cinema-tab'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
+            <button class="ghost-button compact hero-back-button" type="button" onClick={() => navigateSitePage('welcome')}>Welcome</button>
+          </div>
+        </header>
+      )}
 
       {sitePage === 'hub' ? (
       <>

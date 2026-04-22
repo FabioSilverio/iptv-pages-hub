@@ -3779,3 +3779,251 @@ body {
     min-height: 280px !important;
   }
 }
+
+/* Dedicated welcome subpage matching the wireframe layout */
+.welcome-mock-page {
+  position: relative;
+  display: grid;
+  gap: 36px;
+  width: min(1720px, calc(100% - 64px));
+  margin: 28px auto 48px;
+  padding: 28px 32px 40px;
+  border-radius: 0;
+  background:
+    radial-gradient(circle at top left, rgba(255, 0, 140, 0.08), transparent 24%),
+    radial-gradient(circle at top right, rgba(0, 216, 255, 0.08), transparent 24%),
+    #111;
+  box-shadow: none;
+}
+
+.welcome-mock-page::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.018) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.28;
+}
+
+.welcome-mock-actions {
+  position: absolute;
+  top: 28px;
+  right: 32px;
+  z-index: 2;
+  display: grid;
+  gap: 12px;
+  width: 180px;
+}
+
+.welcome-mock-actions .primary-button,
+.welcome-mock-actions .ghost-button {
+  min-height: 50px;
+}
+
+.welcome-mock-hero {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 420px;
+  gap: 42px;
+  align-items: start;
+  padding-right: 220px;
+}
+
+.welcome-mock-greeting {
+  display: grid;
+  gap: 12px;
+}
+
+.welcome-mock-greeting .eyebrow {
+  margin: 0;
+  color: #f6c91d;
+}
+
+.welcome-mock-greeting h1,
+.welcome-mock-greeting p {
+  margin: 0;
+}
+
+.welcome-mock-greeting h1 {
+  max-width: 9ch;
+  font-size: clamp(3rem, 4.8vw, 5rem);
+  line-height: 0.98;
+  color: #fff;
+}
+
+.welcome-mock-greeting p {
+  max-width: 20ch;
+  font-size: clamp(1.4rem, 2.3vw, 2.4rem);
+  line-height: 1.14;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.welcome-mock-times {
+  display: grid;
+  gap: 14px;
+  justify-items: start;
+  padding-top: 4px;
+}
+
+.welcome-mock-time-row {
+  display: grid;
+  gap: 4px;
+}
+
+.welcome-mock-time-row span,
+.welcome-mock-time-row strong {
+  margin: 0;
+  color: #fff;
+}
+
+.welcome-mock-time-row span {
+  font-size: clamp(1.2rem, 2.1vw, 2.2rem);
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.welcome-mock-time-row strong {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.welcome-mock-multiview {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 60px;
+}
+
+.welcome-mock-player-shell {
+  min-width: 0;
+}
+
+.welcome-mock-player-shell .welcome-multiview-card {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.welcome-mock-player-shell .welcome-multiview-topline,
+.welcome-mock-player-shell .welcome-multiview-meta {
+  display: none !important;
+}
+
+.welcome-mock-player-shell .welcome-multiview-stage {
+  aspect-ratio: 16 / 9 !important;
+  min-height: 0 !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: none !important;
+}
+
+.welcome-mock-player-shell .welcome-multiview-stage video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  background: #111 !important;
+}
+
+.welcome-mock-news-section {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 22px;
+}
+
+.welcome-mock-news-section h2 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 3.1rem);
+  line-height: 1.02;
+  color: #fff;
+}
+
+.welcome-mock-news-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 26px 24px;
+}
+
+.welcome-mock-news-card {
+  min-height: 170px;
+  padding: 18px 20px;
+  display: grid;
+  gap: 10px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+  color: #fff;
+  text-decoration: none;
+}
+
+.welcome-mock-news-card.empty {
+  grid-column: 1 / -1;
+}
+
+.welcome-mock-news-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.welcome-mock-news-card strong {
+  font-size: 1rem;
+  line-height: 1.28;
+}
+
+.welcome-mock-news-card p {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+  line-height: 1.52;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.welcome-mock-news-link {
+  align-self: end;
+  color: #ff79c8;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+@media (max-width: 1320px) {
+  .welcome-mock-page {
+    width: min(100%, calc(100% - 28px));
+    padding-right: 24px;
+    padding-left: 24px;
+  }
+
+  .welcome-mock-hero {
+    grid-template-columns: 1fr;
+    padding-right: 0;
+  }
+
+  .welcome-mock-actions {
+    position: static;
+    width: 200px;
+    margin-left: auto;
+  }
+
+  .welcome-mock-multiview,
+  .welcome-mock-news-grid {
+    grid-template-columns: 1fr;
+  }
+}
