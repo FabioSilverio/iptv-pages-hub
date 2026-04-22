@@ -3498,3 +3498,284 @@ body {
   background: linear-gradient(135deg, #ff4dd8, #ffb038);
   color: #0a0f18;
 }
+
+/* Final welcome lock-in: exact dedicated landing layout */
+.welcome-page-topbar {
+  grid-template-columns: minmax(0, 1fr) 180px !important;
+  align-items: start !important;
+  gap: 22px !important;
+  padding: 28px 32px !important;
+  min-height: 230px !important;
+}
+
+.welcome-page-topbar > div:first-child {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.welcome-page-topbar h1 {
+  max-width: 12ch !important;
+  margin-bottom: 0 !important;
+  font-size: clamp(2rem, 3.2vw, 3.55rem) !important;
+  line-height: 0.98 !important;
+}
+
+.welcome-page-topbar .hero-subcopy {
+  max-width: 58ch !important;
+  margin: 0 !important;
+  color: rgba(226, 232, 240, 0.78) !important;
+  font-size: 1.02rem !important;
+}
+
+.welcome-page-topbar .topbar-meta {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  gap: 16px !important;
+  align-items: end !important;
+  margin-top: 0 !important;
+}
+
+.welcome-page-topbar .market-strip {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 10px !important;
+  align-self: end;
+}
+
+.welcome-page-topbar .market-pill {
+  min-width: 82px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  backdrop-filter: blur(10px);
+}
+
+.welcome-page-topbar .topbar-stats {
+  grid-template-columns: repeat(3, minmax(100px, 112px)) !important;
+  gap: 12px !important;
+}
+
+.welcome-page-topbar .stat-card.time-card {
+  min-height: 76px !important;
+  padding: 14px !important;
+  border-radius: 18px !important;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.03)),
+    rgba(255, 255, 255, 0.03) !important;
+}
+
+.welcome-page-topbar .stat-card.time-card strong {
+  font-size: 1.28rem !important;
+}
+
+.welcome-enter-actions {
+  justify-items: stretch !important;
+  gap: 10px !important;
+}
+
+.welcome-enter-actions .primary-button,
+.welcome-enter-actions .ghost-button {
+  min-height: 50px;
+}
+
+.welcome-overview {
+  grid-template-columns: 270px minmax(780px, 1fr) 360px !important;
+  gap: 18px !important;
+  align-items: stretch !important;
+}
+
+.welcome-panel {
+  padding: 18px !important;
+  border-radius: 28px !important;
+}
+
+.welcome-intro-card {
+  display: grid !important;
+  grid-template-rows: auto minmax(0, 1fr) !important;
+  gap: 18px !important;
+}
+
+.welcome-intro-grid {
+  display: grid !important;
+  gap: 14px !important;
+}
+
+.welcome-intro-grid h2 {
+  font-size: clamp(1.5rem, 2vw, 2.3rem) !important;
+}
+
+.welcome-intro-card .helper-copy {
+  font-size: 0.98rem;
+  line-height: 1.6;
+}
+
+.welcome-clock-grid {
+  grid-template-columns: 1fr !important;
+  min-width: 0 !important;
+}
+
+.welcome-clock-card {
+  min-height: 104px;
+  align-content: center;
+}
+
+.welcome-lead-story {
+  align-self: end;
+  gap: 12px !important;
+  min-height: 292px;
+  padding: 16px !important;
+}
+
+.welcome-lead-story h3 {
+  font-size: 1.25rem !important;
+  line-height: 1.18 !important;
+}
+
+.welcome-lead-story p {
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.welcome-multiview-panel {
+  display: grid !important;
+  gap: 16px !important;
+  min-height: 0 !important;
+  padding: 22px !important;
+}
+
+.welcome-multiview-heading {
+  align-items: start !important;
+}
+
+.welcome-multiview-heading h2 {
+  max-width: 10ch !important;
+  font-size: clamp(2.55rem, 3.6vw, 4.3rem) !important;
+  line-height: 0.95 !important;
+}
+
+.welcome-multiview-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 16px !important;
+  align-items: stretch !important;
+}
+
+.welcome-multiview-card {
+  grid-template-rows: auto minmax(370px, 1fr) auto !important;
+  gap: 14px !important;
+  padding: 18px !important;
+  border-radius: 24px !important;
+}
+
+.welcome-multiview-topline {
+  align-items: center !important;
+}
+
+.welcome-multiview-picker {
+  min-width: 168px !important;
+}
+
+.welcome-multiview-stage {
+  aspect-ratio: 16 / 9 !important;
+  min-height: 370px !important;
+  display: grid !important;
+  place-items: center !important;
+  overflow: hidden !important;
+  background: #02040b !important;
+}
+
+.welcome-multiview-stage video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+  background: #02040b !important;
+}
+
+.welcome-multiview-meta {
+  align-items: end !important;
+}
+
+.welcome-multiview-meta strong {
+  font-size: 1.45rem !important;
+}
+
+.welcome-briefing-card {
+  display: grid !important;
+  align-content: start !important;
+  gap: 12px !important;
+}
+
+.welcome-briefing-heading {
+  align-items: start !important;
+}
+
+.welcome-briefing-heading h2 {
+  font-size: clamp(1.9rem, 2.2vw, 2.9rem) !important;
+  line-height: 0.98 !important;
+  max-width: 8ch;
+}
+
+.welcome-briefing-list {
+  gap: 12px !important;
+}
+
+.welcome-briefing-link-card {
+  min-height: 184px;
+}
+
+.welcome-briefing-link-card p {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.daily-briefing-modal {
+  width: min(1180px, calc(100% - 32px)) !important;
+}
+
+@media (max-width: 1600px) {
+  .welcome-overview {
+    grid-template-columns: 250px minmax(0, 1fr) 330px !important;
+  }
+
+  .welcome-page-topbar .topbar-stats {
+    grid-template-columns: repeat(3, minmax(92px, 104px)) !important;
+  }
+
+  .welcome-multiview-heading h2 {
+    font-size: clamp(2.2rem, 3vw, 3.6rem) !important;
+  }
+}
+
+@media (max-width: 1320px) {
+  .welcome-page-topbar {
+    grid-template-columns: 1fr !important;
+  }
+
+  .welcome-overview {
+    grid-template-columns: 1fr !important;
+  }
+
+  .welcome-page-topbar .topbar-meta {
+    grid-template-columns: 1fr !important;
+  }
+
+  .welcome-page-topbar .topbar-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 980px) {
+  .welcome-multiview-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .welcome-multiview-card {
+    grid-template-rows: auto minmax(280px, 1fr) auto !important;
+  }
+
+  .welcome-multiview-stage {
+    min-height: 280px !important;
+  }
+}

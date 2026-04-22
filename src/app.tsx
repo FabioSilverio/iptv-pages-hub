@@ -1551,7 +1551,7 @@ export function App() {
   const [recentVodsLoading, setRecentVodsLoading] = useState(false)
   const [recentVodsError, setRecentVodsError] = useState('')
   const [welcomeTick, setWelcomeTick] = useState(() => Date.now())
-  const [showDailyBriefingModal, setShowDailyBriefingModal] = useState(true)
+  const [showDailyBriefingModal, setShowDailyBriefingModal] = useState(false)
   const [briefingItems, setBriefingItems] = useState<BriefingItem[]>([])
   const [briefingState, setBriefingState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [briefingError, setBriefingError] = useState('')
