@@ -3864,32 +3864,101 @@ body {
 
 .welcome-mock-times {
   display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
   gap: 14px;
-  justify-items: start;
   padding-top: 4px;
 }
 
-.welcome-mock-time-row {
-  display: grid;
-  gap: 4px;
+.welcome-mock-time-pill {
+  min-height: 88px;
+  padding: 16px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
 }
 
-.welcome-mock-time-row span,
-.welcome-mock-time-row strong {
+.welcome-mock-time-pill.aurora {
+  background:
+    radial-gradient(circle at left center, rgba(255, 77, 216, 0.14), transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.welcome-mock-time-pill.crimson {
+  background:
+    radial-gradient(circle at left center, rgba(255, 120, 80, 0.16), transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.welcome-mock-time-pill.cobalt {
+  background:
+    radial-gradient(circle at left center, rgba(0, 216, 255, 0.15), transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.welcome-mock-time-pill.emerald {
+  background:
+    radial-gradient(circle at left center, rgba(84, 255, 168, 0.13), transparent 48%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.025)),
+    rgba(255, 255, 255, 0.03);
+}
+
+.welcome-mock-time-pill-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.welcome-mock-time-pill-orb {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background:
+    radial-gradient(circle at 32% 32%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.12) 24%, transparent 26%),
+    linear-gradient(135deg, rgba(255, 77, 216, 0.34), rgba(0, 216, 255, 0.24));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 18px rgba(255, 77, 216, 0.2);
+}
+
+.welcome-mock-time-pill-meta strong,
+.welcome-mock-time-pill-meta small,
+.welcome-mock-time-pill-value {
+  display: block;
   margin: 0;
   color: #fff;
 }
 
-.welcome-mock-time-row span {
-  font-size: clamp(1.2rem, 2.1vw, 2.2rem);
+.welcome-mock-time-pill-meta strong {
+  font-size: 1rem;
   line-height: 1;
-  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
-.welcome-mock-time-row strong {
-  font-size: 1.2rem;
+.welcome-mock-time-pill-meta small {
+  margin-top: 6px;
+  color: rgba(255, 255, 255, 0.66);
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.welcome-mock-time-pill-value {
+  font-size: 1.6rem;
   font-weight: 700;
-  color: rgba(255, 255, 255, 0.82);
+  letter-spacing: 0.04em;
 }
 
 .welcome-mock-multiview {
@@ -4179,6 +4248,10 @@ body {
 
   .welcome-mock-multiview,
   .welcome-mock-news-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .welcome-mock-times {
     grid-template-columns: 1fr;
   }
 

@@ -2119,18 +2119,10 @@ export function App() {
   )
   const welcomeDateTitleLabel = useMemo(
     () => new Intl.DateTimeFormat('pt-BR', {
+      weekday: 'long',
       day: '2-digit',
       month: 'long',
       year: 'numeric',
-      timeZone: 'America/Sao_Paulo',
-    }).format(new Date(welcomeTick)),
-    [welcomeTick],
-  )
-  const welcomeTimeLabel = useMemo(
-    () => new Intl.DateTimeFormat('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
       timeZone: 'America/Sao_Paulo',
     }).format(new Date(welcomeTick)),
     [welcomeTick],
@@ -2139,15 +2131,22 @@ export function App() {
     () => buildWelcomeGreeting(new Date(welcomeTick)),
     [welcomeTick],
   )
-  const welcomeClockRows = useMemo(() => {
-    const byLabel = new Map(buildDashboardTimes(new Date(welcomeTick)).map((entry) => [entry.label, entry.value]))
-    return [
-      { label: 'Hora ao vivo aqui', value: byLabel.get('Brasil') || welcomeTimeLabel },
-      { label: 'Hora em NY', value: byLabel.get('NY') || '' },
-      { label: 'Hora em LA', value: byLabel.get('LA') || '' },
-      { label: 'Hora em Londres', value: byLabel.get('Londres') || '' },
-    ]
-  }, [welcomeTick, welcomeTimeLabel])
+  const welcomeTimeChips = useMemo(
+    () => [
+      { id: 'sp', code: 'BR', city: 'Sao Paulo', timeZone: 'America/Sao_Paulo', tone: 'aurora' },
+      { id: 'ny', code: 'NY', city: 'New York', timeZone: 'America/New_York', tone: 'crimson' },
+      { id: 'la', code: 'LA', city: 'Los Angeles', timeZone: 'America/Los_Angeles', tone: 'cobalt' },
+      { id: 'ldn', code: 'LDN', city: 'Londres', timeZone: 'Europe/London', tone: 'emerald' },
+    ].map((item) => ({
+      ...item,
+      value: new Intl.DateTimeFormat('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        timeZone: item.timeZone,
+      }).format(new Date(welcomeTick)),
+    })),
+    [welcomeTick],
+  )
   const welcomeRankedBriefingItems = useMemo(() => sortBriefingItems(briefingItems), [briefingItems])
   const welcomeLeadBriefing = welcomeRankedBriefingItems[0] ?? null
   const welcomeBriefingHighlights = useMemo(() => welcomeRankedBriefingItems.slice(0, 12), [welcomeRankedBriefingItems])
@@ -4275,14 +4274,20 @@ export function App() {
             <div class="welcome-mock-greeting">
               <p class="eyebrow">Neon Briefing</p>
               <h1>{welcomeGreeting}, Fábio!</h1>
-              <p>hoje é dia {welcomeDateTitleLabel}</p>
+              <p>hoje é {welcomeDateTitleLabel}</p>
             </div>
 
             <div class="welcome-mock-times">
-              {welcomeClockRows.map((item) => (
-                <div class="welcome-mock-time-row" key={item.label}>
-                  <span>{item.label}</span>
-                  <strong>{item.value}</strong>
+              {welcomeTimeChips.map((item) => (
+                <div class={`welcome-mock-time-pill ${item.tone}`} key={item.id}>
+                  <div class="welcome-mock-time-pill-meta">
+                    <span class="welcome-mock-time-pill-orb" aria-hidden="true" />
+                    <div>
+                      <strong>{item.code}</strong>
+                      <small>{item.city}</small>
+                    </div>
+                  </div>
+                  <span class="welcome-mock-time-pill-value">{item.value}</span>
                 </div>
               ))}
             </div>
