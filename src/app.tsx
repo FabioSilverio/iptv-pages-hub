@@ -325,10 +325,10 @@ const newsLinks: NewsLink[] = [
     {
       id: 'cnn-us',
       name: 'CNN US',
-      href: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_2_1964000.m3u8',
-      note: 'Feed HLS leve da CNN US, validado com playlist e segmentos ao vivo respondendo no browser.',
+      href: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_0_3564000.m3u8',
+      note: 'Feed HLS leve da CNN US em bitrate mais alto para subir com mais consistencia no multiview e no player principal.',
       source: 'CNN HLS',
-      streamUrl: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_2_1964000.m3u8',
+      streamUrl: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_0_3564000.m3u8',
     },
     {
       id: 'bloomberg-us',
@@ -1555,6 +1555,7 @@ export function App() {
   const [briefingItems, setBriefingItems] = useState<BriefingItem[]>([])
   const [briefingState, setBriefingState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [briefingError, setBriefingError] = useState('')
+  const [sitePage, setSitePage] = useState<'welcome' | 'hub'>('welcome')
   const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
   const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
@@ -3748,7 +3749,7 @@ export function App() {
 
   return (
     <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
-      {showDailyBriefingModal ? (
+      {sitePage === 'welcome' && showDailyBriefingModal ? (
         <div
           aria-hidden="true"
           class="daily-briefing-modal-backdrop"
@@ -3776,6 +3777,7 @@ export function App() {
                   class="ghost-button compact"
                   type="button"
                   onClick={() => {
+                    setSitePage('hub')
                     setSurface('news')
                     setShowDailyBriefingModal(false)
                   }}
@@ -3842,13 +3844,23 @@ export function App() {
         </div>
       ) : null}
 
-        <header class="topbar">
+        <header class={classNames('topbar', sitePage === 'welcome' && 'welcome-page-topbar')}>
           <div>
-            <p class="eyebrow">IPTV Pages Hub</p>
-            <h1>Entre no site e ja caia dentro do briefing ao vivo</h1>
-            <p class="hero-subcopy">A welcome agora abre com leitura rapida das manchetes, relogio ao vivo e um multiview central para acompanhar dois canais de noticias ao mesmo tempo sem perder agilidade.</p>
+            <p class="eyebrow">{sitePage === 'welcome' ? 'Neon Briefing' : 'IPTV Pages Hub'}</p>
+            <h1>{sitePage === 'welcome' ? 'Entre no site e caia no multiview antes do resto' : 'Hub completo de canais, streams e players'}</h1>
+            <p class="hero-subcopy">
+              {sitePage === 'welcome'
+                ? 'A welcome agora e uma pagina propria: leitura rapida, relogio ao vivo e um multiview central grande para entrar no ritmo do dia.'
+                : 'O restante do site segue em modo hub com players, sidebars e gerenciamento completo.'}
+            </p>
             <LiveDashboardMeta />
           </div>
+          {sitePage === 'welcome' ? (
+            <div class="welcome-enter-actions">
+              <button class="primary-button" type="button" onClick={() => setSitePage('hub')}>Entrar no hub</button>
+              <button class="ghost-button" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir resumo</button>
+            </div>
+          ) : (
             <div class="surface-switch hero-surface-switch">
               <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
               <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
@@ -3857,16 +3869,19 @@ export function App() {
               <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
               <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
               <button class={activeSurface === 'cinema' ? 'active cinema-tab' : 'cinema-tab'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
+              <button class="ghost-button compact hero-back-button" type="button" onClick={() => setSitePage('welcome')}>Welcome</button>
             </div>
+          )}
       </header>
 
+      {sitePage === 'welcome' ? (
       <section class="welcome-overview">
         <article class="welcome-panel welcome-intro-card">
           <div class="welcome-intro-grid">
             <div>
               <p class="section-tag">Welcome screen</p>
               <h2>Panorama do dia</h2>
-              <p class="helper-copy">Abra o hub e pegue logo a temperatura do noticiario com leitura curta, descricoes objetivas e tudo organizado para escanear rapido.</p>
+              <p class="helper-copy">Abra o hub e bata o olho no que importa: hora, manchete principal e leitura rapida para entrar no contexto antes mesmo de abrir um player maior.</p>
             </div>
             <div class="welcome-clock-grid">
               <div class="welcome-clock-card">
@@ -3907,7 +3922,7 @@ export function App() {
           <div class="welcome-multiview-heading">
             <div>
               <p class="section-tag">Multiview central</p>
-              <h2>Duas telas em mute para acompanhar breaking news</h2>
+              <h2>Duas telas grandes em mute para acompanhar breaking news</h2>
             </div>
             <div class="welcome-multiview-actions">
               <button
@@ -3917,6 +3932,7 @@ export function App() {
                   setSelectedVod(null)
                   setSelectedNewsId(welcomeLeftLink?.id || welcomeRightLink?.id || selectedNewsId)
                   setSurface('news')
+                  setSitePage('hub')
                 }}
               >
                 Abrir no palco
@@ -3955,14 +3971,15 @@ export function App() {
           {welcomeBriefingSidebarItems.length ? (
             <div class="welcome-briefing-list">
               {welcomeBriefingSidebarItems.map((item) => (
-                <article class="welcome-briefing-list-item" key={item.id}>
+                <a class="welcome-briefing-list-item welcome-briefing-link-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
                   <div class="headline-card-meta">
                     <span>{item.source}</span>
                     <span>{formatBriefingTime(item.publishedAt)}</span>
                   </div>
                   <h3>{item.title}</h3>
                   <p>{item.summary}</p>
-                </article>
+                  <span class="welcome-briefing-link-copy">Abrir cobertura</span>
+                </a>
               ))}
             </div>
           ) : (
@@ -3973,21 +3990,10 @@ export function App() {
           )}
         </article>
       </section>
+      ) : null}
 
-      <section class="welcome-headlines-grid" aria-label="Manchetes em destaque">
-        {welcomeBriefingHighlights.map((item) => (
-          <article class="headline-card" key={item.id}>
-            <div class="headline-card-meta">
-              <span>{item.source}</span>
-              <span>{formatBriefingTime(item.publishedAt)}</span>
-            </div>
-            <h3>{item.title}</h3>
-            <p>{item.summary}</p>
-            <a href={item.href} rel="noreferrer" target="_blank">Abrir cobertura</a>
-          </article>
-        ))}
-      </section>
-
+      {sitePage === 'hub' ? (
+      <>
       <section class="mobile-showcase" aria-label="Destaques mobile">
         <div class="mobile-showcase-card">
           <div class="mobile-showcase-heading">
@@ -4111,6 +4117,45 @@ export function App() {
             </div>
           ) : (
           <div class="sidebar-stack">
+            <div class="sidebar-section active surface-nav-section">
+              <button class="section-toggle active" type="button">
+                <span>Superficies</span>
+                <small>Navegacao principal</small>
+              </button>
+              <div class="sidebar-content">
+                <div class="surface-nav-grid">
+                  <button class={activeSurface === 'news' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('news')}>
+                    <strong>Noticias</strong>
+                    <span>{newsLinks.length} canais</span>
+                  </button>
+                  <button class={activeSurface === 'iptv' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('iptv')}>
+                    <strong>IPTV</strong>
+                    <span>{playlist?.channels.length || 0} canais</span>
+                  </button>
+                  <button class={activeSurface === 'twitch' ? 'surface-nav-card active' : 'surface-nav-card'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>
+                    <strong>Twitch</strong>
+                    <span>{onlineTwitchCount} ao vivo</span>
+                  </button>
+                  <button class={activeSurface === 'youtube' ? 'surface-nav-card active' : 'surface-nav-card'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>
+                    <strong>YouTube</strong>
+                    <span>{onlineYouTubeCount} ao vivo</span>
+                  </button>
+                  <button class={activeSurface === 'kick' ? 'surface-nav-card active' : 'surface-nav-card'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>
+                    <strong>Kick</strong>
+                    <span>{onlineKickCount} ao vivo</span>
+                  </button>
+                  <button class={activeSurface === 'radio' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('radio')}>
+                    <strong>Radios</strong>
+                    <span>{radioStations.length} emissoras</span>
+                  </button>
+                  <button class={activeSurface === 'cinema' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('cinema')}>
+                    <strong>Cinema</strong>
+                    <span>{movies.length} filmes</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <div class="sidebar-section active">
               <button class={showLiveNowPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowLiveNowPanel((current) => !current)}>
                 <span>Ao vivo agora</span>
@@ -4906,6 +4951,8 @@ export function App() {
             </section>
           )}
       </main>
+      </>
+      ) : null}
     </div>
   )
 }
