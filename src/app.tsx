@@ -113,6 +113,8 @@ interface DailyBriefingSource {
   excludePatterns?: RegExp[]
 }
 
+type WelcomeSectionOffsets = Record<BriefingSectionId, number>
+
 interface MarketQuote {
   id: string
   label: string
@@ -499,19 +501,19 @@ const BRIEFING_SECTIONS = [
     id: 'general',
     tag: 'Geral',
     title: 'Panorama geral',
-    description: 'Mistura de manchetes principais, mundo, Reddit e Hacker News para entrar no contexto rapido.',
+    description: 'Mais importantes do momento, com peso forte para a ultima hora e fontes de maior tracao.',
   },
   {
     id: 'sports',
     tag: 'Esportes',
     title: 'Esportes em destaque',
-    description: 'Rodada do momento, resultados e o que esta puxando assunto nas fontes esportivas.',
+    description: 'Recorte esportivo mais quente agora, priorizando o que esta subindo e entrando no radar rapido.',
   },
   {
     id: 'entertainment',
     tag: 'Entretenimento',
     title: 'Entretenimento',
-    description: 'Cinema, TV, cultura pop e os assuntos que estao rodando nas fontes de entretenimento.',
+    description: 'Cinema, TV e cultura pop ranqueados para puxar o que parece mais relevante agora.',
   },
 ] as const satisfies ReadonlyArray<{
   id: BriefingSectionId
@@ -712,6 +714,12 @@ function createBriefingId(source: string, title: string, href: string) {
   return `${source}:${hashString(`${title}|${href}`)}`
 }
 
+function getBriefingAgeMinutes(value: string) {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return 999999
+  return Math.max(0, Math.round((Date.now() - timestamp) / 60_000))
+}
+
 function isBriefingItemFresh(item: { publishedAt: string }, maxAgeHours = 96) {
   const publishedAt = Date.parse(item.publishedAt)
   if (!Number.isFinite(publishedAt)) return true
@@ -721,6 +729,49 @@ function isBriefingItemFresh(item: { publishedAt: string }, maxAgeHours = 96) {
 function shouldKeepBriefingTitle(title: string, excludePatterns?: RegExp[]) {
   if (!title.trim()) return false
   return !(excludePatterns || []).some((pattern) => pattern.test(title))
+}
+
+function sourcePriorityWeight(source: string) {
+  const normalized = source.toLowerCase()
+
+  if (normalized.includes('hacker news')) return 120
+  if (normalized.includes('bbc')) return 108
+  if (normalized.includes('google')) return 96
+  if (normalized.includes('variety')) return 90
+  if (normalized.includes('hollywood reporter')) return 88
+  if (normalized.includes('reddit worldnews')) return 80
+  if (normalized.includes('reddit soccer')) return 74
+  return 68
+}
+
+function freshnessPriorityWeight(publishedAt: string) {
+  const ageMinutes = getBriefingAgeMinutes(publishedAt)
+
+  if (ageMinutes <= 60) return 220 - ageMinutes
+  if (ageMinutes <= 180) return 140 - Math.round((ageMinutes - 60) / 2)
+  if (ageMinutes <= 720) return 72 - Math.round((ageMinutes - 180) / 15)
+  if (ageMinutes <= 1440) return 28
+  return 0
+}
+
+function computeBriefingPriority(item: BriefingItem) {
+  let score = sourcePriorityWeight(item.source) + freshnessPriorityWeight(item.publishedAt)
+
+  const title = item.title.toLowerCase()
+  if (/breaking|urgent|live|exclusive|war|attack|tariff|earnings|ai|openai|microsoft|google|apple|meta/i.test(title)) {
+    score += 14
+  }
+
+  return score
+}
+
+function sortBriefingItems(items: BriefingItem[]) {
+  return [...items].sort((left, right) => {
+    const scoreDiff = computeBriefingPriority(right) - computeBriefingPriority(left)
+    if (scoreDiff !== 0) return scoreDiff
+
+    return Date.parse(right.publishedAt) - Date.parse(left.publishedAt)
+  })
 }
 
 function buildRss2JsonUrl(feedUrl: string) {
@@ -1856,6 +1907,11 @@ export function App() {
   const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
   const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
   const [welcomeAudioFocus, setWelcomeAudioFocus] = useState<'left' | 'right' | null>(null)
+  const [welcomeSectionOffsets, setWelcomeSectionOffsets] = useState<WelcomeSectionOffsets>({
+    general: 0,
+    sports: 0,
+    entertainment: 0,
+  })
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
   const [isTheaterMode, setIsTheaterMode] = useState(false)
@@ -2092,13 +2148,14 @@ export function App() {
       { label: 'Hora em Londres', value: byLabel.get('Londres') || '' },
     ]
   }, [welcomeTick, welcomeTimeLabel])
-  const welcomeLeadBriefing = briefingItems[0] ?? null
-  const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 12), [briefingItems])
+  const welcomeRankedBriefingItems = useMemo(() => sortBriefingItems(briefingItems), [briefingItems])
+  const welcomeLeadBriefing = welcomeRankedBriefingItems[0] ?? null
+  const welcomeBriefingHighlights = useMemo(() => welcomeRankedBriefingItems.slice(0, 12), [welcomeRankedBriefingItems])
   const welcomeBriefingSections = useMemo(
     () =>
       BRIEFING_SECTIONS.map((section) => ({
         ...section,
-        items: briefingItems.filter((item) => item.section === section.id).slice(0, 3),
+        items: sortBriefingItems(briefingItems.filter((item) => item.section === section.id)).slice(0, 10),
       })),
     [briefingItems],
   )
@@ -2339,15 +2396,15 @@ export function App() {
       const prioritized = dedupeBriefingItems(
         settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : [])),
       )
-        .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
-        .sort(
+      const ranked = sortBriefingItems(
+        prioritized.sort(
           (left, right) =>
             Number(isTodayInBrazil(right.publishedAt)) - Number(isTodayInBrazil(left.publishedAt)),
-        )
-        .slice(0, 18)
+        ),
+      ).slice(0, 36)
 
-      if (prioritized.length) {
-        setBriefingItems(prioritized)
+      if (ranked.length) {
+        setBriefingItems(ranked)
         setBriefingState('ready')
         return
       }
@@ -2467,6 +2524,23 @@ export function App() {
       cancelled = true
     }
   }, [selectedNewsLink])
+
+  useEffect(() => {
+    setWelcomeSectionOffsets((current) => {
+      const next = { ...current }
+      let changed = false
+
+      for (const section of welcomeBriefingSections) {
+        const maxOffset = Math.max(0, section.items.length - 3)
+        if ((next[section.id] || 0) > maxOffset) {
+          next[section.id] = 0
+          changed = true
+        }
+      }
+
+      return changed ? next : current
+    })
+  }, [welcomeBriefingSections])
 
   useEffect(() => {
     const hashToken = takeTwitchTokenFromHash()
@@ -4079,6 +4153,20 @@ export function App() {
     setWelcomeAudioFocus(nextMuted ? (current) => (current === slot ? null : current) : slot)
   }
 
+  function advanceWelcomeSection(sectionId: BriefingSectionId, itemCount: number) {
+    if (itemCount <= 3) return
+
+    setWelcomeSectionOffsets((current) => {
+      const currentOffset = current[sectionId] || 0
+      const maxOffset = Math.max(0, itemCount - 3)
+      const nextOffset = currentOffset >= maxOffset ? 0 : Math.min(currentOffset + 3, maxOffset)
+      return {
+        ...current,
+        [sectionId]: nextOffset,
+      }
+    })
+  }
+
   return (
     <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
       {sitePage === 'welcome' && showDailyBriefingModal ? (
@@ -4268,12 +4356,30 @@ export function App() {
                         <p class="section-tag">{section.tag}</p>
                         <h3>{section.title}</h3>
                       </div>
-                      <p>{section.description}</p>
+                      <div class="welcome-mock-news-block-actions">
+                        <p>{section.description}</p>
+                        {section.items.length > 3 ? (
+                          <button
+                            aria-label={`Ver mais noticias em ${section.title}`}
+                            class="welcome-mock-news-next"
+                            type="button"
+                            onClick={() => advanceWelcomeSection(section.id, section.items.length)}
+                          >
+                            <span>Mais</span>
+                            <strong>→</strong>
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
                     <div class="welcome-mock-news-grid">
                       {section.items.length ? (
-                        section.items.map((item) => (
+                        section.items
+                          .slice(
+                            welcomeSectionOffsets[section.id],
+                            welcomeSectionOffsets[section.id] + 3,
+                          )
+                        .map((item) => (
                           <a class="welcome-mock-news-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
                             <div class="welcome-mock-news-meta">
                               <span>{item.source}</span>
