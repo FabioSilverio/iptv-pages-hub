@@ -98,6 +98,19 @@ interface BriefingItem {
   href: string
   source: string
   publishedAt: string
+  section: BriefingSectionId
+}
+
+type BriefingSectionId = 'general' | 'sports' | 'entertainment'
+
+interface DailyBriefingSource {
+  id: string
+  label: string
+  url: string
+  section: BriefingSectionId
+  itemLimit?: number
+  maxAgeHours?: number
+  excludePatterns?: RegExp[]
 }
 
 interface MarketQuote {
@@ -481,21 +494,104 @@ function embedDisplayName(item: EmbedStream, status: EmbedStatus | undefined) {
   return status?.displayName?.trim() || item.title
 }
 
-const DAILY_BRIEFING_SOURCES = [
+const BRIEFING_SECTIONS = [
+  {
+    id: 'general',
+    tag: 'Geral',
+    title: 'Panorama geral',
+    description: 'Mistura de manchetes principais, mundo, Reddit e Hacker News para entrar no contexto rapido.',
+  },
+  {
+    id: 'sports',
+    tag: 'Esportes',
+    title: 'Esportes em destaque',
+    description: 'Rodada do momento, resultados e o que esta puxando assunto nas fontes esportivas.',
+  },
+  {
+    id: 'entertainment',
+    tag: 'Entretenimento',
+    title: 'Entretenimento',
+    description: 'Cinema, TV, cultura pop e os assuntos que estao rodando nas fontes de entretenimento.',
+  },
+] as const satisfies ReadonlyArray<{
+  id: BriefingSectionId
+  tag: string
+  title: string
+  description: string
+}>
+
+const DAILY_BRIEFING_SOURCES: readonly DailyBriefingSource[] = [
   {
     id: 'google-br',
     label: 'Google News Brasil',
     url: 'https://news.google.com/rss?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+    section: 'general',
+    itemLimit: 4,
   },
   {
-    id: 'google-world',
-    label: 'Google News Mundo',
-    url: 'https://news.google.com/rss/headlines/section/topic/WORLD?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+    id: 'bbc-world',
+    label: 'BBC World',
+    url: 'https://feeds.bbci.co.uk/news/world/rss.xml',
+    section: 'general',
+    itemLimit: 3,
   },
   {
-    id: 'google-business',
-    label: 'Google News Economia',
-    url: 'https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+    id: 'reddit-worldnews',
+    label: 'Reddit WorldNews',
+    url: 'https://www.reddit.com/r/worldnews/.rss',
+    section: 'general',
+    itemLimit: 2,
+    excludePatterns: [/live thread/i, /discussion/i, /megathread/i],
+  },
+  {
+    id: 'hacker-news',
+    label: 'Hacker News',
+    url: 'https://news.ycombinator.com/rss',
+    section: 'general',
+    itemLimit: 2,
+  },
+  {
+    id: 'google-sports',
+    label: 'Google Sports',
+    url: 'https://news.google.com/rss/headlines/section/topic/SPORTS?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+    section: 'sports',
+    itemLimit: 3,
+  },
+  {
+    id: 'bbc-sport',
+    label: 'BBC Sport',
+    url: 'https://feeds.bbci.co.uk/sport/rss.xml',
+    section: 'sports',
+    itemLimit: 3,
+  },
+  {
+    id: 'reddit-soccer',
+    label: 'Reddit Soccer',
+    url: 'https://www.reddit.com/r/soccer/.rss',
+    section: 'sports',
+    itemLimit: 2,
+    excludePatterns: [/daily discussion/i, /match thread/i, /free talk/i, /transfer talk/i],
+  },
+  {
+    id: 'google-entertainment',
+    label: 'Google Entertainment',
+    url: 'https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=pt-BR&gl=BR&ceid=BR:pt-419',
+    section: 'entertainment',
+    itemLimit: 3,
+  },
+  {
+    id: 'variety',
+    label: 'Variety',
+    url: 'https://variety.com/feed/',
+    section: 'entertainment',
+    itemLimit: 3,
+  },
+  {
+    id: 'hollywood-reporter',
+    label: 'Hollywood Reporter',
+    url: 'https://www.hollywoodreporter.com/feed/',
+    section: 'entertainment',
+    itemLimit: 2,
   },
 ] as const
 
@@ -616,11 +712,26 @@ function createBriefingId(source: string, title: string, href: string) {
   return `${source}:${hashString(`${title}|${href}`)}`
 }
 
+function isBriefingItemFresh(item: { publishedAt: string }, maxAgeHours = 96) {
+  const publishedAt = Date.parse(item.publishedAt)
+  if (!Number.isFinite(publishedAt)) return true
+  return Date.now() - publishedAt <= maxAgeHours * 60 * 60 * 1000
+}
+
+function shouldKeepBriefingTitle(title: string, excludePatterns?: RegExp[]) {
+  if (!title.trim()) return false
+  return !(excludePatterns || []).some((pattern) => pattern.test(title))
+}
+
 function buildRss2JsonUrl(feedUrl: string) {
   return `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`
 }
 
-function parseBriefingFeed(xmlText: string, sourceLabel: string) {
+function parseBriefingFeed(
+  xmlText: string,
+  sourceLabel: string,
+  section: BriefingSectionId,
+) {
   if (typeof DOMParser === 'undefined') return [] as BriefingItem[]
 
   const doc = new DOMParser().parseFromString(xmlText, 'text/xml')
@@ -639,11 +750,16 @@ function parseBriefingFeed(xmlText: string, sourceLabel: string) {
       href,
       source: sourceLabel,
       publishedAt,
+      section,
     }
   }).filter((item) => item.title && item.href)
 }
 
-function parseBriefingJsonFeed(payload: BriefingJsonPayload, sourceLabel: string) {
+function parseBriefingJsonFeed(
+  payload: BriefingJsonPayload,
+  sourceLabel: string,
+  section: BriefingSectionId,
+) {
   const items = Array.isArray(payload.items) ? payload.items : []
 
   return items
@@ -660,6 +776,7 @@ function parseBriefingJsonFeed(payload: BriefingJsonPayload, sourceLabel: string
         href,
         source: sourceLabel,
         publishedAt,
+        section,
       }
     })
     .filter((item) => item.title && item.href)
@@ -680,7 +797,10 @@ async function fetchBriefingSource(source: (typeof DAILY_BRIEFING_SOURCES)[numbe
       }
 
       const payload = (await response.json()) as BriefingJsonPayload
-      const items = parseBriefingJsonFeed(payload, source.label)
+      const items = parseBriefingJsonFeed(payload, source.label, source.section)
+        .filter((item) => shouldKeepBriefingTitle(item.title, source.excludePatterns))
+        .filter((item) => isBriefingItemFresh(item, source.maxAgeHours))
+        .slice(0, source.itemLimit || 3)
 
       if (!items.length) {
         throw new Error('rss2json voltou sem itens validos.')
@@ -702,7 +822,10 @@ async function fetchBriefingSource(source: (typeof DAILY_BRIEFING_SOURCES)[numbe
       }
 
       const xmlText = await response.text()
-      const items = parseBriefingFeed(xmlText, source.label)
+      const items = parseBriefingFeed(xmlText, source.label, source.section)
+        .filter((item) => shouldKeepBriefingTitle(item.title, source.excludePatterns))
+        .filter((item) => isBriefingItemFresh(item, source.maxAgeHours))
+        .slice(0, source.itemLimit || 3)
 
       if (!items.length) {
         throw new Error('proxy voltou sem itens validos.')
@@ -724,7 +847,10 @@ async function fetchBriefingSource(source: (typeof DAILY_BRIEFING_SOURCES)[numbe
       }
 
       const xmlText = await response.text()
-      const items = parseBriefingFeed(xmlText, source.label)
+      const items = parseBriefingFeed(xmlText, source.label, source.section)
+        .filter((item) => shouldKeepBriefingTitle(item.title, source.excludePatterns))
+        .filter((item) => isBriefingItemFresh(item, source.maxAgeHours))
+        .slice(0, source.itemLimit || 3)
 
       if (!items.length) {
         throw new Error('fonte direta voltou sem itens validos.')
@@ -1534,10 +1660,14 @@ function WelcomeMultiviewTile({
   options,
   selectedId,
   slotLabel,
+  isMuted,
+  onToggleMuted,
 }: {
   options: NewsLink[]
   selectedId: string
   slotLabel: string
+  isMuted: boolean
+  onToggleMuted: (nextMuted: boolean) => void
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
@@ -1556,8 +1686,9 @@ function WelcomeMultiviewTile({
     let cancelled = false
     setTileState('Conectando...')
 
-    media.defaultMuted = true
-    media.muted = true
+    media.defaultMuted = isMuted
+    media.muted = isMuted
+    media.volume = isMuted ? 0 : 1
     media.autoplay = true
     media.playsInline = true
 
@@ -1616,7 +1747,41 @@ function WelcomeMultiviewTile({
       cancelled = true
       cleanup()
     }
-  }, [selectedLink])
+  }, [isMuted, selectedLink])
+
+  useEffect(() => {
+    const media = videoRef.current
+    if (!media) return
+
+    media.defaultMuted = isMuted
+    media.muted = isMuted
+    media.volume = isMuted ? 0 : 1
+
+    if (!isMuted) {
+      void media.play().catch(() => {
+        setTileState((current) => (current === 'Falha no feed' ? current : 'Clique para ouvir'))
+      })
+    }
+  }, [isMuted])
+
+  function handleToggleAudio() {
+    const media = videoRef.current
+    const nextMuted = !isMuted
+
+    if (media) {
+      media.defaultMuted = nextMuted
+      media.muted = nextMuted
+      media.volume = nextMuted ? 0 : 1
+
+      if (!nextMuted) {
+        void media.play().catch(() => {
+          setTileState((current) => (current === 'Falha no feed' ? current : 'Clique para ouvir'))
+        })
+      }
+    }
+
+    onToggleMuted(nextMuted)
+  }
 
   if (!selectedLink) {
     return (
@@ -1636,7 +1801,16 @@ function WelcomeMultiviewTile({
       <div class="welcome-multiview-meta">
         <span class="section-tag">{slotLabel}</span>
         <strong>{selectedLink.name}</strong>
-        <span class="pill soft">{tileState}</span>
+        <div class="welcome-multiview-meta-actions">
+          <span class="pill soft">{tileState}</span>
+          <button
+            class={isMuted ? 'ghost-button compact' : 'primary-button compact'}
+            type="button"
+            onClick={handleToggleAudio}
+          >
+            {isMuted ? 'Ouvir' : 'Mutar'}
+          </button>
+        </div>
       </div>
     </article>
   )
@@ -1681,6 +1855,7 @@ export function App() {
   const [sitePage, setSitePage] = useState<'welcome' | 'hub'>(() => readSitePageFromHash())
   const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
   const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
+  const [welcomeAudioFocus, setWelcomeAudioFocus] = useState<'left' | 'right' | null>(null)
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
   const [isTheaterMode, setIsTheaterMode] = useState(false)
@@ -1918,7 +2093,15 @@ export function App() {
     ]
   }, [welcomeTick, welcomeTimeLabel])
   const welcomeLeadBriefing = briefingItems[0] ?? null
-  const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 9), [briefingItems])
+  const welcomeBriefingHighlights = useMemo(() => briefingItems.slice(0, 12), [briefingItems])
+  const welcomeBriefingSections = useMemo(
+    () =>
+      BRIEFING_SECTIONS.map((section) => ({
+        ...section,
+        items: briefingItems.filter((item) => item.section === section.id).slice(0, 3),
+      })),
+    [briefingItems],
+  )
   const welcomeLeftSelectedLink = useMemo(
     () => welcomeMultiviewOptions.find((item) => item.id === welcomeLeftNewsId) ?? welcomeMultiviewOptions[0] ?? null,
     [welcomeLeftNewsId, welcomeMultiviewOptions],
@@ -2161,7 +2344,7 @@ export function App() {
           (left, right) =>
             Number(isTodayInBrazil(right.publishedAt)) - Number(isTodayInBrazil(left.publishedAt)),
         )
-        .slice(0, 9)
+        .slice(0, 18)
 
       if (prioritized.length) {
         setBriefingItems(prioritized)
@@ -3892,6 +4075,10 @@ export function App() {
     }
   }
 
+  function toggleWelcomeTileAudio(slot: 'left' | 'right', nextMuted: boolean) {
+    setWelcomeAudioFocus(nextMuted ? (current) => (current === slot ? null : current) : slot)
+  }
+
   return (
     <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
       {sitePage === 'welcome' && showDailyBriefingModal ? (
@@ -4016,6 +4203,8 @@ export function App() {
           <section class="welcome-mock-multiview" aria-label="Multiview de noticias">
             <div class="welcome-mock-player-shell">
               <WelcomeMultiviewTile
+                isMuted={welcomeAudioFocus !== 'left'}
+                onToggleMuted={(nextMuted) => toggleWelcomeTileAudio('left', nextMuted)}
                 options={welcomeMultiviewOptions}
                 selectedId={welcomeLeftNewsId}
                 slotLabel="Canal A"
@@ -4041,6 +4230,8 @@ export function App() {
             </div>
             <div class="welcome-mock-player-shell">
               <WelcomeMultiviewTile
+                isMuted={welcomeAudioFocus !== 'right'}
+                onToggleMuted={(nextMuted) => toggleWelcomeTileAudio('right', nextMuted)}
                 options={welcomeMultiviewOptions}
                 selectedId={welcomeRightNewsId}
                 slotLabel="Canal B"
@@ -4068,26 +4259,49 @@ export function App() {
 
           <section class="welcome-mock-news-section" aria-label="Noticias do dia">
             <h2>Veja as noticias do dia:</h2>
-            <div class="welcome-mock-news-grid">
-              {welcomeBriefingHighlights.length ? (
-                welcomeBriefingHighlights.map((item) => (
-                  <a class="welcome-mock-news-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
-                    <div class="welcome-mock-news-meta">
-                      <span>{item.source}</span>
-                      <small>{formatBriefingTime(item.publishedAt)}</small>
+            {welcomeBriefingHighlights.length ? (
+              <div class="welcome-mock-news-sections">
+                {welcomeBriefingSections.map((section) => (
+                  <section class="welcome-mock-news-block" key={section.id}>
+                    <div class="welcome-mock-news-block-heading">
+                      <div>
+                        <p class="section-tag">{section.tag}</p>
+                        <h3>{section.title}</h3>
+                      </div>
+                      <p>{section.description}</p>
                     </div>
-                    <strong>{item.title}</strong>
-                    <p>{item.summary}</p>
-                    <span class="welcome-mock-news-link">Abrir cobertura</span>
-                  </a>
-                ))
-              ) : (
+
+                    <div class="welcome-mock-news-grid">
+                      {section.items.length ? (
+                        section.items.map((item) => (
+                          <a class="welcome-mock-news-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
+                            <div class="welcome-mock-news-meta">
+                              <span>{item.source}</span>
+                              <small>{formatBriefingTime(item.publishedAt)}</small>
+                            </div>
+                            <strong>{item.title}</strong>
+                            <p>{item.summary}</p>
+                            <span class="welcome-mock-news-link">Abrir cobertura</span>
+                          </a>
+                        ))
+                      ) : (
+                        <article class="welcome-mock-news-card empty">
+                          <strong>Sem cards nessa faixa agora.</strong>
+                          <p>Assim que as fontes de {section.tag.toLowerCase()} responderem, os destaques entram aqui automaticamente.</p>
+                        </article>
+                      )}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <div class="welcome-mock-news-grid">
                 <article class="welcome-mock-news-card empty">
                   <strong>{briefingState === 'loading' ? 'Carregando noticias do dia...' : 'Noticias indisponiveis agora.'}</strong>
                   <p>{briefingError || 'Assim que os feeds responderem, os cards de leitura entram aqui automaticamente.'}</p>
                 </article>
-              )}
-            </div>
+              </div>
+            )}
           </section>
         </section>
       ) : (

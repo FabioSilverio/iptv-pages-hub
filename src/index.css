@@ -3950,6 +3950,17 @@ body {
   color: #fff;
 }
 
+.welcome-mock-player-shell .welcome-multiview-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.welcome-mock-player-shell .welcome-multiview-meta-actions .compact {
+  min-height: 34px;
+  padding: 0 14px;
+}
+
 .welcome-mock-player-shell .welcome-multiview-meta .section-tag {
   flex: 0 0 auto;
 }
@@ -4016,6 +4027,40 @@ body {
   font-size: clamp(2rem, 3vw, 3.1rem);
   line-height: 1.02;
   color: #fff;
+}
+
+.welcome-mock-news-sections {
+  display: grid;
+  gap: 28px;
+}
+
+.welcome-mock-news-block {
+  display: grid;
+  gap: 14px;
+}
+
+.welcome-mock-news-block-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  align-items: end;
+}
+
+.welcome-mock-news-block-heading h3,
+.welcome-mock-news-block-heading p {
+  margin: 0;
+}
+
+.welcome-mock-news-block-heading h3 {
+  color: #fff;
+  font-size: 1.42rem;
+}
+
+.welcome-mock-news-block-heading > p {
+  max-width: 560px;
+  color: rgba(255, 255, 255, 0.72);
+  line-height: 1.5;
+  text-align: right;
 }
 
 .welcome-mock-news-grid {
@@ -4098,11 +4143,19 @@ body {
     grid-template-columns: 1fr;
   }
 
+  .welcome-mock-player-shell .welcome-multiview-meta,
+  .welcome-mock-player-shell .welcome-multiview-meta-actions,
   .welcome-mock-channel-summary {
     align-items: start;
     flex-direction: column;
   }
 
+  .welcome-mock-news-block-heading {
+    flex-direction: column;
+    align-items: start;
+  }
+
+  .welcome-mock-news-block-heading > p,
   .welcome-mock-channel-summary strong {
     text-align: left;
   }
