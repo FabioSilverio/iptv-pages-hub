@@ -51,6 +51,8 @@ const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const INITIAL_CHANNEL_BATCH = 180
 const CHANNEL_BATCH_STEP = 240
+const IPTV_GUIDE_GROUP_LIMIT = 14
+const IPTV_GUIDE_GROUP_CHANNEL_LIMIT = 12
 const LIVE_STATUS_REFRESH_MS = 60_000
 const BRIEFING_REFRESH_MS = 10 * 60_000
 const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
@@ -65,6 +67,7 @@ const NEWS_POSTER_TONES = [
 ] as const
 
 type MediaSurface = 'iptv' | 'twitch' | 'youtube' | 'kick' | 'news' | 'radio' | 'cinema'
+type SitePage = 'welcome' | 'hub' | 'iptv'
 
 interface MovieItem {
   id: string
@@ -72,6 +75,13 @@ interface MovieItem {
   driveUrl: string
   previewUrl: string
   openUrl: string
+}
+
+interface IptvGroupSection {
+  group: string
+  channels: Channel[]
+  total: number
+  favoriteCount: number
 }
 
 interface NewsLink {
@@ -368,6 +378,54 @@ const newsLinks: NewsLink[] = [
     note: 'Transmissao oficial ao vivo do Times Brasil, licenciado exclusivo CNBC no Brasil, resolvida pelo canal oficial no YouTube.',
     source: 'Times Brasil | CNBC',
     youtubeChannel: '@otimesbrasil',
+  },
+  {
+    id: 'tyc-sports-ar',
+    name: 'TyC Sports Argentina',
+    href: 'https://live-04-11-tyc24.vodgc.net/tyc24/index.m3u8',
+    note: 'Feed HLS da TyC Sports Argentina. Label geo-blocked, com geo AR confirmado; pode exigir saida pela Argentina.',
+    source: 'TyC Sports AR',
+    streamUrl: 'https://live-04-11-tyc24.vodgc.net/tyc24/index_tyc24_1080.m3u8',
+  },
+  {
+    id: 'tnt-sports-ar',
+    name: 'TNT Sports Argentina',
+    href: 'https://iptv-org.github.io/channels/ar/TNTSports#HD',
+    note: 'TNT Sports Argentina HD. O catalogo iptv-org marca o canal como sports e bloqueado; o player usa o feed informado na lista.',
+    source: 'TNT Sports AR',
+    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39293',
+  },
+  {
+    id: 'espn-ar',
+    name: 'ESPN Argentina',
+    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39206',
+    note: 'Feed ESPN Argentina informado para playback nativo no player do site.',
+    source: 'ESPN AR',
+    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39206',
+  },
+  {
+    id: 'espn-2-ar',
+    name: 'ESPN 2 Argentina',
+    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39208',
+    note: 'Feed ESPN 2 Argentina informado para playback nativo no player do site.',
+    source: 'ESPN AR',
+    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39208',
+  },
+  {
+    id: 'espn-3-ar',
+    name: 'ESPN 3 Argentina',
+    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39210',
+    note: 'Feed ESPN 3 Argentina informado para playback nativo no player do site.',
+    source: 'ESPN AR',
+    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39210',
+  },
+  {
+    id: 'espn-extra-ar',
+    name: 'ESPN Extra Argentina',
+    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39212',
+    note: 'Feed ESPN Extra Argentina informado para playback nativo no player do site.',
+    source: 'ESPN AR',
+    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39212',
   },
   {
     id: 'vatican-news',
@@ -1016,9 +1074,50 @@ function buildWelcomeGreeting(now: Date) {
   return 'Boa madrugada'
 }
 
+function channelMatchesSearch(channel: Channel, normalizedSearch: string) {
+  if (!normalizedSearch) return true
+
+  return (
+    channel.name.toLowerCase().includes(normalizedSearch)
+    || channel.group.toLowerCase().includes(normalizedSearch)
+    || Boolean(channel.tvgId?.toLowerCase().includes(normalizedSearch))
+  )
+}
+
+function channelNumberLabel(channelNumber?: number) {
+  if (!channelNumber) return '---'
+  return String(channelNumber).padStart(3, '0')
+}
+
+function iptvGroupToneClass(group: string) {
+  const normalized = group.toLowerCase()
+
+  if (/sport|espn|tnt|tyc|deporte|futebol|futbol|fox/i.test(normalized)) return 'sports'
+  if (/cine|movie|filme|premium|hbo|telecine/i.test(normalized)) return 'movies'
+  if (/news|noticia|jornal|cnn|bbc|cnbc/i.test(normalized)) return 'news'
+  if (/kids|infantil|cartoon|nick|disney/i.test(normalized)) return 'kids'
+  if (/music|musica|mtv|radio/i.test(normalized)) return 'music'
+  if (/brasil|brazil|globo|record|band|sbt/i.test(normalized)) return 'brasil'
+  return 'general'
+}
+
+function iptvGroupShortLabel(group: string) {
+  const words = group
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+
+  if (!words.length) return 'TV'
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase()
+}
+
 function readSitePageFromHash() {
   if (typeof window === 'undefined') return 'welcome' as const
-  return window.location.hash.replace(/^#/, '') === 'hub' ? 'hub' as const : 'welcome' as const
+  const hash = window.location.hash.replace(/^#/, '')
+  if (hash === 'iptv') return 'iptv' as const
+  if (hash === 'hub') return 'hub' as const
+  return 'welcome' as const
 }
 
 function isTokenFresh(expiresAt?: string) {
@@ -1903,7 +2002,7 @@ export function App() {
   const [briefingItems, setBriefingItems] = useState<BriefingItem[]>([])
   const [briefingState, setBriefingState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [briefingError, setBriefingError] = useState('')
-  const [sitePage, setSitePage] = useState<'welcome' | 'hub'>(() => readSitePageFromHash())
+  const [sitePage, setSitePage] = useState<SitePage>(() => readSitePageFromHash())
   const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
   const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
   const [welcomeAudioFocus, setWelcomeAudioFocus] = useState<'left' | 'right' | null>(null)
@@ -2007,6 +2106,65 @@ export function App() {
     () => visibleChannels.slice(0, visibleCount),
     [visibleChannels, visibleCount],
   )
+  const channelOrdinalMap = useMemo(
+    () => new Map(channels.map((channel, index) => [channel.id, index + 1])),
+    [channels],
+  )
+  const iptvGroupSections = useMemo<IptvGroupSection[]>(() => {
+    const groupedChannels = new Map<string, Channel[]>()
+
+    channels.forEach((channel) => {
+      const groupChannels = groupedChannels.get(channel.group) ?? []
+      groupChannels.push(channel)
+      groupedChannels.set(channel.group, groupChannels)
+    })
+
+    const orderedGroups = playlist?.groups.length
+      ? playlist.groups
+      : Array.from(groupedChannels.keys()).sort((left, right) => PT_BR_COLLATOR.compare(left, right))
+
+    return orderedGroups
+      .map((group) => {
+        const groupChannels = groupedChannels.get(group) ?? []
+        return {
+          group,
+          channels: groupChannels,
+          total: groupChannels.length,
+          favoriteCount: groupChannels.filter((channel) => favoriteIds.has(channel.id)).length,
+        }
+      })
+      .filter((section) => section.total > 0)
+  }, [channels, favoriteIds, playlist?.id])
+  const filteredIptvGroupSections = useMemo<IptvGroupSection[]>(() => {
+    const baseSections = groupFilter === 'Todos'
+      ? iptvGroupSections
+      : iptvGroupSections.filter((section) => section.group === groupFilter)
+
+    return baseSections
+      .map((section) => {
+        const matchingChannels = section.channels.filter((channel) =>
+          channelMatchesSearch(channel, normalizedSearch),
+        )
+        return {
+          ...section,
+          channels: matchingChannels,
+          total: section.total,
+          favoriteCount: matchingChannels.filter((channel) => favoriteIds.has(channel.id)).length,
+        }
+      })
+      .filter((section) => section.channels.length > 0)
+  }, [favoriteIds, groupFilter, iptvGroupSections, normalizedSearch])
+  const iptvGuideSections = useMemo(
+    () =>
+      groupFilter === 'Todos' && !normalizedSearch
+        ? filteredIptvGroupSections.slice(0, IPTV_GUIDE_GROUP_LIMIT)
+        : filteredIptvGroupSections,
+    [filteredIptvGroupSections, groupFilter, normalizedSearch],
+  )
+  const hiddenIptvGuideGroupCount = Math.max(
+    0,
+    filteredIptvGroupSections.length - iptvGuideSections.length,
+  )
   const twitchEmbeds = useMemo(
     () => embeds.filter((item) => item.platform === 'twitch'),
     [embeds],
@@ -2079,6 +2237,9 @@ export function App() {
     () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
     [channels, selectedChannelId, visibleChannels],
   )
+  const selectedChannelNumber = selectedChannel
+    ? channelOrdinalMap.get(selectedChannel.id)
+    : undefined
   const activeEmbed = useMemo(() => {
     const pool =
       activeSurface === 'twitch'
@@ -2378,6 +2539,13 @@ export function App() {
       window.removeEventListener('hashchange', syncFromHash)
     }
   }, [])
+
+  useEffect(() => {
+    if (sitePage !== 'iptv' || activeSurface === 'iptv') return
+
+    setSelectedVod(null)
+    setActiveSurface('iptv')
+  }, [activeSurface, sitePage])
 
   useEffect(() => {
     let cancelled = false
@@ -3682,7 +3850,7 @@ export function App() {
       const nextPlaylist = await fetchXtreamPlaylist(nextCredentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
-      setActiveSurface('iptv')
+      navigateSitePage('iptv')
       setXtream(nextCredentials)
       if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'xtream', remember: settings.rememberConnection, xtream: nextCredentials, m3u })
     } catch (error) {
@@ -3702,7 +3870,7 @@ export function App() {
       const nextPlaylist = await fetchM3UPlaylist(credentials, controller.signal)
       setPlaylist(nextPlaylist)
       setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
-      setActiveSurface('iptv')
+      navigateSitePage('iptv')
       setM3U(credentials)
       if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'm3u', remember: settings.rememberConnection, xtream, m3u: credentials })
     } catch (error) {
@@ -3769,7 +3937,7 @@ export function App() {
 
   function activateIPTV(channelId?: string) {
     if (channelId) setSelectedChannelId(channelId)
-    setSurface('iptv')
+    navigateSitePage('iptv')
   }
 
   function activateEmbed(embed: EmbedStream) {
@@ -4139,10 +4307,14 @@ export function App() {
     }
   }
 
-  function navigateSitePage(next: 'welcome' | 'hub') {
+  function navigateSitePage(next: SitePage) {
     setSitePage(next)
+    if (next === 'iptv') {
+      setSelectedVod(null)
+      setActiveSurface('iptv')
+    }
 
-    const nextHash = next === 'hub' ? '#hub' : '#welcome'
+    const nextHash = `#${next}`
     if (window.location.hash !== nextHash) {
       window.location.hash = nextHash
     }
@@ -4164,6 +4336,41 @@ export function App() {
         [sectionId]: nextOffset,
       }
     })
+  }
+
+  function renderIptvChannelCard(channel: Channel, context = 'guide') {
+    const isActive = channel.id === selectedChannel?.id
+    const isFavorite = favorites.includes(channel.id)
+
+    return (
+      <article
+        class={classNames('iptv-channel-card', isActive && 'active', isFavorite && 'saved')}
+        key={`${context}:${channel.id}`}
+      >
+        <button
+          class="iptv-channel-main"
+          type="button"
+          onClick={() => activateIPTV(channel.id)}
+        >
+          <span class="iptv-channel-number">{channelNumberLabel(channelOrdinalMap.get(channel.id))}</span>
+          <span class="iptv-channel-logo">
+            {channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <strong>{channel.name.slice(0, 2).toUpperCase()}</strong>}
+          </span>
+          <span class="iptv-channel-copy">
+            <strong>{channel.name}</strong>
+            <small>{channel.tvgId || channel.group}</small>
+          </span>
+        </button>
+        <button
+          aria-label={isFavorite ? `Remover ${channel.name} dos favoritos` : `Salvar ${channel.name} nos favoritos`}
+          class={isFavorite ? 'favorite-button active iptv-card-favorite' : 'favorite-button iptv-card-favorite'}
+          type="button"
+          onClick={() => toggleFavorite(channel.id)}
+        >
+          {isFavorite ? 'Salvo' : 'Fav'}
+        </button>
+      </article>
+    )
   }
 
   return (
@@ -4266,7 +4473,8 @@ export function App() {
       {sitePage === 'welcome' ? (
         <section class="welcome-mock-page">
           <div class="welcome-mock-actions">
-            <button class="primary-button" type="button" onClick={() => navigateSitePage('hub')}>Entrar no hub</button>
+            <button class="primary-button" type="button" onClick={() => navigateSitePage('iptv')}>Abrir IPTV</button>
+            <button class="ghost-button" type="button" onClick={() => navigateSitePage('hub')}>Entrar no hub</button>
             <button class="ghost-button" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir resumo</button>
           </div>
 
@@ -4415,6 +4623,22 @@ export function App() {
             )}
           </section>
         </section>
+      ) : sitePage === 'iptv' ? (
+        <header class="topbar iptv-topbar">
+          <div>
+            <p class="eyebrow">IPTV Pages Hub</p>
+            <h1>Guia IPTV</h1>
+            <p class="hero-subcopy">Uma pagina dedicada para navegar por grupos como em menu de TV a cabo, com player, busca e canais no mesmo fluxo.</p>
+            <LiveDashboardMeta />
+          </div>
+          <div class="surface-switch hero-surface-switch">
+            <button class="active" type="button" onClick={() => navigateSitePage('iptv')}>IPTV</button>
+            <button type="button" onClick={() => navigateSitePage('hub')}>Hub completo</button>
+            <button type="button" onClick={() => { navigateSitePage('hub'); setSurface('news') }}>Noticias</button>
+            <button type="button" onClick={() => { navigateSitePage('hub'); setSurface('radio') }}>Radios</button>
+            <button type="button" onClick={() => navigateSitePage('welcome')}>Welcome</button>
+          </div>
+        </header>
       ) : (
         <header class="topbar">
           <div>
@@ -4424,7 +4648,7 @@ export function App() {
             <LiveDashboardMeta />
           </div>
           <div class="surface-switch hero-surface-switch">
-            <button class={activeSurface === 'iptv' ? 'active' : ''} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+            <button type="button" onClick={() => navigateSitePage('iptv')}>IPTV</button>
             <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
             <button class={activeSurface === 'youtube' ? 'active youtube-tab' : 'youtube-tab'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YouTube</button>
             <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
@@ -4436,7 +4660,249 @@ export function App() {
         </header>
       )}
 
-      {sitePage === 'hub' ? (
+      {sitePage === 'iptv' ? (
+        <main class="iptv-page" aria-label="Guia IPTV dedicado">
+          <section class="iptv-hero-grid">
+            <section class="panel iptv-player-panel">
+              <div class="iptv-player-heading">
+                <div>
+                  <p class="section-tag">Tocando agora</p>
+                  <h2>{selectedChannel?.name || 'Selecione um canal'}</h2>
+                  <p class="helper-copy">{selectedChannel?.group || 'Carregue uma playlist para abrir a grade IPTV.'}</p>
+                </div>
+                <div class="pill-row">
+                  <span class="pill active-group">CH {channelNumberLabel(selectedChannelNumber)}</span>
+                  {selectedChannel ? (
+                    <button
+                      class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'}
+                      type="button"
+                      onClick={() => toggleFavorite(selectedChannel.id)}
+                    >
+                      {favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}
+                    </button>
+                  ) : null}
+                  {renderTheaterButton()}
+                </div>
+              </div>
+
+              <div class="iptv-player-frame player-frame">
+                <video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} />
+              </div>
+              {playerError ? <p class="alert error">{playerError}</p> : null}
+
+              <div class="iptv-now-grid">
+                <article class="subtle-card compact-card">
+                  <p class="section-tag">Status</p>
+                  <h3>{playerState}</h3>
+                  <p class="helper-copy">O player fica fixo no topo da pagina IPTV para trocar canais sem voltar ao hub.</p>
+                </article>
+                <article class="subtle-card compact-card">
+                  <p class="section-tag">Origem</p>
+                  <h3>{playlist?.sourceLabel || 'Sem playlist'}</h3>
+                  <p class="helper-copy">{playlist ? `${PT_BR_NUMBER.format(channels.length)} canais carregados em ${PT_BR_NUMBER.format(playlist.groups.length)} grupos.` : 'Entre com Xtream ou M3U no controle ao lado.'}</p>
+                </article>
+                <article class="subtle-card compact-card iptv-stream-card">
+                  <p class="section-tag">Stream</p>
+                  <h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao'}</h3>
+                </article>
+              </div>
+            </section>
+
+            <aside class="panel iptv-remote-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="section-tag">Controle IPTV</p>
+                  <h2>Busca, grupos e playlist</h2>
+                </div>
+                <span class="pill">{PT_BR_NUMBER.format(visibleChannels.length)} visiveis</span>
+              </div>
+
+              <div class="iptv-remote-stats">
+                <div><strong>{PT_BR_NUMBER.format(channels.length)}</strong><span>Canais</span></div>
+                <div><strong>{PT_BR_NUMBER.format(playlist?.groups.length || 0)}</strong><span>Grupos</span></div>
+                <div><strong>{PT_BR_NUMBER.format(favoriteChannels.length)}</strong><span>Favoritos</span></div>
+              </div>
+
+              <div class="field-grid compact iptv-search-grid">
+                <label>
+                  <span>Buscar canal</span>
+                  <input
+                    placeholder="Nome, grupo ou EPG"
+                    value={searchTerm}
+                    onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+                <label class="group-field">
+                  <span>Grupo</span>
+                  <select
+                    class="group-select"
+                    value={groupFilter}
+                    onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}
+                  >
+                    <option value="Todos">Todos</option>
+                    {(playlist?.groups ?? []).map((group) => <option key={group} value={group}>{group}</option>)}
+                  </select>
+                </label>
+              </div>
+
+              <div class="iptv-quick-actions">
+                <button class={groupFilter === 'Todos' ? 'ghost-button compact active-soft' : 'ghost-button compact'} type="button" onClick={() => setGroupFilter('Todos')}>Todos</button>
+                <button class="ghost-button compact" disabled={!favoriteChannels.length} type="button" onClick={() => favoriteChannels[0] && activateIPTV(favoriteChannels[0].id)}>Favoritos</button>
+                <button class="ghost-button compact" type="button" onClick={() => { setSearchTerm(''); setGroupFilter('Todos') }}>Limpar filtros</button>
+              </div>
+
+              <div class="iptv-favorite-strip">
+                {favoriteChannels.length ? favoriteChannels.slice(0, 8).map((channel) => (
+                  <button
+                    class={selectedChannel?.id === channel.id ? 'iptv-favorite-chip active' : 'iptv-favorite-chip'}
+                    key={`favorite-chip:${channel.id}`}
+                    type="button"
+                    onClick={() => activateIPTV(channel.id)}
+                  >
+                    <span>{channelNumberLabel(channelOrdinalMap.get(channel.id))}</span>
+                    <strong>{channel.name}</strong>
+                  </button>
+                )) : (
+                  <p class="helper-copy">Canais salvos aparecem aqui como atalhos de controle remoto.</p>
+                )}
+              </div>
+
+              <div class="subtle-card stack compact-card iptv-connect-card">
+                <div class="source-switch">
+                  <button class={sourceTab === 'xtream' ? 'active' : ''} type="button" onClick={() => setSourceTab('xtream')}>Xtream</button>
+                  <button class={sourceTab === 'm3u' ? 'active' : ''} type="button" onClick={() => setSourceTab('m3u')}>M3U</button>
+                </div>
+                {sourceTab === 'xtream' ? (
+                  <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectXtream() }}>
+                    <label><span>Servidor</span><input placeholder="http://painel.exemplo.com" value={xtream.serverUrl} onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                    <label><span>Proxy HTTPS</span><input placeholder="https://seu-proxy.workers.dev" value={xtream.proxyUrl || ''} onInput={(event) => setXtream((current) => ({ ...current, proxyUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                    <div class="field-grid compact">
+                      <label><span>Usuario</span><input value={xtream.username} onInput={(event) => setXtream((current) => ({ ...current, username: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                      <label><span>Senha</span><input type="password" value={xtream.password} onInput={(event) => setXtream((current) => ({ ...current, password: (event.currentTarget as HTMLInputElement).value }))} /></label>
+                    </div>
+                    <label><span>Saida</span><select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'auto' | 'm3u8' | 'ts' }))}><option value="auto">auto</option><option value="m3u8">m3u8</option><option value="ts">ts</option></select></label>
+                    <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Carregando...' : 'Entrar com Xtream'}</button>
+                  </form>
+                ) : (
+                  <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectM3U() }}>
+                    <label><span>URL M3U</span><input placeholder="https://exemplo.com/lista.m3u" value={m3u.url} onInput={(event) => setM3U({ url: (event.currentTarget as HTMLInputElement).value })} /></label>
+                    <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Lendo playlist...' : 'Abrir M3U'}</button>
+                  </form>
+                )}
+                {loadError ? <p class="alert error">{loadError}</p> : null}
+              </div>
+            </aside>
+          </section>
+
+          <section class="iptv-guide-shell">
+            <nav class="panel iptv-group-rail" aria-label="Grupos IPTV">
+              <div class="iptv-group-rail-heading">
+                <p class="section-tag">Categorias</p>
+                <h2>Grupos</h2>
+              </div>
+              <button
+                class={groupFilter === 'Todos' ? 'iptv-group-button active' : 'iptv-group-button'}
+                type="button"
+                onClick={() => setGroupFilter('Todos')}
+              >
+                <span class="iptv-group-mark all">TV</span>
+                <span><strong>Todos os grupos</strong><small>{PT_BR_NUMBER.format(playlist?.groups.length || 0)} grupos</small></span>
+              </button>
+              {iptvGroupSections.map((section) => (
+                <button
+                  class={groupFilter === section.group ? 'iptv-group-button active' : 'iptv-group-button'}
+                  key={section.group}
+                  type="button"
+                  onClick={() => setGroupFilter(section.group)}
+                >
+                  <span class={classNames('iptv-group-mark', iptvGroupToneClass(section.group))}>{iptvGroupShortLabel(section.group)}</span>
+                  <span>
+                    <strong>{section.group}</strong>
+                    <small>{PT_BR_NUMBER.format(section.total)} canais{section.favoriteCount ? ` - ${section.favoriteCount} salvos` : ''}</small>
+                  </span>
+                </button>
+              ))}
+            </nav>
+
+            <section class="iptv-channel-browse" aria-label="Canais IPTV por grupo">
+              {favoriteChannels.length ? (
+                <section class="panel iptv-shelf iptv-favorites-shelf">
+                  <div class="iptv-shelf-heading">
+                    <div>
+                      <p class="section-tag">Atalhos</p>
+                      <h2>Favoritos IPTV</h2>
+                    </div>
+                    <span class="pill">{PT_BR_NUMBER.format(favoriteChannels.length)} salvos</span>
+                  </div>
+                  <div class="iptv-channel-grid compact">
+                    {favoriteChannels.slice(0, IPTV_GUIDE_GROUP_CHANNEL_LIMIT).map((channel) => renderIptvChannelCard(channel, 'favorites'))}
+                  </div>
+                </section>
+              ) : null}
+
+              {iptvGuideSections.length ? iptvGuideSections.map((section) => {
+                const shelfLimit = groupFilter === 'Todos' && !normalizedSearch
+                  ? IPTV_GUIDE_GROUP_CHANNEL_LIMIT
+                  : visibleCount
+                const shelfChannels = section.channels.slice(0, shelfLimit)
+
+                return (
+                  <section class="panel iptv-shelf" key={`shelf:${section.group}`}>
+                    <div class="iptv-shelf-heading">
+                      <div>
+                        <p class="section-tag">Grupo IPTV</p>
+                        <h2>{section.group}</h2>
+                      </div>
+                      <div class="pill-row">
+                        <span class="pill">{PT_BR_NUMBER.format(section.channels.length)} encontrados</span>
+                        <span class="pill soft">{PT_BR_NUMBER.format(section.total)} no grupo</span>
+                      </div>
+                    </div>
+                    <div class="iptv-channel-grid">
+                      {shelfChannels.map((channel) => renderIptvChannelCard(channel, section.group))}
+                    </div>
+                    {section.channels.length > shelfLimit ? (
+                      <div class="load-more-row">
+                        <button
+                          class="ghost-button"
+                          type="button"
+                          onClick={() => {
+                            setGroupFilter(section.group)
+                            setVisibleCount((current) => current + CHANNEL_BATCH_STEP)
+                          }}
+                        >
+                          Abrir grade completa de {section.group}
+                        </button>
+                      </div>
+                    ) : null}
+                  </section>
+                )
+              }) : (
+                <section class="panel iptv-shelf">
+                  <div class="empty-state">
+                    <strong>Nenhum canal encontrado.</strong>
+                    <span>Conecte uma playlist ou ajuste busca e grupo no controle IPTV.</span>
+                  </div>
+                </section>
+              )}
+
+              {hiddenIptvGuideGroupCount ? (
+                <div class="iptv-more-groups-note">
+                  <span>{hiddenIptvGuideGroupCount} grupos adicionais ficam no menu Categorias para a grade nao virar uma lista infinita.</span>
+                </div>
+              ) : null}
+
+              {groupFilter !== 'Todos' && hasMoreChannels ? (
+                <div class="load-more-row">
+                  <button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>
+                    Adicionar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)}
+                  </button>
+                </div>
+              ) : null}
+            </section>
+          </section>
+        </main>
+      ) : sitePage === 'hub' ? (
       <>
       <section class="mobile-showcase" aria-label="Destaques mobile">
         <div class="mobile-showcase-card">
@@ -4552,7 +5018,7 @@ export function App() {
           {leftSidebarCollapsed ? (
             <div class="sidebar-mini-stack">
               <button class={activeSurface === 'news' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('news')}>News</button>
-              <button class={activeSurface === 'iptv' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('iptv')}>IPTV</button>
+              <button class={activeSurface === 'iptv' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => navigateSitePage('iptv')}>IPTV</button>
               <button class={activeSurface === 'twitch' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>TW</button>
               <button class={activeSurface === 'youtube' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YT</button>
               <button class={activeSurface === 'kick' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
@@ -4572,7 +5038,7 @@ export function App() {
                     <strong>Noticias</strong>
                     <span>{newsLinks.length} canais</span>
                   </button>
-                  <button class={activeSurface === 'iptv' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('iptv')}>
+                  <button class={activeSurface === 'iptv' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => navigateSitePage('iptv')}>
                     <strong>IPTV</strong>
                     <span>{playlist?.channels.length || 0} canais</span>
                   </button>
@@ -4648,8 +5114,7 @@ export function App() {
                         class={selectedChannel?.id === channel.id ? 'live-now-icon-card active' : 'live-now-icon-card'}
                         type="button"
                         onClick={() => {
-                          setSelectedChannelId(channel.id)
-                          setSurface('iptv')
+                          activateIPTV(channel.id)
                         }}
                       >
                         <div class="live-now-icon-shell platform-iptv">
