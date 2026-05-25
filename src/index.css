@@ -1934,6 +1934,11 @@ input:focus, select:focus {
   align-items: center;
 }
 
+.feed-strip-shell > .feed-strip-scroll {
+  grid-column: auto;
+  min-width: 0;
+}
+
 .feed-strip {
   gap: 8px;
 }

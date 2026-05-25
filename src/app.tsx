@@ -381,51 +381,46 @@ const newsLinks: NewsLink[] = [
   },
   {
     id: 'tyc-sports-ar',
-    name: 'TyC Sports Argentina',
-    href: 'https://live-04-11-tyc24.vodgc.net/tyc24/index.m3u8',
-    note: 'Feed HLS da TyC Sports Argentina. Label geo-blocked, com geo AR confirmado; pode exigir saida pela Argentina.',
-    source: 'TyC Sports AR',
-    streamUrl: 'https://live-04-11-tyc24.vodgc.net/tyc24/index_tyc24_1080.m3u8',
+    name: 'TyC Sports Fan',
+    href: 'https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-us-e2-n2/playlist/amg26268-sportsstudio-tycsports-freelivesportsemea/playlist.m3u8',
+    note: 'Feed HLS publico da TyC Sports Fan via Amagi. Substitui o TyC Sports Argentina geo-blocked, que retorna 403 fora da Argentina.',
+    source: 'TyC Sports Fan | Amagi',
+    streamUrl: 'https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-us-e2-n2/playlist/amg26268-sportsstudio-tycsports-freelivesportsemea/playlist.m3u8',
   },
   {
     id: 'tnt-sports-ar',
     name: 'TNT Sports Argentina',
-    href: 'https://iptv-org.github.io/channels/ar/TNTSports#HD',
-    note: 'TNT Sports Argentina HD. O catalogo iptv-org marca o canal como sports e bloqueado; o player usa o feed informado na lista.',
+    href: 'https://tntsports.com.ar/',
+    note: 'Atalho para a origem oficial. O stream IPTV informado anteriormente usa um host que nao resolve DNS, entao nao tento abrir no player nativo.',
     source: 'TNT Sports AR',
-    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39293',
   },
   {
     id: 'espn-ar',
     name: 'ESPN Argentina',
-    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39206',
-    note: 'Feed ESPN Argentina informado para playback nativo no player do site.',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
     source: 'ESPN AR',
-    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39206',
   },
   {
     id: 'espn-2-ar',
     name: 'ESPN 2 Argentina',
-    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39208',
-    note: 'Feed ESPN 2 Argentina informado para playback nativo no player do site.',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
     source: 'ESPN AR',
-    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39208',
   },
   {
     id: 'espn-3-ar',
     name: 'ESPN 3 Argentina',
-    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39210',
-    note: 'Feed ESPN 3 Argentina informado para playback nativo no player do site.',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
     source: 'ESPN AR',
-    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39210',
   },
   {
     id: 'espn-extra-ar',
     name: 'ESPN Extra Argentina',
-    href: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39212',
-    note: 'Feed ESPN Extra Argentina informado para playback nativo no player do site.',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
     source: 'ESPN AR',
-    streamUrl: 'http://youriptv.tv:8080/ARGENTINA/Nicetry8888/39212',
   },
   {
     id: 'vatican-news',
@@ -5310,7 +5305,7 @@ export function App() {
                 {orderedNewsLinks.map((item) => (
                   <button class={selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}>
                     <span>{item.name}</span>
-                    <strong>LIVE</strong>
+                    <strong>{item.streamUrl || item.embedUrl ? 'LIVE' : 'LINK'}</strong>
                   </button>
                 ))}
               </div>
