@@ -1,5862 +1,772 @@
 import type Hls from 'hls.js'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import {
-  buildProxyUrl,
-  buildTwitchAuthUrl,
-  type Channel,
-  fetchCustomStatus,
-  fetchKickAppAccessToken,
-  fetchKickRecentVods,
-  fetchKickStatuses,
-  fetchKickStatusesFromWorker,
-  fetchM3UPlaylist,
-  fetchTwitchRecentVods,
-  fetchTwitchStatuses,
-  fetchYoutubeRecentVods,
-  fetchYoutubeStatuses,
-  fetchXtreamPlaylist,
-  KICK_STATUS_HELP,
-  resolveYoutubeChannelInput,
-  takeTwitchTokenFromHash,
-  TWITCH_STATUS_HELP,
-  YOUTUBE_STATUS_HELP,
-  type EmbedStatus,
-  type EmbedStream,
-  type LiveState,
-  type M3UCredentials,
-  type PersistedConnection,
-  type PlaylistSession,
-  type RecentVodItem,
-  type XtreamCredentials,
-} from './lib/iptv'
-import {
-  hasOfficialRadioGuide,
-  loadRadioGuide,
-  type RadioGuideSnapshot,
-} from './lib/radio-guide'
-import { radioStations, type RadioStation } from './lib/radios'
+import { fetchM3UPlaylist, type Channel, type PlaylistSession } from './lib/iptv'
 
-const CONNECTION_KEY = 'iptv-pages-hub.connection'
-const EMBEDS_KEY = 'iptv-pages-hub.embeds'
-const SETTINGS_KEY = 'iptv-pages-hub.settings'
-const LAST_CHANNEL_KEY = 'iptv-pages-hub.last-channel'
-const FAVORITES_KEY = 'iptv-pages-hub.favorites'
-const FORM_STATE_KEY = 'iptv-pages-hub.form-state'
-const ACTIVE_SURFACE_KEY = 'iptv-pages-hub.active-surface'
-const SELECTED_EMBED_KEY = 'iptv-pages-hub.selected-embed'
-const SELECTED_RADIO_KEY = 'iptv-pages-hub.selected-radio'
-const MOVIES_KEY = 'iptv-pages-hub.movies'
-const SELECTED_MOVIE_KEY = 'iptv-pages-hub.selected-movie'
-const SHOW_LIVE_NOW_KEY = 'iptv-pages-hub.show-live-now'
-const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
-const INITIAL_CHANNEL_BATCH = 180
-const CHANNEL_BATCH_STEP = 240
-const IPTV_GUIDE_GROUP_LIMIT = 14
-const IPTV_GUIDE_GROUP_CHANNEL_LIMIT = 12
-const LIVE_STATUS_REFRESH_MS = 60_000
-const BRIEFING_REFRESH_MS = 10 * 60_000
-const PT_BR_NUMBER = new Intl.NumberFormat('pt-BR')
-const PT_BR_COLLATOR = new Intl.Collator('pt-BR')
-const NEWS_POSTER_TONES = [
-  'news-tone-aurora',
-  'news-tone-cobalt',
-  'news-tone-crimson',
-  'news-tone-sunset',
-  'news-tone-emerald',
-  'news-tone-violet',
-] as const
+type AppView = 'live' | 'iptv' | 'links'
+type PlayerState = 'idle' | 'loading' | 'ready' | 'playing' | 'error'
 
-type MediaSurface = 'iptv' | 'twitch' | 'youtube' | 'kick' | 'news' | 'radio' | 'cinema'
-type SitePage = 'welcome' | 'hub' | 'iptv'
-
-interface MovieItem {
-  id: string
-  title: string
-  driveUrl: string
-  previewUrl: string
-  openUrl: string
-}
-
-interface IptvGroupSection {
-  group: string
-  channels: Channel[]
-  total: number
-  favoriteCount: number
-}
-
-interface NewsLink {
+interface VerifiedFeed {
   id: string
   name: string
+  group: string
+  region: string
+  quality: string
+  source: string
   href: string
+  streamUrl: string
   note: string
-  source: string
-  topLevelOnly?: boolean
-  embedUrl?: string
-  embedResolver?: 'nasa-live'
-  youtubeChannel?: string
-  streamUrl?: string
-  mirrorChannelKey?: string
-  mirrorServers?: string[]
-  playbackEngine?: 'dash'
-  proxyOverride?: string
 }
 
-interface BriefingItem {
+interface ExternalFeedLink {
   id: string
-  title: string
-  summary: string
+  name: string
+  group: string
   href: string
-  source: string
-  publishedAt: string
-  section: BriefingSectionId
+  reason: string
 }
 
-type BriefingSectionId = 'general' | 'sports' | 'entertainment'
-
-interface DailyBriefingSource {
+interface PlayerItem {
   id: string
-  label: string
-  url: string
-  section: BriefingSectionId
-  itemLimit?: number
-  maxAgeHours?: number
-  excludePatterns?: RegExp[]
-}
-
-type WelcomeSectionOffsets = Record<BriefingSectionId, number>
-
-interface MarketQuote {
-  id: string
-  label: string
-  value: string
-  change: string
-  trend: 'up' | 'down' | 'flat'
-}
-
-interface RadioReplayState {
-  streamUrl: string
-  title: string
-  startedAt: string
-  targetOffsetSeconds: number
+  name: string
+  group: string
+  region: string
+  quality: string
   source: string
-}
-
-interface AppSettings {
-  rememberConnection: boolean
-  desktopLiveNotifications: boolean
-  twitchClientId: string
-  twitchAccessToken: string
-  kickClientId: string
-  kickClientSecret: string
-  kickAppAccessToken: string
-  kickAppTokenExpiresAt: string
-}
-
-interface PersistedFormState {
-  sourceTab: 'xtream' | 'm3u'
-  xtream: XtreamCredentials
-  m3u: M3UCredentials
-}
-
-interface ConnectionTransferBundle {
-  version: 1
-  sourceTab: 'xtream' | 'm3u'
-  xtream: XtreamCredentials
-  m3u: M3UCredentials
-}
-
-interface SiteTransferBundle {
-  version: 1
-  sourceTab: 'xtream' | 'm3u'
-  xtream: XtreamCredentials
-  m3u: M3UCredentials
-  settings: AppSettings
-  embeds: EmbedStream[]
-  favorites: string[]
-  activeSurface: MediaSurface
-  selectedEmbedId: string | null
-  selectedRadioId: string
-  movies: MovieItem[]
-  selectedMovieId: string | null
-  showLiveNowPanel: boolean
-}
-
-declare global {
-  interface Window {
-    Twitch?: {
-      Embed?: {
-        VIDEO_READY?: string
-      }
-      Player?: new (
-        element: HTMLElement | string,
-        options: Record<string, unknown>,
-      ) => {
-        addEventListener?: (event: string, listener: () => void) => void
-        destroy?: () => void
-        pause?: () => void
-        play?: () => void
-        setMuted?: (muted: boolean) => void
-        setVolume?: (volume: number) => void
-      }
-    }
-    __iptvPagesHubTwitchScript?: Promise<void>
-  }
-}
-
-const defaultXtream: XtreamCredentials = {
-  serverUrl: '',
-  username: '',
-  password: '',
-  output: 'auto',
-  proxyUrl: DEFAULT_XTREAM_PROXY_URL,
-}
-const defaultM3U: M3UCredentials = { url: '' }
-const defaultSettings: AppSettings = {
-  rememberConnection: true,
-  desktopLiveNotifications: false,
-  twitchClientId: '',
-  twitchAccessToken: '',
-  kickClientId: '',
-  kickClientSecret: '',
-  kickAppAccessToken: '',
-  kickAppTokenExpiresAt: '',
-}
-
-function mergeSettings(value?: Partial<AppSettings> | null): AppSettings {
-  return { ...defaultSettings, ...(value || {}) }
-}
-
-function prioritizeCurrentItem<T extends { id: string }>(
-  items: T[],
-  currentId: string | null | undefined,
-): T[] {
-  if (!currentId) return items
-
-  const currentIndex = items.findIndex((item) => item.id === currentId)
-  if (currentIndex <= 0) return items
-
-  return [items[currentIndex], ...items.slice(0, currentIndex), ...items.slice(currentIndex + 1)]
-}
-
-const embedDefaults: EmbedStream[] = [
-  { id: 'default:twitch:destiny', platform: 'twitch', channel: 'destiny', title: 'destiny' },
-  { id: 'default:twitch:anythingelse', platform: 'twitch', channel: 'anythingelse', title: 'anythingelse' },
-  { id: 'default:kick:sneako', platform: 'kick', channel: 'sneako', title: 'sneako' },
-  { id: 'default:kick:imreallyimportant', platform: 'kick', channel: 'imreallyimportant', title: 'imreallyimportant' },
-]
-const mirroredNewsServers = ['sec.ai-hls.site', 'chevy.soyspace.cyou']
-const mirroredNewsCache = new Map<string, { streamUrl: string; expiresAt: number }>()
-const globalCatchupCache = new Map<string, Array<{
-  title: string
+  href: string
   streamUrl: string
-  startedAt: string
-  durationSeconds: number
-  source: string
-}>>()
-const foxNewsHarStreamUrl = 'https://stream.livenewspro.com:1936/fox/fox/playlist.m3u8?dvr&secendtime=1776333749&sechash=K_vzPBzGFzdldlFUYd_xWq55ChIu0FB6VbbvwXxU-Ys=&secstarttime=1776258749'
-const foxBusinessHarStreamUrl = 'https://stream.livenewsplay.com:9555/hls/fox-business/index.m3u8?token=3d58202fee469874510eabd130c230f4&expires=1776302257&sig=3d4e65b8172b02134a31141d7bbddbc00214f63916ac7e521501678e53532117&dvr=true'
-const msNowHarStreamUrl = 'https://stream.livenewspro.com:1936/msnbcpro/msnbcpro/playlist.m3u8?dvr&secendtime=1776345700&sechash=KOoSdK1NQfdZzdWXjlsXMg8x01PRWx9bsUU05s1p_MU=&secstarttime=1776259300'
-const newsmaxHarStreamUrl = 'https://nmx1ota.akamaized.net/hls/live/2107010/Live_1/index.m3u8'
-const newsNationHarStreamUrl = 'https://stream.onlinestreaming.us:9444/hls/newsnation/index.m3u8?token=b3c318fd826c2814580e604c9ad06d3b&expires=1776303103&sig=050227dbf71c45d4f24436b5c5cb09555edeeb34b460a8477b577bcaecd93d40&dvr=true'
-const newsLinks: NewsLink[] = [
+  note: string
+}
+
+const M3U_URL_KEY = 'iptv-pages-lite.m3u-url'
+const LAST_NATIVE_KEY = 'iptv-pages-lite.last-native'
+const LAST_VIEW_KEY = 'iptv-pages-lite.view'
+
+const verifiedFeeds: VerifiedFeed[] = [
   {
     id: 'bbc-news',
     name: 'BBC News',
-    href: 'https://vs-hls-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/t=3840/v=pv14/b=5070016/main.m3u8',
-    note: 'Feed direto da BBC via Akamai, tocando no player leve do proprio site.',
+    group: 'Noticias',
+    region: 'Reino Unido',
+    quality: 'HD',
     source: 'BBC / Akamai',
+    href: 'https://www.bbc.com/news/live',
     streamUrl: 'https://vs-hls-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/t=3840/v=pv14/b=5070016/main.m3u8',
-  },
-  {
-    id: 'sky-news',
-    name: 'Sky News',
-    href: 'https://news.sky.com/watch-live',
-    note: 'Feed HLS oficial da Sky News tocando direto no player do site.',
-    source: 'Sky News',
-    streamUrl: 'https://nnaa-skynews-61cza.fast.nbcuni.com/live/master.m3u8',
-  },
-  {
-    id: 'nbc-news-now',
-    name: 'NBC News NOW',
-    href: 'https://www.nbcnews.com/now',
-    note: 'Feed HLS oficial da NBC News NOW tocando direto no player do site.',
-    source: 'NBC News',
-    streamUrl: 'https://nnaa-nbcnn-lzaj01.fast.nbcuni.com/live/master.m3u8',
-  },
-  {
-    id: 'ms-now',
-    name: 'MS Now',
-    href: 'https://www.watchnews.pro/channels/msnbc-news',
-    note: 'Feed HLS da MS Now extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
-    source: 'MS Now / watchnews.pro',
-    streamUrl: msNowHarStreamUrl,
+    note: 'HLS publico testado com CORS aberto.',
   },
   {
     id: 'cbs-news-247',
     name: 'CBS News 24/7',
+    group: 'Noticias',
+    region: 'Estados Unidos',
+    quality: 'HD',
+    source: 'CBS',
     href: 'https://www.cbsnews.com/video/live-cbsnews/',
-    note: 'Feed oficial da CBS News 24/7 tocando direto no player do site.',
-    source: 'CBS News',
     streamUrl: 'https://news20e7hhcb.airspace-cdn.cbsivideo.com/index.m3u8',
-  },
-  {
-    id: 'al-jazeera-english',
-    name: 'Al Jazeera English',
-    href: 'https://www.aljazeera.com/video/live',
-    note: 'Feed ao vivo da Al Jazeera English tocando no player leve do site.',
-    source: 'Al Jazeera',
-    streamUrl: 'https://live-hls-web-aje-fa.getaj.net/AJE/index.m3u8',
+    note: 'Feed HLS oficial com resposta 200.',
   },
   {
     id: 'france-24-english',
     name: 'France 24 English',
-    href: 'https://www.france24.com/en/live',
-    note: 'Feed HLS oficial da France 24 English tocando direto no player leve do site.',
+    group: 'Noticias',
+    region: 'Franca',
+    quality: 'HD',
     source: 'France 24',
+    href: 'https://www.france24.com/en/live',
     streamUrl: 'https://static.france24.com/live/F24_EN_HI_HLS/live_web.m3u8',
+    note: 'HLS direto, leve e estavel.',
   },
   {
     id: 'dw-news-english',
     name: 'DW News English',
+    group: 'Noticias',
+    region: 'Alemanha',
+    quality: 'HD',
+    source: 'DW',
     href: 'https://www.dw.com/en/live-tv/channel-english',
-    note: 'Feed HLS oficial da DW News English tocando direto no player leve do site.',
-    source: 'DW News',
     streamUrl: 'https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/master.m3u8',
-  },
-  {
-    id: 'euronews',
-    name: 'Euronews',
-    href: 'https://www.euronews.com/live',
-    note: 'Embed oficial da Euronews Live, o mesmo anunciado pela propria pagina de live da emissora.',
-    source: 'Euronews',
-    embedUrl: 'https://www.euronews.com/embed/live',
+    note: 'Feed HLS oficial da DW.',
   },
   {
     id: 'trt-world',
     name: 'TRT World',
+    group: 'Noticias',
+    region: 'Turquia',
+    quality: 'HD',
+    source: 'TRT',
     href: 'https://www.trtworld.com/live',
-    note: 'Feed HLS oficial da TRT World tocando direto no player leve do site.',
-    source: 'TRT World',
     streamUrl: 'https://tv-trtworld.medya.trt.com.tr/master.m3u8',
+    note: 'HLS oficial com CORS liberado.',
   },
   {
     id: 'cgtn-news',
     name: 'CGTN News',
-    href: 'https://www.cgtn.com/tv',
-    note: 'Feed HLS oficial da CGTN News em ingles, resolvido pela propria pagina de TV da emissora e tocando direto no player leve do site.',
+    group: 'Noticias',
+    region: 'China',
+    quality: 'HD',
     source: 'CGTN',
+    href: 'https://www.cgtn.com/tv',
     streamUrl: 'https://english-livebkali.cgtn.com/live/encgtn.m3u8',
+    note: 'Feed HLS direto.',
   },
-    {
-      id: 'cnn-us',
-      name: 'CNN US',
-      href: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_0_3564000.m3u8',
-      note: 'Feed HLS leve da CNN US em bitrate mais alto para subir com mais consistencia no multiview e no player principal.',
-      source: 'CNN HLS',
-      streamUrl: 'https://turnerlive.warnermediacdn.com/hls/live/586495/cnngo/cnn_slate/VIDEO_0_3564000.m3u8',
-    },
-    {
-      id: 'bloomberg-us',
-      name: 'Bloomberg US',
-      href: 'https://www.bloomberg.com/live',
-      note: 'Feed oficial ao vivo da Bloomberg Television US.',
+  {
+    id: 'bloomberg-us',
+    name: 'Bloomberg US',
+    group: 'Negocios',
+    region: 'Estados Unidos',
+    quality: 'HD',
     source: 'Bloomberg',
+    href: 'https://www.bloomberg.com/live',
     streamUrl: 'https://www.bloomberg.com/media-manifest/streams/phoenix-us.m3u8',
-  },
-  {
-    id: 'abc-news-live',
-    name: 'ABC News Live',
-    href: 'https://abcnews.com/live',
-    note: 'ABC News Live oficial, resolvida pelo canal oficial da ABC News no YouTube para abrir rapido no palco.',
-    source: 'ABC News | YouTube',
-    youtubeChannel: '@ABCNews',
-  },
-  {
-    id: 'times-brasil-cnbc',
-    name: 'Times Brasil CNBC',
-    href: 'https://www.youtube.com/@otimesbrasil/live',
-    note: 'Transmissao oficial ao vivo do Times Brasil, licenciado exclusivo CNBC no Brasil, resolvida pelo canal oficial no YouTube.',
-    source: 'Times Brasil | CNBC',
-    youtubeChannel: '@otimesbrasil',
-  },
-  {
-    id: 'tyc-sports-ar',
-    name: 'TyC Sports Fan',
-    href: 'https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-us-e2-n2/playlist/amg26268-sportsstudio-tycsports-freelivesportsemea/playlist.m3u8',
-    note: 'Feed HLS publico da TyC Sports Fan via Amagi. Substitui o TyC Sports Argentina geo-blocked, que retorna 403 fora da Argentina.',
-    source: 'TyC Sports Fan | Amagi',
-    streamUrl: 'https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-us-e2-n2/playlist/amg26268-sportsstudio-tycsports-freelivesportsemea/playlist.m3u8',
-  },
-  {
-    id: 'tnt-sports-ar',
-    name: 'TNT Sports Argentina',
-    href: 'https://tntsports.com.ar/',
-    note: 'Atalho para a origem oficial. O stream IPTV informado anteriormente usa um host que nao resolve DNS, entao nao tento abrir no player nativo.',
-    source: 'TNT Sports AR',
-  },
-  {
-    id: 'espn-ar',
-    name: 'ESPN Argentina',
-    href: 'https://www.espn.com.ar/where-to-watch/',
-    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
-    source: 'ESPN AR',
-  },
-  {
-    id: 'espn-2-ar',
-    name: 'ESPN 2 Argentina',
-    href: 'https://www.espn.com.ar/where-to-watch/',
-    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
-    source: 'ESPN AR',
-  },
-  {
-    id: 'espn-3-ar',
-    name: 'ESPN 3 Argentina',
-    href: 'https://www.espn.com.ar/where-to-watch/',
-    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
-    source: 'ESPN AR',
-  },
-  {
-    id: 'espn-extra-ar',
-    name: 'ESPN Extra Argentina',
-    href: 'https://www.espn.com.ar/where-to-watch/',
-    note: 'Atalho oficial ESPN Argentina. O stream informado anteriormente usa um host que nao resolve DNS, entao fica como link externo para nao quebrar o player.',
-    source: 'ESPN AR',
-  },
-  {
-    id: 'vatican-news',
-    name: 'Vatican News',
-    href: 'https://www.comunicazione.va/en/servizi/live.html',
-    note: 'Embed oficial do Vatican Media Live, o mesmo usado na pagina oficial do Vaticano.',
-    source: 'Vatican Media',
-    embedUrl: 'https://www.youtube.com/embed/03pYP2Nmreo?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1',
-  },
-  {
-    id: 'nasa-live',
-    name: 'NASA TV',
-    href: 'https://www.nasa.gov/live/',
-    note: 'Embed oficial atual da pagina NASA Live, resolvido automaticamente para abrir no palco sem sair do site.',
-    source: 'NASA',
-    embedResolver: 'nasa-live',
+    note: 'Manifest HLS publico testado.',
   },
   {
     id: 'newsmax',
     name: 'Newsmax',
-    href: 'https://www.watchnews.pro/channels/newsmax',
-    note: 'Feed HLS da Newsmax extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
-    source: 'Newsmax / watchnews.pro',
-    streamUrl: newsmaxHarStreamUrl,
-  },
-  {
-    id: 'cnbc',
-    name: 'CNBC',
-    href: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
-    note: 'Feed HLS 720p da CNBC ao vivo tocando direto no player leve do site.',
-    source: 'CNBC',
-    streamUrl: 'https://stream.livenewsplay.com:9443/hls/cnbc/cnbcsd.m3u8',
-  },
-  {
-    id: 'newsnation',
-    name: 'NewsNation',
-    href: 'https://www.watchnews.pro/channels/newsnation',
-    note: 'Feed HLS da NewsNation extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
-    source: 'NewsNation / watchnews.pro',
-    streamUrl: newsNationHarStreamUrl,
+    group: 'Noticias',
+    region: 'Estados Unidos',
+    quality: 'HD',
+    source: 'Newsmax',
+    href: 'https://www.newsmax.com/',
+    streamUrl: 'https://nmx1ota.akamaized.net/hls/live/2107010/Live_1/index.m3u8',
+    note: 'HLS publico com resposta 200.',
   },
   {
     id: 'rt-news',
     name: 'RT News English',
+    group: 'Noticias',
+    region: 'Internacional',
+    quality: 'HD',
+    source: 'RT',
     href: 'https://www.rt.com/on-air/rt-player/',
-    note: 'Feed HLS oficial da RT News English, em dominio da propria RT, tocando direto no player leve do site.',
-    source: 'RT HLS',
     streamUrl: 'https://rt-glb.rttv.com/live/rtnews/playlist.m3u8',
+    note: 'Feed HLS direto. Pode variar por politica regional.',
   },
   {
     id: 'press-tv',
     name: 'Press TV',
-    href: 'https://www.presstv.ir/live',
-    note: 'Feed HLS oficial da Press TV em ingles, o mesmo carregado pelo player da propria pagina de live da emissora.',
+    group: 'Noticias',
+    region: 'Internacional',
+    quality: 'HD',
     source: 'Press TV',
+    href: 'https://www.presstv.ir/live',
     streamUrl: 'https://live.presstv.ir/hls/presstv.m3u8',
+    note: 'HLS direto com CORS aberto.',
   },
   {
-    id: 'fox-news',
-    name: 'Fox News',
-    href: 'https://www.watchnews.pro/channels/fox-news',
-    note: 'Feed HLS da Fox News extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
-    source: 'Fox News / watchnews.pro',
-    streamUrl: foxNewsHarStreamUrl,
-  },
-  {
-    id: 'fox-business',
-    name: 'Fox Business',
-    href: 'https://www.watchnews.pro/channels/fox-business',
-    note: 'Feed HLS da Fox Business extraido do HAR validado em watchnews.pro e tocando direto no player leve do site.',
-    source: 'Fox Business / watchnews.pro',
-    streamUrl: foxBusinessHarStreamUrl,
+    id: 'tyc-sports-fan',
+    name: 'TyC Sports Fan',
+    group: 'Esportes',
+    region: 'Argentina',
+    quality: '1080p',
+    source: 'TyC Sports Fan / Amagi',
+    href: 'https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-us-e2-n2/playlist/amg26268-sportsstudio-tycsports-freelivesportsemea/playlist.m3u8',
+    streamUrl: 'https://amg26268-amg26268c14-freelivesports-emea-10267.playouts.now.amagi.tv/ts-us-e2-n2/playlist/amg26268-sportsstudio-tycsports-freelivesportsemea/playlist.m3u8',
+    note: 'Substitui o TyC geo-blocked que retornava 403 fora da Argentina.',
   },
 ]
 
-const marketItems = [
-  { symbol: 'BRL=X', id: 'usd-brl', label: 'USD/BRL', digits: 4 },
-  { symbol: '^BVSP', id: 'ibov', label: 'Ibov', digits: 0 },
-  { symbol: '^DJI', id: 'dow', label: 'Dow', digits: 0 },
-  { symbol: '^IXIC', id: 'nasdaq', label: 'Nasdaq', digits: 0 },
-  { symbol: '^VIX', id: 'vix', label: 'VIX', digits: 2 },
-  { symbol: '^FTSE', id: 'ftse', label: 'FTSE', digits: 0 },
-  { symbol: '^GDAXI', id: 'dax', label: 'DAX', digits: 0 },
-  { symbol: '^FCHI', id: 'cac', label: 'CAC', digits: 0 },
-] as const
+const externalLinks: ExternalFeedLink[] = [
+  {
+    id: 'espn-ar',
+    name: 'ESPN Argentina',
+    group: 'Esportes',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    reason: 'Sem HLS publico confiavel; link oficial mantido fora do player.',
+  },
+  {
+    id: 'espn-2-ar',
+    name: 'ESPN 2 Argentina',
+    group: 'Esportes',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    reason: 'O host IPTV informado anteriormente nao resolve DNS.',
+  },
+  {
+    id: 'espn-3-ar',
+    name: 'ESPN 3 Argentina',
+    group: 'Esportes',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    reason: 'Atalho oficial para nao quebrar o player.',
+  },
+  {
+    id: 'espn-extra-ar',
+    name: 'ESPN Extra Argentina',
+    group: 'Esportes',
+    href: 'https://www.espn.com.ar/where-to-watch/',
+    reason: 'Mantido como link externo ate existir feed nativo testado.',
+  },
+  {
+    id: 'tnt-sports-ar',
+    name: 'TNT Sports Argentina',
+    group: 'Esportes',
+    href: 'https://tntsports.com.ar/',
+    reason: 'Sem stream HLS estavel no navegador; link oficial preservado.',
+  },
+  {
+    id: 'euronews',
+    name: 'Euronews',
+    group: 'Noticias',
+    href: 'https://www.euronews.com/live',
+    reason: 'Origem oficial disponivel como pagina externa.',
+  },
+  {
+    id: 'abc-news-live',
+    name: 'ABC News Live',
+    group: 'Noticias',
+    href: 'https://abcnews.go.com/Live',
+    reason: 'Mantido como link oficial sem tentar iframe pesado.',
+  },
+  {
+    id: 'nasa-live',
+    name: 'NASA Live',
+    group: 'Ciencia',
+    href: 'https://www.nasa.gov/live/',
+    reason: 'Pagina oficial, melhor aberta fora do player nativo.',
+  },
+]
 
-function readJson<T>(key: string, fallback: T) {
+const viewLabels: Record<AppView, string> = {
+  live: 'Ao vivo',
+  iptv: 'IPTV',
+  links: 'Links',
+}
+
+function readStoredValue(key: string) {
+  if (typeof window === 'undefined') return ''
+
+  return window.localStorage.getItem(key) || ''
+}
+
+function viewFromHash(hash: string): AppView | null {
+  const value = hash.replace('#', '')
+  return value === 'iptv' || value === 'links' || value === 'live' ? value : null
+}
+
+function readInitialView(): AppView {
+  if (typeof window === 'undefined') return 'live'
+
+  const hashView = viewFromHash(window.location.hash)
+  if (hashView) return hashView
+
+  const stored = readStoredValue(LAST_VIEW_KEY)
+  return stored === 'iptv' || stored === 'links' || stored === 'live' ? stored : 'live'
+}
+
+function compactUrl(rawUrl: string) {
   try {
-    const stored = window.localStorage.getItem(key)
-    return stored ? (JSON.parse(stored) as T) : fallback
+    const url = new URL(rawUrl)
+    return `${url.host}${url.pathname.length > 34 ? `${url.pathname.slice(0, 34)}...` : url.pathname}`
   } catch {
-    return fallback
+    return rawUrl
   }
 }
 
-function saveJson<T>(key: string, value: T) {
-  window.localStorage.setItem(key, JSON.stringify(value))
+function channelToPlayerItem(channel: Channel): PlayerItem {
+  return {
+    id: channel.id,
+    name: channel.name,
+    group: channel.group || 'Playlist',
+    region: 'Playlist M3U',
+    quality: channel.streamUrl.toLowerCase().includes('.m3u8') ? 'HLS' : 'Auto',
+    source: channel.tvgId || channel.group || 'M3U',
+    href: channel.streamUrl,
+    streamUrl: channel.streamUrl,
+    note: channel.logo ? 'Canal carregado da playlist importada.' : 'Canal da playlist importada.',
+  }
 }
 
 function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
 }
 
-function statusTone(state: LiveState, platform?: 'twitch' | 'youtube' | 'kick') {
-  if (state === 'online') return classNames('status-chip', 'online', platform)
-  if (state === 'offline') return classNames('status-chip', 'offline', platform)
-  if (state === 'error') return classNames('status-chip', 'error', platform)
-  return classNames('status-chip', 'unknown', platform)
-}
-
-function feedPillTone(platform?: 'twitch' | 'youtube' | 'kick', active = false) {
-  return classNames('feed-pill', 'button-pill', platform, active && 'active')
-}
-
-function embedAvatarText(item: EmbedStream) {
-  const seed = item.title?.trim() || item.channel.trim()
-  const clean = seed.replace(/^@/, '').trim()
-  return clean.slice(0, 2).toUpperCase()
-}
-
-function embedAvatarUrl(status: EmbedStatus | undefined) {
-  return status?.avatarUrl?.trim() || ''
-}
-
-function embedDisplayName(item: EmbedStream, status: EmbedStatus | undefined) {
-  return status?.displayName?.trim() || item.title
-}
-
-const BRIEFING_SECTIONS = [
-  {
-    id: 'general',
-    tag: 'Geral',
-    title: 'Panorama geral',
-    description: 'Mais importantes do momento, com peso forte para a ultima hora e fontes de maior tracao.',
-  },
-  {
-    id: 'sports',
-    tag: 'Esportes',
-    title: 'Esportes em destaque',
-    description: 'Recorte esportivo mais quente agora, priorizando o que esta subindo e entrando no radar rapido.',
-  },
-  {
-    id: 'entertainment',
-    tag: 'Entretenimento',
-    title: 'Entretenimento',
-    description: 'Cinema, TV e cultura pop ranqueados para puxar o que parece mais relevante agora.',
-  },
-] as const satisfies ReadonlyArray<{
-  id: BriefingSectionId
-  tag: string
-  title: string
-  description: string
-}>
-
-const DAILY_BRIEFING_SOURCES: readonly DailyBriefingSource[] = [
-  {
-    id: 'google-br',
-    label: 'Google News Brasil',
-    url: 'https://news.google.com/rss?hl=pt-BR&gl=BR&ceid=BR:pt-419',
-    section: 'general',
-    itemLimit: 4,
-  },
-  {
-    id: 'bbc-world',
-    label: 'BBC World',
-    url: 'https://feeds.bbci.co.uk/news/world/rss.xml',
-    section: 'general',
-    itemLimit: 3,
-  },
-  {
-    id: 'reddit-worldnews',
-    label: 'Reddit WorldNews',
-    url: 'https://www.reddit.com/r/worldnews/.rss',
-    section: 'general',
-    itemLimit: 2,
-    excludePatterns: [/live thread/i, /discussion/i, /megathread/i],
-  },
-  {
-    id: 'hacker-news',
-    label: 'Hacker News',
-    url: 'https://news.ycombinator.com/rss',
-    section: 'general',
-    itemLimit: 2,
-  },
-  {
-    id: 'google-sports',
-    label: 'Google Sports',
-    url: 'https://news.google.com/rss/headlines/section/topic/SPORTS?hl=pt-BR&gl=BR&ceid=BR:pt-419',
-    section: 'sports',
-    itemLimit: 3,
-  },
-  {
-    id: 'bbc-sport',
-    label: 'BBC Sport',
-    url: 'https://feeds.bbci.co.uk/sport/rss.xml',
-    section: 'sports',
-    itemLimit: 3,
-  },
-  {
-    id: 'reddit-soccer',
-    label: 'Reddit Soccer',
-    url: 'https://www.reddit.com/r/soccer/.rss',
-    section: 'sports',
-    itemLimit: 2,
-    excludePatterns: [/daily discussion/i, /match thread/i, /free talk/i, /transfer talk/i],
-  },
-  {
-    id: 'google-entertainment',
-    label: 'Google Entertainment',
-    url: 'https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=pt-BR&gl=BR&ceid=BR:pt-419',
-    section: 'entertainment',
-    itemLimit: 3,
-  },
-  {
-    id: 'variety',
-    label: 'Variety',
-    url: 'https://variety.com/feed/',
-    section: 'entertainment',
-    itemLimit: 3,
-  },
-  {
-    id: 'hollywood-reporter',
-    label: 'Hollywood Reporter',
-    url: 'https://www.hollywoodreporter.com/feed/',
-    section: 'entertainment',
-    itemLimit: 2,
-  },
-] as const
-
-interface BriefingJsonItem {
-  title?: string
-  link?: string
-  description?: string
-  content?: string
-  pubDate?: string
-}
-
-interface BriefingJsonPayload {
-  status?: string
-  items?: BriefingJsonItem[]
-}
-
-function hashString(value: string) {
-  let hash = 0
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0
-  }
-
-  return hash
-}
-
-function newsPosterToneClass(link: NewsLink) {
-  return NEWS_POSTER_TONES[hashString(link.id) % NEWS_POSTER_TONES.length]
-}
-
-function newsPosterMonogram(name: string) {
-  const parts = name
-    .replace(/[^a-z0-9\s]/gi, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-
-  if (!parts.length) return name.slice(0, 2).toUpperCase()
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return `${parts[0][0] || ''}${parts[1][0] || ''}`.toUpperCase()
-}
-
-function newsPlaybackLabel(link: NewsLink) {
-  if (link.playbackEngine === 'dash') return 'DASH'
-  if (link.streamUrl) return 'PLAY'
-  if (link.embedUrl || link.embedResolver || link.youtubeChannel) return 'EMBED'
-  if (link.topLevelOnly) return 'ABRIR'
-  return 'LINK'
-}
-
-function newsSourceLabel(link: NewsLink) {
-  return link.source.split('/')[0]?.trim() || 'News'
-}
-
-function formatRecentVodAge(value: string) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'Agora'
-
-  const diffMs = Math.max(Date.now() - timestamp, 0)
-  const diffMinutes = Math.round(diffMs / 60_000)
-
-  if (diffMinutes < 60) {
-    return `ha ${Math.max(diffMinutes, 1)} min`
-  }
-
-  const diffHours = Math.round(diffMinutes / 60)
-  if (diffHours < 24) {
-    return `ha ${diffHours}h`
-  }
-
-  const diffDays = Math.round(diffHours / 24)
-  return `ha ${diffDays} dia${diffDays > 1 ? 's' : ''}`
-}
-
-function recentVodPlatformLabel(platform: RecentVodItem['platform']) {
-  return platform === 'youtube' ? 'YouTube' : platform === 'kick' ? 'Kick' : 'Twitch'
-}
-
-function recentVodStatusTone(platform: RecentVodItem['platform']) {
-  return statusTone('online', platform)
-}
-
-function embedPlatformLabel(platform: EmbedStream['platform']) {
-  return platform === 'youtube' ? 'YouTube' : platform === 'kick' ? 'Kick' : 'Twitch'
-}
-
-function decodeHtmlEntities(value: string) {
-  if (typeof document === 'undefined') return value
-
-  const textarea = document.createElement('textarea')
-  textarea.innerHTML = value
-  return textarea.value
-}
-
-function stripHtml(value: string) {
-  return decodeHtmlEntities(value.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim()
-}
-
-function truncateText(value: string, maxLength: number) {
-  if (value.length <= maxLength) return value
-  return `${value.slice(0, maxLength - 1).trimEnd()}…`
-}
-
-function normalizeBriefingSummary(value: string) {
-  const clean = stripHtml(value)
-    .replace(/^By\s+[^.]+\.\s*/i, '')
-    .replace(/Continue reading.*$/i, '')
-    .trim()
-
-  return truncateText(clean, 180)
-}
-
-function parseFeedDate(rawValue?: string | null) {
-  const timestamp = Date.parse(String(rawValue || ''))
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : new Date().toISOString()
-}
-
-function createBriefingId(source: string, title: string, href: string) {
-  return `${source}:${hashString(`${title}|${href}`)}`
-}
-
-function getBriefingAgeMinutes(value: string) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 999999
-  return Math.max(0, Math.round((Date.now() - timestamp) / 60_000))
-}
-
-function isBriefingItemFresh(item: { publishedAt: string }, maxAgeHours = 96) {
-  const publishedAt = Date.parse(item.publishedAt)
-  if (!Number.isFinite(publishedAt)) return true
-  return Date.now() - publishedAt <= maxAgeHours * 60 * 60 * 1000
-}
-
-function shouldKeepBriefingTitle(title: string, excludePatterns?: RegExp[]) {
-  if (!title.trim()) return false
-  return !(excludePatterns || []).some((pattern) => pattern.test(title))
-}
-
-function sourcePriorityWeight(source: string) {
-  const normalized = source.toLowerCase()
-
-  if (normalized.includes('hacker news')) return 120
-  if (normalized.includes('bbc')) return 108
-  if (normalized.includes('google')) return 96
-  if (normalized.includes('variety')) return 90
-  if (normalized.includes('hollywood reporter')) return 88
-  if (normalized.includes('reddit worldnews')) return 80
-  if (normalized.includes('reddit soccer')) return 74
-  return 68
-}
-
-function freshnessPriorityWeight(publishedAt: string) {
-  const ageMinutes = getBriefingAgeMinutes(publishedAt)
-
-  if (ageMinutes <= 60) return 220 - ageMinutes
-  if (ageMinutes <= 180) return 140 - Math.round((ageMinutes - 60) / 2)
-  if (ageMinutes <= 720) return 72 - Math.round((ageMinutes - 180) / 15)
-  if (ageMinutes <= 1440) return 28
-  return 0
-}
-
-function computeBriefingPriority(item: BriefingItem) {
-  let score = sourcePriorityWeight(item.source) + freshnessPriorityWeight(item.publishedAt)
-
-  const title = item.title.toLowerCase()
-  if (/breaking|urgent|live|exclusive|war|attack|tariff|earnings|ai|openai|microsoft|google|apple|meta/i.test(title)) {
-    score += 14
-  }
-
-  return score
-}
-
-function sortBriefingItems(items: BriefingItem[]) {
-  return [...items].sort((left, right) => {
-    const scoreDiff = computeBriefingPriority(right) - computeBriefingPriority(left)
-    if (scoreDiff !== 0) return scoreDiff
-
-    return Date.parse(right.publishedAt) - Date.parse(left.publishedAt)
-  })
-}
-
-function buildRss2JsonUrl(feedUrl: string) {
-  return `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedUrl)}`
-}
-
-function parseBriefingFeed(
-  xmlText: string,
-  sourceLabel: string,
-  section: BriefingSectionId,
-) {
-  if (typeof DOMParser === 'undefined') return [] as BriefingItem[]
-
-  const doc = new DOMParser().parseFromString(xmlText, 'text/xml')
-  const items = Array.from(doc.querySelectorAll('item'))
-
-  return items.map((item) => {
-    const title = stripHtml(item.querySelector('title')?.textContent || '').trim()
-    const href = stripHtml(item.querySelector('link')?.textContent || '').trim()
-    const description = item.querySelector('description')?.textContent || item.querySelector('content\\:encoded')?.textContent || ''
-    const publishedAt = parseFeedDate(item.querySelector('pubDate')?.textContent || item.querySelector('published')?.textContent)
-
-    return {
-      id: createBriefingId(sourceLabel, title, href),
-      title,
-      summary: normalizeBriefingSummary(description || title),
-      href,
-      source: sourceLabel,
-      publishedAt,
-      section,
-    }
-  }).filter((item) => item.title && item.href)
-}
-
-function parseBriefingJsonFeed(
-  payload: BriefingJsonPayload,
-  sourceLabel: string,
-  section: BriefingSectionId,
-) {
-  const items = Array.isArray(payload.items) ? payload.items : []
-
-  return items
-    .map((item) => {
-      const title = stripHtml(item.title || '').trim()
-      const href = stripHtml(item.link || '').trim()
-      const summary = normalizeBriefingSummary(item.description || item.content || title)
-      const publishedAt = parseFeedDate(item.pubDate)
-
-      return {
-        id: createBriefingId(sourceLabel, title, href),
-        title,
-        summary,
-        href,
-        source: sourceLabel,
-        publishedAt,
-        section,
-      }
-    })
-    .filter((item) => item.title && item.href)
-}
-
-async function fetchBriefingSource(source: (typeof DAILY_BRIEFING_SOURCES)[number]) {
-  const attempts = [
-    async () => {
-      const response = await fetch(buildRss2JsonUrl(source.url), {
-        cache: 'no-store',
-        headers: {
-          Accept: 'application/json, text/plain;q=0.9, */*;q=0.8',
-        },
-      })
-
-      if (!response.ok) {
-        throw new Error(`rss2json respondeu ${response.status}.`)
-      }
-
-      const payload = (await response.json()) as BriefingJsonPayload
-      const items = parseBriefingJsonFeed(payload, source.label, source.section)
-        .filter((item) => shouldKeepBriefingTitle(item.title, source.excludePatterns))
-        .filter((item) => isBriefingItemFresh(item, source.maxAgeHours))
-        .slice(0, source.itemLimit || 3)
-
-      if (!items.length) {
-        throw new Error('rss2json voltou sem itens validos.')
-      }
-
-      return items
-    },
-    async () => {
-      const response = await fetch(buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, source.url), {
-        cache: 'no-store',
-        headers: {
-          accept:
-            'application/rss+xml, application/xml, text/xml;q=0.9, text/plain;q=0.8, */*;q=0.5',
-        },
-      })
-
-      if (!response.ok) {
-        throw new Error(`proxy respondeu ${response.status}.`)
-      }
-
-      const xmlText = await response.text()
-      const items = parseBriefingFeed(xmlText, source.label, source.section)
-        .filter((item) => shouldKeepBriefingTitle(item.title, source.excludePatterns))
-        .filter((item) => isBriefingItemFresh(item, source.maxAgeHours))
-        .slice(0, source.itemLimit || 3)
-
-      if (!items.length) {
-        throw new Error('proxy voltou sem itens validos.')
-      }
-
-      return items
-    },
-    async () => {
-      const response = await fetch(source.url, {
-        cache: 'no-store',
-        headers: {
-          accept:
-            'application/rss+xml, application/xml, text/xml;q=0.9, text/plain;q=0.8, */*;q=0.5',
-        },
-      })
-
-      if (!response.ok) {
-        throw new Error(`fonte direta respondeu ${response.status}.`)
-      }
-
-      const xmlText = await response.text()
-      const items = parseBriefingFeed(xmlText, source.label, source.section)
-        .filter((item) => shouldKeepBriefingTitle(item.title, source.excludePatterns))
-        .filter((item) => isBriefingItemFresh(item, source.maxAgeHours))
-        .slice(0, source.itemLimit || 3)
-
-      if (!items.length) {
-        throw new Error('fonte direta voltou sem itens validos.')
-      }
-
-      return items
-    },
-  ] as const
-
-  const errors: string[] = []
-
-  for (const attempt of attempts) {
-    try {
-      return await attempt()
-    } catch (error) {
-      errors.push(error instanceof Error ? error.message : 'falha desconhecida')
-    }
-  }
-
-  throw new Error(`${source.label}: ${errors.join(' | ')}`)
-}
-
-function isTodayInBrazil(isoValue: string) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Sao_Paulo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  })
-
-  return formatter.format(new Date(isoValue)) === formatter.format(new Date())
-}
-
-function dedupeBriefingItems(items: BriefingItem[]) {
-  const seen = new Set<string>()
-
-  return items.filter((item) => {
-    const key = stripHtml(item.title).toLowerCase()
-    if (!key || seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-}
-
-function formatBriefingTime(value: string) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'Agora'
-
-  const diffMinutes = Math.max(1, Math.round((Date.now() - timestamp) / 60_000))
-  if (diffMinutes < 60) return `há ${diffMinutes} min`
-
-  const diffHours = Math.round(diffMinutes / 60)
-  if (diffHours < 24) return `há ${diffHours}h`
-
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'America/Sao_Paulo',
-  }).format(new Date(timestamp))
-}
-
-function isProbablyMobileDevice() {
-  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
-
-  const coarsePointer = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(pointer: coarse)').matches
-    : false
-  const compactViewport = typeof window.matchMedia === 'function'
-    ? window.matchMedia('(max-width: 720px)').matches
-    : false
-
-  return /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent) || (coarsePointer && compactViewport)
-}
-
-function supportsDesktopLiveNotifications() {
-  return typeof window !== 'undefined'
-    && typeof Notification !== 'undefined'
-    && !isProbablyMobileDevice()
-}
-
-function buildWelcomeMultiviewChannel(link: NewsLink | null): Channel | null {
-  if (!link?.streamUrl) return null
-
-  return {
-    id: `welcome:${link.id}`,
-    name: link.name,
-    group: 'Noticias',
-    streamUrl: buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, link.streamUrl),
-  }
-}
-
-function summarizeBriefingSources(items: BriefingItem[]) {
-  return Array.from(new Set(items.map((item) => item.source).filter(Boolean)))
-    .slice(0, 3)
-    .join(' + ')
-}
-
-function buildWelcomeGreeting(now: Date) {
-  const hour = Number(
-    new Intl.DateTimeFormat('en-US', {
-      hour: '2-digit',
-      hour12: false,
-      timeZone: 'America/Sao_Paulo',
-    }).format(now),
-  )
-
-  if (hour >= 5 && hour < 12) return 'Bom dia'
-  if (hour >= 12 && hour < 18) return 'Boa tarde'
-  if (hour >= 18 && hour < 24) return 'Boa noite'
-  return 'Boa madrugada'
-}
-
-function channelMatchesSearch(channel: Channel, normalizedSearch: string) {
-  if (!normalizedSearch) return true
-
-  return (
-    channel.name.toLowerCase().includes(normalizedSearch)
-    || channel.group.toLowerCase().includes(normalizedSearch)
-    || Boolean(channel.tvgId?.toLowerCase().includes(normalizedSearch))
-  )
-}
-
-function channelNumberLabel(channelNumber?: number) {
-  if (!channelNumber) return '---'
-  return String(channelNumber).padStart(3, '0')
-}
-
-function iptvGroupToneClass(group: string) {
-  const normalized = group.toLowerCase()
-
-  if (/sport|espn|tnt|tyc|deporte|futebol|futbol|fox/i.test(normalized)) return 'sports'
-  if (/cine|movie|filme|premium|hbo|telecine/i.test(normalized)) return 'movies'
-  if (/news|noticia|jornal|cnn|bbc|cnbc/i.test(normalized)) return 'news'
-  if (/kids|infantil|cartoon|nick|disney/i.test(normalized)) return 'kids'
-  if (/music|musica|mtv|radio/i.test(normalized)) return 'music'
-  if (/brasil|brazil|globo|record|band|sbt/i.test(normalized)) return 'brasil'
-  return 'general'
-}
-
-function iptvGroupShortLabel(group: string) {
-  const words = group
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(Boolean)
-
-  if (!words.length) return 'TV'
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
-  return words.slice(0, 2).map((word) => word[0]).join('').toUpperCase()
-}
-
-function readSitePageFromHash() {
-  if (typeof window === 'undefined') return 'welcome' as const
-  const hash = window.location.hash.replace(/^#/, '')
-  if (hash === 'iptv') return 'iptv' as const
-  if (hash === 'hub') return 'hub' as const
-  return 'welcome' as const
-}
-
-function isTokenFresh(expiresAt?: string) {
-  if (!expiresAt) return false
-  const expiry = Date.parse(expiresAt)
-  return Number.isFinite(expiry) && expiry > Date.now() + 30_000
-}
-
-function buildKickEmbedUrl(channel: string) {
-  return `https://player.kick.com/${channel}?autoplay=true&muted=true`
-}
-
-function isProxyApiUrl(rawUrl?: string) {
-  if (!rawUrl) return false
-
-  try {
-    const url = new URL(rawUrl)
-    return /\/api\/proxy$/i.test(url.pathname) && url.searchParams.has('url')
-  } catch {
-    return false
-  }
-}
-
-function withAutoplayEmbedUrl(rawUrl?: string) {
-  if (!rawUrl) return ''
-
-  try {
-    const url = new URL(rawUrl)
-    const hostname = url.hostname.toLowerCase()
-
-    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-      url.searchParams.set('autoplay', '1')
-      url.searchParams.set('mute', '1')
-      url.searchParams.set('playsinline', '1')
-      url.searchParams.set('enablejsapi', '1')
-      url.searchParams.set('rel', '0')
-      url.searchParams.set('modestbranding', '1')
-    }
-
-    if (hostname.includes('player.kick.com')) {
-      url.searchParams.set('autoplay', 'true')
-      url.searchParams.set('muted', 'true')
-    }
-
-    if (hostname.includes('players.brightcove.net')) {
-      url.searchParams.set('autoplay', 'true')
-      url.searchParams.set('muted', 'true')
-      url.searchParams.set('playsinline', 'true')
-    }
-
-    return url.toString()
-  } catch {
-    return rawUrl
-  }
-}
-
-async function ensureTwitchPlayerScript() {
-  if (window.Twitch?.Player) return
-  if (window.__iptvPagesHubTwitchScript) {
-    await window.__iptvPagesHubTwitchScript
-    return
-  }
-
-  window.__iptvPagesHubTwitchScript = new Promise<void>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-twitch-player-script="true"]')
-    if (existing) {
-      existing.addEventListener('load', () => resolve(), { once: true })
-      existing.addEventListener('error', () => reject(new Error('Falha ao carregar o player da Twitch.')), { once: true })
-      return
-    }
-
-    const script = document.createElement('script')
-    script.src = 'https://player.twitch.tv/js/embed/v1.js'
-    script.async = true
-    script.dataset.twitchPlayerScript = 'true'
-    script.onload = () => resolve()
-    script.onerror = () => reject(new Error('Falha ao carregar o player da Twitch.'))
-    document.head.appendChild(script)
-  })
-
-  await window.__iptvPagesHubTwitchScript
-}
-
-function formatMarketValue(value: number, digits: number) {
-  return new Intl.NumberFormat('pt-BR', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-  }).format(value)
-}
-
-function formatMarketPercent(value: number) {
-  const signal = value > 0 ? '+' : value < 0 ? '' : ''
-  return `${signal}${value.toFixed(2)}%`
-}
-
-function buildDashboardTimes(now: Date) {
-  const zones = [
-    ['Brasil', 'America/Sao_Paulo'],
-    ['Londres', 'Europe/London'],
-    ['Chicago', 'America/Chicago'],
-    ['Paris', 'Europe/Paris'],
-    ['LA', 'America/Los_Angeles'],
-    ['NY', 'America/New_York'],
-  ] as const
-
-  return zones.map(([label, timeZone]) => ({
-    label,
-    value: new Intl.DateTimeFormat('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone,
-    }).format(now),
-  }))
-}
-
-function formatWindowLabel(seconds: number) {
-  if (seconds < 60) return `${Math.max(0, Math.round(seconds))}s`
-  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
-
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.round((seconds % 3600) / 60)
-  return minutes ? `${hours}h ${minutes}m` : `${hours}h`
-}
-
-function parseDurationToSeconds(value: string) {
-  const normalized = String(value || '').trim()
-  if (!normalized) return 0
-
-  const parts = normalized.split(':').map((part) => Number(part))
-  if (parts.some((part) => !Number.isFinite(part))) return 0
-
-  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2]
-  if (parts.length === 2) return parts[0] * 60 + parts[1]
-  return parts[0]
-}
-
-function hasHttpUrl(value: string) {
-  return value.trim().toLowerCase().startsWith('http://')
-}
-
-function toHttpsUrl(value: string) {
-  return value.trim().replace(/^http:\/\//i, 'https://')
-}
-
-async function resolveMirroredNewsStream(channelKey: string, servers: string[]) {
-  const cached = mirroredNewsCache.get(channelKey)
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.streamUrl
-  }
-
-  for (const domain of servers) {
-    try {
-      const response = await fetch(`https://${domain}/server_lookup?channel_id=${encodeURIComponent(channelKey)}`)
-      if (!response.ok) {
-        continue
-      }
-
-      const payload = (await response.json()) as { server_key?: string }
-      const serverKey = String(payload.server_key || '').trim()
-      if (!serverKey) {
-        continue
-      }
-
-      const route = serverKey === 'top1/cdn' ? 'top1/cdn' : serverKey
-      const streamUrl = `https://${domain}/proxy/${route}/${channelKey}/mono.m3u8`
-      mirroredNewsCache.set(channelKey, {
-        streamUrl,
-        expiresAt: Date.now() + 5 * 60_000,
-      })
-      return streamUrl
-    } catch {
-      // Try the next mirror host.
-    }
-  }
-
-  throw new Error('Nao consegui resolver o feed espelhado agora.')
-}
-
-async function resolveOfficialNasaEmbed(proxyBase: string) {
-  const response = await fetch(buildProxyUrl(proxyBase, 'https://www.nasa.gov/live/'), {
-    headers: {
-      Accept: 'text/html',
-      'User-Agent': 'Mozilla/5.0',
-    },
-  })
-
-  if (!response.ok) {
-    throw new Error('A pagina oficial da NASA nao respondeu agora.')
-  }
-
-  const html = await response.text()
-  const iframeMatch = html.match(/<iframe[^>]+src="https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})[^"]*"/i)
-  const iframeVideoId = iframeMatch?.[1]
-
-  if (iframeVideoId) {
-    return `https://www.youtube.com/embed/${iframeVideoId}?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1`
-  }
-
-  const matches = [...html.matchAll(/https:\/\/www\.youtube\.com\/embed\/([A-Za-z0-9_-]{11})/g)]
-  const videoId = (matches.length ? matches[matches.length - 1]?.[1] : '') || matches[0]?.[1]
-
-  if (!videoId) {
-    throw new Error('Nao consegui identificar o embed oficial atual da NASA.')
-  }
-
-  return `https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0&modestbranding=1&autoplay=1&mute=1&playsinline=1`
-}
-
-function extractNextDataJson(html: string) {
-  const match = html.match(/<script id="__NEXT_DATA__" type="application\/json">([\s\S]*?)<\/script>/i)
-  if (!match) {
-    throw new Error('Nao consegui ler os dados oficiais dessa pagina.')
-  }
-
-  return JSON.parse(match[1]) as {
-    props?: {
-      pageProps?: Record<string, unknown>
-    }
-  }
-}
-
-async function fetchGlobalCatchupEpisodes(
-  catchupIndexHref: string,
-  proxyUrl: string,
-) {
-  const cached = globalCatchupCache.get(catchupIndexHref)
-  if (cached) return cached
-
-  const indexResponse = await fetch(buildProxyUrl(proxyUrl, catchupIndexHref), {
-    headers: { Accept: 'text/html' },
-  })
-
-  if (!indexResponse.ok) {
-    throw new Error('Nao consegui abrir o catch up oficial agora.')
-  }
-
-  const indexHtml = await indexResponse.text()
-  const indexData = extractNextDataJson(indexHtml)
-  const pageProps = indexData.props?.pageProps as { catchupInfo?: Array<{ id?: string; title?: string }> } | undefined
-  const shows = Array.isArray(pageProps?.catchupInfo) ? pageProps!.catchupInfo : []
-  const showIds = shows
-    .map((show) => String(show.id || '').trim())
-    .filter(Boolean)
-    .slice(0, 24)
-
-  const episodeGroups = await Promise.all(
-    showIds.map(async (showId) => {
-      const showHref = catchupIndexHref.endsWith('/') ? `${catchupIndexHref}${showId}/` : `${catchupIndexHref}/${showId}/`
-      const response = await fetch(buildProxyUrl(proxyUrl, showHref), {
-        headers: { Accept: 'text/html' },
-      })
-
-      if (!response.ok) return []
-
-      const html = await response.text()
-      const data = extractNextDataJson(html)
-      const showProps = data.props?.pageProps as {
-        catchupInfo?: {
-          title?: string
-          episodes?: Array<{
-            title?: string
-            streamUrl?: string
-            startDate?: string
-            duration?: string
-          }>
-        }
-      } | undefined
-
-      const sourceTitle = String(showProps?.catchupInfo?.title || '').trim()
-
-      return (showProps?.catchupInfo?.episodes || [])
-        .map((episode) => ({
-          title: String(episode.title || sourceTitle || 'Programa recente').trim(),
-          streamUrl: String(episode.streamUrl || '').trim(),
-          startedAt: String(episode.startDate || '').trim(),
-          durationSeconds: parseDurationToSeconds(String(episode.duration || '')),
-          source: sourceTitle,
-        }))
-        .filter((episode) => episode.streamUrl && episode.startedAt && episode.durationSeconds > 0)
-    }),
-  )
-
-  const episodes = episodeGroups.flat().sort(
-    (left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt),
-  )
-
-  globalCatchupCache.set(catchupIndexHref, episodes)
-  return episodes
-}
-
-async function resolveGlobalCatchupReplay(
-  station: RadioStation,
-  secondsBack: number,
-  proxyUrl: string,
-) {
-  if (!station.catchupIndexHref) {
-    throw new Error('Essa radio nao tem catch up oficial configurado.')
-  }
-
-  const episodes = await fetchGlobalCatchupEpisodes(station.catchupIndexHref, proxyUrl)
-  const targetTime = Date.now() - secondsBack * 1000
-
-  const containingEpisode = episodes.find((episode) => {
-    const start = Date.parse(episode.startedAt)
-    const end = start + episode.durationSeconds * 1000
-    return Number.isFinite(start) && targetTime >= start && targetTime <= end
-  })
-
-  if (containingEpisode) {
-    return {
-      streamUrl: containingEpisode.streamUrl,
-      title: containingEpisode.title,
-      startedAt: containingEpisode.startedAt,
-      targetOffsetSeconds: secondsBack,
-      source: containingEpisode.source || station.name,
-    }
-  }
-
-  const closestEpisode = episodes.find((episode) => Date.parse(episode.startedAt) <= targetTime) || episodes[0]
-  if (!closestEpisode) {
-    throw new Error('Nao achei um programa recente para esse horario.')
-  }
-
-  return {
-    streamUrl: closestEpisode.streamUrl,
-    title: closestEpisode.title,
-    startedAt: closestEpisode.startedAt,
-    targetOffsetSeconds: secondsBack,
-    source: closestEpisode.source || station.name,
-  }
-}
-
-function formatXtreamError(error: unknown, credentials: XtreamCredentials) {
-  const serverUrl = credentials.serverUrl
-  const hasProxy = Boolean(credentials.proxyUrl?.trim())
-
-  if (hasHttpUrl(serverUrl) && window.location.protocol === 'https:' && !hasProxy) {
-    return `GitHub Pages abriu em HTTPS, mas esse Xtream esta em HTTP (${serverUrl.trim()}). O navegador bloqueia esse login. Tente a versao https:// do servidor. Se o provedor so responder em HTTP, vai precisar de proxy ou backend.`
-  }
-  if (error instanceof Error && /Direct IP access not allowed|HTML\/403|403/i.test(error.message)) {
-    return 'A origem bloqueou o proxy HTTPS atual. Esse host HTTP parece barrar o worker da Cloudflare. Tente um proxy HTTPS alternativo fora do Cloudflare para essa playlist.'
-  }
-  if (error instanceof TypeError) {
-    return hasProxy
-      ? 'Falha de rede ao consultar o Xtream via proxy. O worker pode estar ok, mas o provedor pode estar offline, lento ou recusando essa origem agora.'
-      : 'Falha de rede ao consultar o Xtream. O servidor pode estar offline, sem CORS ou recusando acesso do navegador.'
-  }
-  return error instanceof Error ? error.message : 'Falha ao carregar o Xtream Codes.'
-}
-
-function formatM3UError(error: unknown, url: string) {
-  if (hasHttpUrl(url) && window.location.protocol === 'https:') {
-    return `Essa M3U esta em HTTP (${url.trim()}) e foi bloqueada por mixed content dentro do GitHub Pages. Use https:// ou um proxy.`
-  }
-  if (error instanceof TypeError) {
-    return 'Falha de rede ao baixar a M3U. O host pode estar offline ou sem CORS para navegador.'
-  }
-  return error instanceof Error ? error.message : 'Falha ao carregar a M3U.'
-}
-
-function withDefaultProxy(credentials: XtreamCredentials) {
-  return { ...defaultXtream, ...credentials, proxyUrl: credentials.proxyUrl?.trim() || DEFAULT_XTREAM_PROXY_URL }
-}
-
-function mergeM3U(credentials?: Partial<M3UCredentials> | null) {
-  return { ...defaultM3U, ...(credentials || {}) }
-}
-
-function extractDriveFileId(rawUrl: string) {
-  const value = rawUrl.trim()
-  if (!value) return ''
-
-  const directMatch = value.match(/\/file\/d\/([a-zA-Z0-9_-]+)/i)
-  if (directMatch?.[1]) return directMatch[1]
-
-  try {
-    const url = new URL(value)
-    const paramId = url.searchParams.get('id')
-    if (paramId) return paramId
-  } catch {
-    return ''
-  }
-
-  return ''
-}
-
-function buildDrivePreviewUrl(rawUrl: string) {
-  const fileId = extractDriveFileId(rawUrl)
-  return fileId ? `https://drive.google.com/file/d/${fileId}/preview` : ''
-}
-
-function buildDriveOpenUrl(rawUrl: string) {
-  const fileId = extractDriveFileId(rawUrl)
-  return fileId ? `https://drive.google.com/file/d/${fileId}/view` : rawUrl.trim()
-}
-
-function normalizeEmbeds(value: unknown) {
-  if (!Array.isArray(value)) return embedDefaults
-
-  const normalized: EmbedStream[] = []
-
-  value.forEach((item, index) => {
-    if (!item || typeof item !== 'object') return
-    const candidate = item as Partial<EmbedStream>
-    const platform =
-      candidate.platform === 'kick'
-        ? 'kick'
-        : candidate.platform === 'twitch'
-          ? 'twitch'
-          : candidate.platform === 'youtube'
-            ? 'youtube'
-            : null
-    const channel = String(candidate.channel || '').trim()
-    if (!platform || !channel) return
-
-    const statusEndpoint = String(candidate.statusEndpoint || '').trim()
-    normalized.push({
-      id: String(candidate.id || `${platform}:${channel}:${index}`),
-      platform,
-      channel,
-      title: String(candidate.title || channel).trim() || channel,
-      ...(statusEndpoint ? { statusEndpoint } : {}),
-    })
-  })
-
-  return normalized
-}
-
-function normalizeMovies(value: unknown): MovieItem[] {
-  if (!Array.isArray(value)) return []
-
-  return value.reduce<MovieItem[]>((items, entry, index) => {
-    if (!entry || typeof entry !== 'object') return items
-    const candidate = entry as Partial<MovieItem>
-    const driveUrl = String(candidate.driveUrl || '').trim()
-    const previewUrl = buildDrivePreviewUrl(driveUrl)
-    const openUrl = buildDriveOpenUrl(driveUrl)
-    if (!driveUrl || !previewUrl) return items
-
-    items.push({
-      id: String(candidate.id || `movie:${index}:${previewUrl}`),
-      title: String(candidate.title || `Filme ${index + 1}`).trim() || `Filme ${index + 1}`,
-      driveUrl,
-      previewUrl,
-      openUrl,
-    })
-
-    return items
-  }, [])
-}
-
-function isReadyXtream(credentials: XtreamCredentials) {
-  return Boolean(credentials.serverUrl.trim() && credentials.username.trim() && credentials.password.trim())
-}
-
-function isReadyM3U(credentials: M3UCredentials) {
-  return Boolean(credentials.url.trim())
-}
-
-function extractTargetStreamUrl(streamUrl: string) {
-  try {
-    const url = new URL(streamUrl)
-    const nested = url.searchParams.get('url')
-    return nested ? decodeURIComponent(nested) : streamUrl
-  } catch {
-    return streamUrl
-  }
-}
-
-function isLikelyHlsStream(streamUrl: string) {
-  const target = extractTargetStreamUrl(streamUrl).toLowerCase()
-  return target.includes('.m3u8') || target.includes('.m3u')
-}
-
-function isLikelyTsStream(streamUrl: string) {
-  return extractTargetStreamUrl(streamUrl).toLowerCase().includes('.ts')
-}
-
-function isLikelyDashStream(streamUrl: string) {
-  return extractTargetStreamUrl(streamUrl).toLowerCase().includes('.mpd')
-}
-
-function replaceStreamExtension(streamUrl: string, nextExtension: 'm3u8' | 'ts') {
-  try {
-    const url = new URL(streamUrl)
-    const nested = url.searchParams.get('url')
-
-    if (nested) {
-      const decoded = decodeURIComponent(nested).replace(/\.(m3u8|ts)(?=($|\?))/i, `.${nextExtension}`)
-      url.searchParams.set('url', decoded)
-      return url.toString()
-    }
-
-    return streamUrl.replace(/\.(m3u8|ts)(?=($|\?))/i, `.${nextExtension}`)
-  } catch {
-    return streamUrl.replace(/\.(m3u8|ts)(?=($|\?))/i, `.${nextExtension}`)
-  }
-}
-
-function buildPlaybackSources(channel: Channel) {
-  if (isLikelyDashStream(channel.streamUrl)) {
-    return [{ url: channel.streamUrl, engine: 'dash' as const }]
-  }
-
-  const primaryIsHls = isLikelyHlsStream(channel.streamUrl)
-  const fallbackIsTs = Boolean(channel.fallbackStreamUrl && isLikelyTsStream(channel.fallbackStreamUrl))
-  const orderedSources = primaryIsHls && fallbackIsTs
-    ? [
-        channel.streamUrl,
-        channel.fallbackStreamUrl,
-        replaceStreamExtension(channel.streamUrl, 'ts'),
-        replaceStreamExtension(channel.streamUrl, 'm3u8'),
-      ]
-    : [
-        channel.streamUrl,
-        channel.fallbackStreamUrl,
-        isLikelyHlsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'ts') : undefined,
-        isLikelyTsStream(channel.streamUrl) ? replaceStreamExtension(channel.streamUrl, 'm3u8') : undefined,
-      ]
-
-  const sources = orderedSources.filter((value): value is string => Boolean(value))
-
-  return Array.from(new Set(sources)).map((url) => ({
-    url,
-    engine: isLikelyDashStream(url) ? 'dash' : isLikelyHlsStream(url) ? 'hls' : isLikelyTsStream(url) ? 'mpegts' : 'native',
-  }))
-}
-
-function delay(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-async function stabilizeRadioStartup(media: HTMLMediaElement) {
-  if (media.readyState >= 3) {
-    await delay(700)
-    return
-  }
-
-  await new Promise<void>((resolve) => {
-    let settled = false
-    const finish = () => {
-      if (settled) return
-      settled = true
-      media.removeEventListener('canplay', finish)
-      media.removeEventListener('loadeddata', finish)
-      resolve()
-    }
-
-    media.addEventListener('canplay', finish, { once: true })
-    media.addEventListener('loadeddata', finish, { once: true })
-    window.setTimeout(finish, 2200)
-  })
-
-  await delay(900)
-}
-
-async function attemptMediaPlayback(
-  media: HTMLMediaElement,
-  stateOnBlocked: string,
-  options?: { stabilizeRadio?: boolean },
-) {
-  try {
-    if (options?.stabilizeRadio) {
-      await stabilizeRadioStartup(media)
-    }
-
-    await media.play()
-    return 'Ao vivo'
-  } catch {
-    return stateOnBlocked
-  }
-}
-
-function LiveDashboardMeta() {
-  const [clockTick, setClockTick] = useState(() => Date.now())
-  const [marketQuotes, setMarketQuotes] = useState<MarketQuote[]>([])
-
-  const dashboardTimes = useMemo(
-    () => buildDashboardTimes(new Date(clockTick)),
-    [clockTick],
-  )
-
-  useEffect(() => {
-    const interval = window.setInterval(() => setClockTick(Date.now()), 1000)
-    return () => window.clearInterval(interval)
-  }, [])
-
-  useEffect(() => {
-    let isActive = true
-
-    const loadMarketQuotes = async () => {
-      try {
-        const targetUrl =
-          'https://query1.finance.yahoo.com/v7/finance/spark?symbols=BRL%3DX,%5EBVSP,%5EDJI,%5EIXIC,%5EVIX,%5EFTSE,%5EGDAXI,%5EFCHI&range=1d&interval=5m'
-        const requestUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, targetUrl)
-        const response = await fetch(requestUrl, {
-          headers: {
-            Accept: 'application/json',
-            'User-Agent': 'Mozilla/5.0',
-          },
-        })
-
-        if (!response.ok) {
-          throw new Error('Falha ao carregar painel de mercado.')
-        }
-
-        const payload = (await response.json()) as {
-          spark?: {
-            result?: Array<{
-              symbol?: string
-              response?: Array<{
-                meta?: {
-                  regularMarketPrice?: number
-                  previousClose?: number
-                }
-              }>
-            }>
-          }
-        }
-
-        const bySymbol = new Map(
-          (payload.spark?.result || []).map((entry) => [entry.symbol || '', entry.response?.[0]?.meta || {}]),
-        )
-
-        const nextQuotes = marketItems.reduce<MarketQuote[]>((items, item) => {
-          const meta = bySymbol.get(item.symbol)
-          const price = Number(meta?.regularMarketPrice)
-          const previous = Number(meta?.previousClose)
-
-          if (!Number.isFinite(price) || !Number.isFinite(previous) || previous === 0) {
-            return items
-          }
-
-          const percent = ((price - previous) / previous) * 100
-          items.push({
-            id: item.id,
-            label: item.label,
-            value: formatMarketValue(price, item.digits),
-            change: formatMarketPercent(percent),
-            trend: percent > 0.02 ? 'up' as const : percent < -0.02 ? 'down' as const : 'flat' as const,
-          })
-          return items
-        }, [])
-
-        if (isActive) {
-          setMarketQuotes(nextQuotes)
-        }
-      } catch {
-        if (isActive) {
-          setMarketQuotes([])
-        }
-      }
-    }
-
-    void loadMarketQuotes()
-    const interval = window.setInterval(() => void loadMarketQuotes(), 300000)
-
-    return () => {
-      isActive = false
-      window.clearInterval(interval)
-    }
-  }, [])
-
-  return (
-    <div class="topbar-meta">
-      {marketQuotes.length ? (
-        <div class="market-strip" aria-label="Painel sutil de mercado">
-          {marketQuotes.map((item) => (
-            <div class={`market-pill ${item.trend}`} key={item.id}>
-              <span>{item.label}</span>
-              <strong>{item.value}</strong>
-              <small>{item.change}</small>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      <div class="topbar-stats">
-        {dashboardTimes.map((entry) => (
-          <div class="stat-card time-card" key={entry.label}>
-            <span>{entry.label}</span>
-            <strong>{entry.value}</strong>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function WelcomeMultiviewTile({
-  options,
-  selectedId,
-  slotLabel,
-  isMuted,
-  onToggleMuted,
-}: {
-  options: NewsLink[]
-  selectedId: string
-  slotLabel: string
-  isMuted: boolean
-  onToggleMuted: (nextMuted: boolean) => void
-}) {
-  const videoRef = useRef<HTMLVideoElement | null>(null)
-  const hlsRef = useRef<Hls | null>(null)
-  const [tileState, setTileState] = useState('Conectando...')
-
-  const selectedLink = useMemo(
-    () => options.find((item) => item.id === selectedId) ?? options[0] ?? null,
-    [options, selectedId],
-  )
-
-  useEffect(() => {
-    const media = videoRef.current
-    const channel = buildWelcomeMultiviewChannel(selectedLink)
-    if (!media || !channel) return
-
-    let cancelled = false
-    setTileState('Conectando...')
-
-    media.defaultMuted = isMuted
-    media.muted = isMuted
-    media.volume = isMuted ? 0 : 1
-    media.autoplay = true
-    media.playsInline = true
-
-    const cleanup = () => {
-      if (hlsRef.current) {
-        hlsRef.current.destroy()
-        hlsRef.current = null
-      }
-      media.pause()
-      media.removeAttribute('src')
-      media.load()
-    }
-
-    const boot = async () => {
-      cleanup()
-
-      if (media.canPlayType('application/vnd.apple.mpegurl')) {
-        media.src = channel.streamUrl
-        media.load()
-        void media.play().catch(() => {})
-        setTileState('Ao vivo')
-        return
-      }
-
-      const { default: HlsModule } = await import('hls.js')
-
-      if (!HlsModule.isSupported()) {
-        setTileState('Sem suporte')
-        return
-      }
-
-      const hls = new HlsModule({
-        lowLatencyMode: true,
-        enableWorker: true,
-      })
-
-      hlsRef.current = hls
-      hls.attachMedia(media)
-      hls.on(HlsModule.Events.MEDIA_ATTACHED, () => {
-        hls.loadSource(channel.streamUrl)
-      })
-      hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
-        if (cancelled) return
-        setTileState('Ao vivo')
-        void media.play().catch(() => {})
-      })
-      hls.on(HlsModule.Events.ERROR, (_event, data: { fatal?: boolean }) => {
-        if (!data?.fatal || cancelled) return
-        setTileState('Falha no feed')
-      })
-    }
-
-    void boot()
-
-    return () => {
-      cancelled = true
-      cleanup()
-    }
-  }, [isMuted, selectedLink])
-
-  useEffect(() => {
-    const media = videoRef.current
-    if (!media) return
-
-    media.defaultMuted = isMuted
-    media.muted = isMuted
-    media.volume = isMuted ? 0 : 1
-
-    if (!isMuted) {
-      void media.play().catch(() => {
-        setTileState((current) => (current === 'Falha no feed' ? current : 'Clique para ouvir'))
-      })
-    }
-  }, [isMuted])
-
-  function handleToggleAudio() {
-    const media = videoRef.current
-    const nextMuted = !isMuted
-
-    if (media) {
-      media.defaultMuted = nextMuted
-      media.muted = nextMuted
-      media.volume = nextMuted ? 0 : 1
-
-      if (!nextMuted) {
-        void media.play().catch(() => {
-          setTileState((current) => (current === 'Falha no feed' ? current : 'Clique para ouvir'))
-        })
-      }
-    }
-
-    onToggleMuted(nextMuted)
-  }
-
-  if (!selectedLink) {
-    return (
-      <article class="welcome-multiview-card">
-        <div class="welcome-multiview-empty">
-          <strong>{slotLabel}: nenhum canal pronto para multiview.</strong>
-        </div>
-      </article>
-    )
+function Icon({ name }: { name: 'play' | 'reload' | 'external' | 'search' | 'list' | 'link' }) {
+  const paths = {
+    play: <path d="M8 5v14l11-7z" />,
+    reload: <path d="M20 6v5h-5M4 18v-5h5M18.7 9A7 7 0 0 0 6.2 6.7L4 9m2 6a7 7 0 0 0 11.8 2.3L20 15" />,
+    external: <path d="M14 4h6v6M13 11l7-7M20 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h5" />,
+    search: <path d="m21 21-4.3-4.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4z" />,
+    list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
+    link: <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" />,
   }
 
   return (
-    <article class="welcome-multiview-card">
-      <div class="welcome-multiview-stage">
-        <video autoPlay muted playsInline ref={videoRef} />
-      </div>
-      <div class="welcome-multiview-meta">
-        <span class="section-tag">{slotLabel}</span>
-        <strong>{selectedLink.name}</strong>
-        <div class="welcome-multiview-meta-actions">
-          <span class="pill soft">{tileState}</span>
-          <button
-            class={isMuted ? 'ghost-button compact' : 'primary-button compact'}
-            type="button"
-            onClick={handleToggleAudio}
-          >
-            {isMuted ? 'Ouvir' : 'Mutar'}
-          </button>
-        </div>
-      </div>
-    </article>
+    <svg aria-hidden="true" class="icon" viewBox="0 0 24 24">
+      {paths[name]}
+    </svg>
   )
 }
 
 export function App() {
-  const [sourceTab, setSourceTab] = useState<'xtream' | 'm3u'>('xtream')
-  const [xtream, setXtream] = useState<XtreamCredentials>(defaultXtream)
-  const [m3u, setM3U] = useState<M3UCredentials>(defaultM3U)
-  const [settings, setSettings] = useState<AppSettings>(() => mergeSettings(readJson<Partial<AppSettings> | null>(SETTINGS_KEY, null)))
-  const [playlist, setPlaylist] = useState<PlaylistSession | null>(null)
-  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(() => window.localStorage.getItem(LAST_CHANNEL_KEY))
-  const [searchTerm, setSearchTerm] = useState('')
-  const [groupFilter, setGroupFilter] = useState('Todos')
-  const [favorites, setFavorites] = useState<string[]>(() => readJson(FAVORITES_KEY, [] as string[]))
-  const [embeds, setEmbeds] = useState<EmbedStream[]>(() => readJson(EMBEDS_KEY, embedDefaults))
-  const [movies, setMovies] = useState<MovieItem[]>(() => normalizeMovies(readJson<unknown[]>(MOVIES_KEY, [])))
-  const [embedDraft, setEmbedDraft] = useState<EmbedStream>({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
-  const [movieDraft, setMovieDraft] = useState({ title: '', driveUrl: '' })
-  const [statusMap, setStatusMap] = useState<Record<string, EmbedStatus>>({})
-  const [isLoading, setIsLoading] = useState(false)
-  const [loadError, setLoadError] = useState('')
-  const [transferMessage, setTransferMessage] = useState('')
-  const [playerError, setPlayerError] = useState('')
-  const [playerState, setPlayerState] = useState('Pronto para tocar')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_CHANNEL_BATCH)
-  const [activeSurface, setActiveSurface] = useState<MediaSurface>(
-    () => readJson<MediaSurface>(ACTIVE_SURFACE_KEY, 'iptv'),
-  )
-  const [selectedNewsId, setSelectedNewsId] = useState(newsLinks[0].id)
-  const [selectedRadioId, setSelectedRadioId] = useState<string>(() => readJson<string>(SELECTED_RADIO_KEY, radioStations[0]?.id || ''))
-  const [selectedMovieId, setSelectedMovieId] = useState<string | null>(() => window.localStorage.getItem(SELECTED_MOVIE_KEY))
-  const [selectedVod, setSelectedVod] = useState<RecentVodItem | null>(null)
-  const [recentVods, setRecentVods] = useState<RecentVodItem[]>([])
-  const [recentVodsLoading, setRecentVodsLoading] = useState(false)
-  const [recentVodsError, setRecentVodsError] = useState('')
-  const [welcomeTick, setWelcomeTick] = useState(() => Date.now())
-  const [showDailyBriefingModal, setShowDailyBriefingModal] = useState(false)
-  const [briefingItems, setBriefingItems] = useState<BriefingItem[]>([])
-  const [briefingState, setBriefingState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
-  const [briefingError, setBriefingError] = useState('')
-  const [sitePage, setSitePage] = useState<SitePage>(() => readSitePageFromHash())
-  const [welcomeLeftNewsId, setWelcomeLeftNewsId] = useState(() => newsLinks.find((item) => item.id === 'cnn-us')?.id || newsLinks[0].id)
-  const [welcomeRightNewsId, setWelcomeRightNewsId] = useState(() => newsLinks.find((item) => item.id === 'bbc-news')?.id || newsLinks[1]?.id || newsLinks[0].id)
-  const [welcomeAudioFocus, setWelcomeAudioFocus] = useState<'left' | 'right' | null>(null)
-  const [welcomeSectionOffsets, setWelcomeSectionOffsets] = useState<WelcomeSectionOffsets>({
-    general: 0,
-    sports: 0,
-    entertainment: 0,
-  })
-  const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(false)
-  const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(false)
-  const [isTheaterMode, setIsTheaterMode] = useState(false)
-  const [resolvedNewsStreamUrl, setResolvedNewsStreamUrl] = useState('')
-  const [resolvedNewsEmbedUrl, setResolvedNewsEmbedUrl] = useState('')
-  const [newsMirrorState, setNewsMirrorState] = useState<'idle' | 'resolving' | 'ready' | 'failed'>('idle')
-  const [newsMirrorError, setNewsMirrorError] = useState('')
-  const [selectedEmbedId, setSelectedEmbedId] = useState<string | null>(
-    () => window.localStorage.getItem(SELECTED_EMBED_KEY),
-  )
-  const [showConnectionPanel, setShowConnectionPanel] = useState(true)
-  const [showLiveNowPanel, setShowLiveNowPanel] = useState(
-    () => readJson<boolean>(SHOW_LIVE_NOW_KEY, false),
-  )
-  const [showFavoriteIptvPanel, setShowFavoriteIptvPanel] = useState(true)
-  const [showIptvPanel, setShowIptvPanel] = useState(true)
-  const [showTwitchPanel, setShowTwitchPanel] = useState(true)
-  const [showYouTubePanel, setShowYouTubePanel] = useState(true)
-  const [showKickPanel, setShowKickPanel] = useState(true)
-  const [showNewsPanel, setShowNewsPanel] = useState(true)
-  const [showRadioPanel, setShowRadioPanel] = useState(true)
-  const [showCinemaPanel, setShowCinemaPanel] = useState(true)
-  const [notificationPermission, setNotificationPermission] = useState<'default' | 'denied' | 'granted' | 'unsupported'>(() => {
-    if (!supportsDesktopLiveNotifications()) return 'unsupported'
-    return Notification.permission
-  })
-  const [newsStripLeftReady, setNewsStripLeftReady] = useState(false)
-  const [newsStripRightReady, setNewsStripRightReady] = useState(false)
-  const [newsShortcutLeftReady, setNewsShortcutLeftReady] = useState(false)
-  const [newsShortcutRightReady, setNewsShortcutRightReady] = useState(false)
-  const [mediaStripLeftReady, setMediaStripLeftReady] = useState(false)
-  const [mediaStripRightReady, setMediaStripRightReady] = useState(false)
-  const [radioSeekWindowSeconds, setRadioSeekWindowSeconds] = useState(0)
-  const [radioReplay, setRadioReplay] = useState<RadioReplayState | null>(null)
-  const [radioGuide, setRadioGuide] = useState<RadioGuideSnapshot | null>(null)
-  const [radioGuideError, setRadioGuideError] = useState('')
-  const [radioGuideState, setRadioGuideState] = useState<'idle' | 'loading' | 'ready' | 'failed'>('idle')
-  const videoRef = useRef<HTMLMediaElement | null>(null)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const siteBackupInputRef = useRef<HTMLInputElement | null>(null)
-  const newsStripRef = useRef<HTMLDivElement | null>(null)
-  const newsShortcutRef = useRef<HTMLDivElement | null>(null)
-  const mediaStripRef = useRef<HTMLDivElement | null>(null)
-  const twitchPlayerHostRef = useRef<HTMLDivElement | null>(null)
-  const previousLiveStatesRef = useRef<Record<string, LiveState>>({})
-  const hasPrimedLiveNotificationsRef = useRef(false)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
-  const twitchPlayerRef = useRef<{
-    destroy?: () => void
-    pause?: () => void
-    play?: () => void
-    setMuted?: (muted: boolean) => void
-    setVolume?: (volume: number) => void
-  } | null>(null)
-  const dashRef = useRef<{ reset: () => Promise<unknown> | unknown } | null>(null)
-  const mpegtsRef = useRef<{
-    attachMediaElement: (mediaElement: HTMLMediaElement) => void
-    detachMediaElement: () => void
-    destroy: () => void
-    load: () => void
-    play: () => Promise<void> | void
-    pause: () => void
-    unload: () => void
-    on: (event: string, listener: (...args: unknown[]) => void) => void
-  } | null>(null)
 
-  const channels = playlist?.channels ?? []
-  const favoriteIds = useMemo(() => new Set(favorites), [favorites])
-  const normalizedSearch = searchTerm.trim().toLowerCase()
-  const visibleChannels = useMemo(
-    () =>
-      channels
-        .filter((channel) => {
-          const matchesGroup = groupFilter === 'Todos' || channel.group === groupFilter
-          const matchesSearch =
-            !normalizedSearch ||
-            channel.name.toLowerCase().includes(normalizedSearch) ||
-            channel.group.toLowerCase().includes(normalizedSearch) ||
-            channel.tvgId?.toLowerCase().includes(normalizedSearch)
-          return matchesGroup && matchesSearch
-        })
-        .sort((left, right) => {
-          const leftFavorite = favoriteIds.has(left.id) ? 1 : 0
-          const rightFavorite = favoriteIds.has(right.id) ? 1 : 0
-          if (leftFavorite !== rightFavorite) return rightFavorite - leftFavorite
-          const groupCompare = PT_BR_COLLATOR.compare(left.group, right.group)
-          if (groupCompare !== 0) return groupCompare
-          return PT_BR_COLLATOR.compare(left.name, right.name)
-        }),
-    [channels, favoriteIds, groupFilter, normalizedSearch],
-  )
-  const displayedChannels = useMemo(
-    () => visibleChannels.slice(0, visibleCount),
-    [visibleChannels, visibleCount],
-  )
-  const channelOrdinalMap = useMemo(
-    () => new Map(channels.map((channel, index) => [channel.id, index + 1])),
-    [channels],
-  )
-  const iptvGroupSections = useMemo<IptvGroupSection[]>(() => {
-    const groupedChannels = new Map<string, Channel[]>()
+  const [view, setView] = useState<AppView>(() => readInitialView())
+  const [selectedNativeId, setSelectedNativeId] = useState(() => readStoredValue(LAST_NATIVE_KEY) || verifiedFeeds[0].id)
+  const [playerState, setPlayerState] = useState<PlayerState>('idle')
+  const [playerError, setPlayerError] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
+  const [isMuted, setIsMuted] = useState(true)
+  const [query, setQuery] = useState('')
+  const [m3uUrl, setM3uUrl] = useState(() => readStoredValue(M3U_URL_KEY))
+  const [playlist, setPlaylist] = useState<PlaylistSession | null>(null)
+  const [playlistState, setPlaylistState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
+  const [playlistError, setPlaylistError] = useState('')
+  const [selectedGroup, setSelectedGroup] = useState('Todos')
+  const [selectedChannelId, setSelectedChannelId] = useState('')
 
-    channels.forEach((channel) => {
-      const groupChannels = groupedChannels.get(channel.group) ?? []
-      groupChannels.push(channel)
-      groupedChannels.set(channel.group, groupChannels)
-    })
+  const selectedNative = useMemo(
+    () => verifiedFeeds.find((feed) => feed.id === selectedNativeId) || verifiedFeeds[0],
+    [selectedNativeId],
+  )
 
-    const orderedGroups = playlist?.groups.length
-      ? playlist.groups
-      : Array.from(groupedChannels.keys()).sort((left, right) => PT_BR_COLLATOR.compare(left, right))
+  const filteredNativeFeeds = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized || view !== 'live') return verifiedFeeds
 
-    return orderedGroups
-      .map((group) => {
-        const groupChannels = groupedChannels.get(group) ?? []
-        return {
-          group,
-          channels: groupChannels,
-          total: groupChannels.length,
-          favoriteCount: groupChannels.filter((channel) => favoriteIds.has(channel.id)).length,
-        }
-      })
-      .filter((section) => section.total > 0)
-  }, [channels, favoriteIds, playlist?.id])
-  const filteredIptvGroupSections = useMemo<IptvGroupSection[]>(() => {
-    const baseSections = groupFilter === 'Todos'
-      ? iptvGroupSections
-      : iptvGroupSections.filter((section) => section.group === groupFilter)
+    return verifiedFeeds.filter((feed) =>
+      `${feed.name} ${feed.group} ${feed.region} ${feed.source}`.toLowerCase().includes(normalized),
+    )
+  }, [query, view])
 
-    return baseSections
-      .map((section) => {
-        const matchingChannels = section.channels.filter((channel) =>
-          channelMatchesSearch(channel, normalizedSearch),
-        )
-        return {
-          ...section,
-          channels: matchingChannels,
-          total: section.total,
-          favoriteCount: matchingChannels.filter((channel) => favoriteIds.has(channel.id)).length,
-        }
-      })
-      .filter((section) => section.channels.length > 0)
-  }, [favoriteIds, groupFilter, iptvGroupSections, normalizedSearch])
-  const iptvGuideSections = useMemo(
-    () =>
-      groupFilter === 'Todos' && !normalizedSearch
-        ? filteredIptvGroupSections.slice(0, IPTV_GUIDE_GROUP_LIMIT)
-        : filteredIptvGroupSections,
-    [filteredIptvGroupSections, groupFilter, normalizedSearch],
-  )
-  const hiddenIptvGuideGroupCount = Math.max(
-    0,
-    filteredIptvGroupSections.length - iptvGuideSections.length,
-  )
-  const twitchEmbeds = useMemo(
-    () => embeds.filter((item) => item.platform === 'twitch'),
-    [embeds],
-  )
-  const youtubeEmbeds = useMemo(
-    () => embeds.filter((item) => item.platform === 'youtube'),
-    [embeds],
-  )
-  const kickEmbeds = useMemo(
-    () => embeds.filter((item) => item.platform === 'kick'),
-    [embeds],
-  )
-  const sortEmbedsByStatus = (items: EmbedStream[]) =>
-    [...items].sort((left, right) => {
-      const leftState = statusMap[left.channel.toLowerCase()]?.state
-      const rightState = statusMap[right.channel.toLowerCase()]?.state
-      const leftScore = leftState === 'online' ? 2 : leftState === 'offline' ? 1 : 0
-      const rightScore = rightState === 'online' ? 2 : rightState === 'offline' ? 1 : 0
+  const playlistGroups = useMemo(() => ['Todos', ...(playlist?.groups || [])], [playlist])
 
-      if (leftScore !== rightScore) return rightScore - leftScore
-      return left.title.localeCompare(right.title, 'pt-BR')
-    })
-  const sortedTwitchEmbeds = useMemo(
-    () => sortEmbedsByStatus(twitchEmbeds),
-    [statusMap, twitchEmbeds],
-  )
-  const sortedYouTubeEmbeds = useMemo(
-    () => sortEmbedsByStatus(youtubeEmbeds),
-    [statusMap, youtubeEmbeds],
-  )
-  const sortedKickEmbeds = useMemo(
-    () => sortEmbedsByStatus(kickEmbeds),
-    [kickEmbeds, statusMap],
-  )
-  const liveEmbeds = useMemo(
-    () => {
-      const onlineItems = [...sortedTwitchEmbeds, ...sortedYouTubeEmbeds, ...sortedKickEmbeds].filter(
-        (item) => statusMap[item.channel.toLowerCase()]?.state === 'online',
+  const filteredChannels = useMemo(() => {
+    const channels = playlist?.channels || []
+    const normalized = query.trim().toLowerCase()
+
+    return channels
+      .filter((channel) => selectedGroup === 'Todos' || channel.group === selectedGroup)
+      .filter((channel) =>
+        normalized
+          ? `${channel.name} ${channel.group} ${channel.tvgId || ''}`.toLowerCase().includes(normalized)
+          : true,
       )
+      .slice(0, 400)
+  }, [playlist, query, selectedGroup])
 
-      return prioritizeCurrentItem(onlineItems, selectedEmbedId)
-    },
-    [selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds, statusMap],
-  )
-  const onlineTwitchCount = useMemo(
-    () => sortedTwitchEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
-    [sortedTwitchEmbeds, statusMap],
-  )
-  const onlineYouTubeCount = useMemo(
-    () => sortedYouTubeEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
-    [sortedYouTubeEmbeds, statusMap],
-  )
-  const onlineKickCount = useMemo(
-    () => sortedKickEmbeds.filter((item) => statusMap[item.channel.toLowerCase()]?.state === 'online').length,
-    [sortedKickEmbeds, statusMap],
-  )
-  const desktopNotificationsSupported = useMemo(
-    () => supportsDesktopLiveNotifications(),
-    [],
-  )
-  const desktopNotificationsEnabled = desktopNotificationsSupported && settings.desktopLiveNotifications
-  const favoriteChannels = useMemo(
-    () =>
-      favorites
-        .map((channelId) => channels.find((channel) => channel.id === channelId) || null)
-        .filter((channel): channel is Channel => Boolean(channel)),
-    [channels, favorites],
-  )
   const selectedChannel = useMemo(
-    () => channels.find((channel) => channel.id === selectedChannelId) ?? visibleChannels[0] ?? null,
-    [channels, selectedChannelId, visibleChannels],
+    () => playlist?.channels.find((channel) => channel.id === selectedChannelId) || filteredChannels[0] || null,
+    [filteredChannels, playlist, selectedChannelId],
   )
-  const selectedChannelNumber = selectedChannel
-    ? channelOrdinalMap.get(selectedChannel.id)
-    : undefined
-  const activeEmbed = useMemo(() => {
-    const pool =
-      activeSurface === 'twitch'
-        ? sortedTwitchEmbeds
-        : activeSurface === 'youtube'
-          ? sortedYouTubeEmbeds
-          : activeSurface === 'kick'
-            ? sortedKickEmbeds
-            : []
-    return pool.find((item) => item.id === selectedEmbedId) ?? pool[0] ?? null
-  }, [activeSurface, selectedEmbedId, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds])
-  const activeFeedItems = useMemo(
-    () => {
-      const pool =
-        activeSurface === 'twitch'
-          ? sortedTwitchEmbeds
-          : activeSurface === 'youtube'
-            ? sortedYouTubeEmbeds
-            : activeSurface === 'kick'
-              ? sortedKickEmbeds
-              : []
 
-      return prioritizeCurrentItem(pool, activeEmbed?.id)
-    },
-    [activeEmbed?.id, activeSurface, sortedKickEmbeds, sortedTwitchEmbeds, sortedYouTubeEmbeds],
-  )
-  const selectedNewsLink = useMemo(
-    () => newsLinks.find((item) => item.id === selectedNewsId) ?? newsLinks[0],
-    [selectedNewsId],
-  )
-  const orderedNewsLinks = useMemo(
-    () => prioritizeCurrentItem(newsLinks, selectedNewsLink.id),
-    [selectedNewsLink.id],
-  )
-  const welcomeMultiviewOptions = useMemo(
-    () => newsLinks.filter((item) => item.streamUrl && isLikelyHlsStream(item.streamUrl)),
-    [],
-  )
-  const welcomeDateTitleLabel = useMemo(
-    () => new Intl.DateTimeFormat('pt-BR', {
-      weekday: 'long',
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric',
-      timeZone: 'America/Sao_Paulo',
-    }).format(new Date(welcomeTick)),
-    [welcomeTick],
-  )
-  const welcomeGreeting = useMemo(
-    () => buildWelcomeGreeting(new Date(welcomeTick)),
-    [welcomeTick],
-  )
-  const welcomeTimeChips = useMemo(
-    () => [
-      { id: 'sp', code: 'BR', city: 'Sao Paulo', timeZone: 'America/Sao_Paulo', tone: 'aurora' },
-      { id: 'ny', code: 'NY', city: 'New York', timeZone: 'America/New_York', tone: 'crimson' },
-      { id: 'la', code: 'LA', city: 'Los Angeles', timeZone: 'America/Los_Angeles', tone: 'cobalt' },
-      { id: 'ldn', code: 'LDN', city: 'Londres', timeZone: 'Europe/London', tone: 'emerald' },
-    ].map((item) => ({
-      ...item,
-      value: new Intl.DateTimeFormat('pt-BR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: item.timeZone,
-      }).format(new Date(welcomeTick)),
-    })),
-    [welcomeTick],
-  )
-  const welcomeRankedBriefingItems = useMemo(() => sortBriefingItems(briefingItems), [briefingItems])
-  const welcomeLeadBriefing = welcomeRankedBriefingItems[0] ?? null
-  const welcomeBriefingHighlights = useMemo(() => welcomeRankedBriefingItems.slice(0, 12), [welcomeRankedBriefingItems])
-  const welcomeBriefingSections = useMemo(
-    () =>
-      BRIEFING_SECTIONS.map((section) => ({
-        ...section,
-        items: sortBriefingItems(briefingItems.filter((item) => item.section === section.id)).slice(0, 10),
-      })),
-    [briefingItems],
-  )
-  const welcomeLeftSelectedLink = useMemo(
-    () => welcomeMultiviewOptions.find((item) => item.id === welcomeLeftNewsId) ?? welcomeMultiviewOptions[0] ?? null,
-    [welcomeLeftNewsId, welcomeMultiviewOptions],
-  )
-  const welcomeRightSelectedLink = useMemo(
-    () => welcomeMultiviewOptions.find((item) => item.id === welcomeRightNewsId) ?? welcomeMultiviewOptions[0] ?? null,
-    [welcomeRightNewsId, welcomeMultiviewOptions],
-  )
-  const briefingSourceSummary = useMemo(
-    () => summarizeBriefingSources(briefingItems),
-    [briefingItems],
-  )
-  const selectedRadioStation = useMemo<RadioStation | null>(
-    () => radioStations.find((item) => item.id === selectedRadioId) ?? radioStations[0] ?? null,
-    [selectedRadioId],
-  )
-  const selectedMovie = useMemo<MovieItem | null>(
-    () => movies.find((item) => item.id === selectedMovieId) ?? movies[0] ?? null,
-    [movies, selectedMovieId],
-  )
-  const selectedRadioScheduleHref = selectedRadioStation?.scheduleHref || selectedRadioStation?.href || ''
-  const canShowRadioGuide = useMemo(
-    () => hasOfficialRadioGuide(selectedRadioStation),
-    [selectedRadioStation],
-  )
-  const selectedNewsPlayback = useMemo<Channel | null>(() => {
-    const resolvedStream = selectedNewsLink.mirrorChannelKey
-      ? resolvedNewsStreamUrl
-      : selectedNewsLink.streamUrl
+  const activeItem = view === 'iptv' && selectedChannel
+    ? channelToPlayerItem(selectedChannel)
+    : selectedNative
 
-    if (!resolvedStream) return null
-    let streamUrl: string
-    if (selectedNewsLink.playbackEngine === 'dash') {
-      streamUrl = resolvedStream
-    } else if (isProxyApiUrl(resolvedStream)) {
-      streamUrl = resolvedStream
-    } else if (selectedNewsLink.proxyOverride) {
-      streamUrl = `${selectedNewsLink.proxyOverride}/api/proxy?url=${encodeURIComponent(resolvedStream)}`
-    } else {
-      streamUrl = buildProxyUrl(DEFAULT_XTREAM_PROXY_URL, resolvedStream)
-    }
-
-    return {
-      id: `news:${selectedNewsLink.id}`,
-      name: selectedNewsLink.name,
-      group: 'Noticias',
-      streamUrl,
-    }
-  }, [resolvedNewsStreamUrl, selectedNewsLink])
-  const selectedNewsEmbedUrl = useMemo(
-    () => withAutoplayEmbedUrl(resolvedNewsEmbedUrl || selectedNewsLink.embedUrl || ''),
-    [resolvedNewsEmbedUrl, selectedNewsLink.embedUrl],
-  )
-  const selectedRadioPlayback = useMemo<Channel | null>(() => {
-    if (!selectedRadioStation) return null
-
-    return {
-      id: radioReplay
-        ? `radio:${selectedRadioStation.id}:replay:${radioReplay.startedAt}:${radioReplay.targetOffsetSeconds}`
-        : `radio:${selectedRadioStation.id}:live`,
-      name: radioReplay ? `${selectedRadioStation.name} · ${radioReplay.title}` : selectedRadioStation.name,
-      group: 'Radios',
-      streamUrl: radioReplay?.streamUrl || selectedRadioStation.streamUrl,
-    }
-  }, [radioReplay, selectedRadioStation])
-  const selectedPlaybackChannel = useMemo<Channel | null>(() => {
-    if (activeSurface === 'iptv') return selectedChannel
-    if (activeSurface === 'news') return selectedNewsPlayback
-    if (activeSurface === 'radio') return selectedRadioPlayback
-    return null
-  }, [activeSurface, selectedChannel, selectedNewsPlayback, selectedRadioPlayback])
-  const radioCategoryCounts = useMemo(
-    () =>
-      radioStations.reduce<Record<string, number>>((groups, station) => {
-        groups[station.category] = (groups[station.category] || 0) + 1
-        return groups
-      }, {}),
-    [],
-  )
-  const radioWindowLabel = useMemo(
-    () => (radioSeekWindowSeconds >= 60 ? formatWindowLabel(radioSeekWindowSeconds) : ''),
-    [radioSeekWindowSeconds],
-  )
-  const radioPlaybackBadge = useMemo(() => {
-    if (radioReplay) {
-      return `Replay ${formatWindowLabel(radioReplay.targetOffsetSeconds)} atras`
-    }
-
-    return 'Ao vivo'
-  }, [radioReplay])
-  const radioPlaybackDetail = useMemo(() => {
-    if (!radioReplay) {
-      return radioWindowLabel ? `Janela ao vivo ${radioWindowLabel}` : 'Ao vivo oficial'
-    }
-
-    const startedAt = Date.parse(radioReplay.startedAt)
-    const startedLabel = Number.isFinite(startedAt)
-      ? new Intl.DateTimeFormat('pt-BR', {
-          day: '2-digit',
-          month: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-        }).format(new Date(startedAt))
-      : ''
-
-    return startedLabel
-      ? `${radioReplay.title} · ${startedLabel}`
-      : radioReplay.title
-  }, [radioReplay, radioWindowLabel])
-  const radioGuideUpdatedLabel = useMemo(() => {
-    if (!radioGuide?.updatedAt) return ''
-
-    return new Intl.DateTimeFormat('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'Europe/London',
-    }).format(new Date(radioGuide.updatedAt))
-  }, [radioGuide?.updatedAt])
-  const hasMoreChannels = displayedChannels.length < visibleChannels.length
-  const xtreamNeedsHttps = hasHttpUrl(xtream.serverUrl) && !xtream.proxyUrl?.trim() && window.location.protocol === 'https:'
-  const xtreamHttpsSuggestion = xtreamNeedsHttps ? toHttpsUrl(xtream.serverUrl) : ''
-
-  function syncNewsStripState() {
-    const node = newsStripRef.current
-
-    if (!node || activeSurface !== 'news') {
-      setNewsStripLeftReady(false)
-      setNewsStripRightReady(false)
-      return
-    }
-
-    const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth)
-    const canScroll = maxScroll > 8
-    setNewsStripLeftReady(canScroll && node.scrollLeft > 8)
-    setNewsStripRightReady(canScroll && node.scrollLeft < maxScroll - 8)
-  }
-
-  function scrollNewsStrip(direction: 'left' | 'right') {
-    const node = newsStripRef.current
-    if (!node) return
-
-    node.scrollBy({
-      left: (direction === 'right' ? 1 : -1) * Math.max(220, node.clientWidth * 0.68),
-      behavior: 'smooth',
-    })
-  }
-
-  function syncNewsShortcutState() {
-    const node = newsShortcutRef.current
-
-    if (!node) {
-      setNewsShortcutLeftReady(false)
-      setNewsShortcutRightReady(false)
-      return
-    }
-
-    const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth)
-    const canScroll = maxScroll > 8
-    setNewsShortcutLeftReady(canScroll && node.scrollLeft > 8)
-    setNewsShortcutRightReady(canScroll && node.scrollLeft < maxScroll - 8)
-  }
-
-  function scrollNewsShortcut(direction: 'left' | 'right') {
-    const node = newsShortcutRef.current
-    if (!node) return
-
-    node.scrollBy({
-      left: (direction === 'right' ? 1 : -1) * Math.max(220, node.clientWidth * 0.68),
-      behavior: 'smooth',
-    })
-  }
-
-  function syncMediaStripState() {
-    const node = mediaStripRef.current
-    const hasMediaStrip = activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick'
-
-    if (!node || !hasMediaStrip) {
-      setMediaStripLeftReady(false)
-      setMediaStripRightReady(false)
-      return
-    }
-
-    const maxScroll = Math.max(0, node.scrollWidth - node.clientWidth)
-    const canScroll = maxScroll > 8
-    setMediaStripLeftReady(canScroll && node.scrollLeft > 8)
-    setMediaStripRightReady(canScroll && node.scrollLeft < maxScroll - 8)
-  }
-
-  function scrollMediaStrip(direction: 'left' | 'right') {
-    const node = mediaStripRef.current
-    if (!node) return
-
-    node.scrollBy({
-      left: (direction === 'right' ? 1 : -1) * Math.max(220, node.clientWidth * 0.68),
-      behavior: 'smooth',
-    })
-  }
-
-  useEffect(() => {
-    setVisibleCount(INITIAL_CHANNEL_BATCH)
-  }, [playlist?.id, groupFilter, searchTerm])
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setWelcomeTick(Date.now())
-    }, 1_000)
-
-    return () => window.clearInterval(interval)
+  const groupedLinks = useMemo(() => {
+    return externalLinks.reduce<Record<string, ExternalFeedLink[]>>((groups, link) => {
+      groups[link.group] = groups[link.group] || []
+      groups[link.group].push(link)
+      return groups
+    }, {})
   }, [])
 
   useEffect(() => {
-    const syncFromHash = () => setSitePage(readSitePageFromHash())
+    if (typeof window === 'undefined') return
 
-    syncFromHash()
-    window.addEventListener('hashchange', syncFromHash)
-
-    return () => {
-      window.removeEventListener('hashchange', syncFromHash)
+    const syncViewFromHash = () => {
+      const hashView = viewFromHash(window.location.hash)
+      if (hashView) setView(hashView)
     }
+
+    window.addEventListener('hashchange', syncViewFromHash)
+    return () => window.removeEventListener('hashchange', syncViewFromHash)
   }, [])
 
   useEffect(() => {
-    if (sitePage !== 'iptv' || activeSurface === 'iptv') return
+    if (typeof window === 'undefined') return
 
-    setSelectedVod(null)
-    setActiveSurface('iptv')
-  }, [activeSurface, sitePage])
+    window.localStorage.setItem(LAST_VIEW_KEY, view)
+    if (window.location.hash !== `#${view}`) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#${view}`)
+    }
+  }, [view])
 
   useEffect(() => {
-    let cancelled = false
+    if (typeof window === 'undefined') return
 
-    const loadBriefing = async () => {
-      setBriefingState((current) => (current === 'ready' ? 'ready' : 'loading'))
-      setBriefingError('')
-
-      const settled = await Promise.allSettled(
-        DAILY_BRIEFING_SOURCES.map((source) => fetchBriefingSource(source)),
-      )
-
-      if (cancelled) return
-
-      const prioritized = dedupeBriefingItems(
-        settled.flatMap((result) => (result.status === 'fulfilled' ? result.value : [])),
-      )
-      const ranked = sortBriefingItems(
-        prioritized.sort(
-          (left, right) =>
-            Number(isTodayInBrazil(right.publishedAt)) - Number(isTodayInBrazil(left.publishedAt)),
-        ),
-      ).slice(0, 36)
-
-      if (ranked.length) {
-        setBriefingItems(ranked)
-        setBriefingState('ready')
-        return
-      }
-
-      const failures = settled
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => result.reason instanceof Error ? result.reason.message : 'falha desconhecida')
-        .join(' | ')
-
-      setBriefingState('error')
-      setBriefingError(
-        failures || 'Nao consegui montar o briefing automatico agora. O multiview e os canais ao vivo seguem disponiveis normalmente.',
-      )
-    }
-
-    void loadBriefing()
-    const interval = window.setInterval(() => {
-      void loadBriefing()
-    }, BRIEFING_REFRESH_MS)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [])
+    window.localStorage.setItem(LAST_NATIVE_KEY, selectedNativeId)
+  }, [selectedNativeId])
 
   useEffect(() => {
-    let cancelled = false
+    if (typeof window === 'undefined') return
 
-    const resolveNews = async () => {
-      setNewsMirrorError('')
-      setResolvedNewsEmbedUrl('')
-
-      if (selectedNewsLink.mirrorChannelKey) {
-        setResolvedNewsStreamUrl('')
-        setNewsMirrorState('resolving')
-
-        try {
-          const streamUrl = await resolveMirroredNewsStream(
-            selectedNewsLink.mirrorChannelKey,
-            selectedNewsLink.mirrorServers || mirroredNewsServers,
-          )
-
-          if (!cancelled) {
-            setResolvedNewsStreamUrl(streamUrl)
-            setNewsMirrorState('ready')
-          }
-        } catch (error) {
-          if (!cancelled) {
-            setResolvedNewsStreamUrl('')
-            setNewsMirrorState('failed')
-            setNewsMirrorError(error instanceof Error ? error.message : 'Falha ao resolver o feed espelhado.')
-          }
-        }
-        return
-      }
-
-      if (selectedNewsLink.embedResolver === 'nasa-live') {
-        setResolvedNewsStreamUrl('')
-        setNewsMirrorState('resolving')
-
-        try {
-          const embedUrl = await resolveOfficialNasaEmbed(DEFAULT_XTREAM_PROXY_URL)
-          if (!cancelled) {
-            setResolvedNewsEmbedUrl(embedUrl)
-            setNewsMirrorState('ready')
-          }
-        } catch (error) {
-          if (!cancelled) {
-            setNewsMirrorState('failed')
-            setNewsMirrorError(error instanceof Error ? error.message : 'Falha ao resolver o embed oficial da NASA.')
-          }
-        }
-        return
-      }
-
-      if (selectedNewsLink.youtubeChannel) {
-        setResolvedNewsStreamUrl('')
-        setNewsMirrorState('resolving')
-
-        try {
-          const statuses = await fetchYoutubeStatuses(
-            [selectedNewsLink.youtubeChannel],
-            DEFAULT_XTREAM_PROXY_URL,
-          )
-          const status = statuses[selectedNewsLink.youtubeChannel.toLowerCase()]
-
-          if (!cancelled) {
-            if (status?.state === 'online' && status.playbackUrl) {
-              setResolvedNewsEmbedUrl(status.playbackUrl)
-              setNewsMirrorState('ready')
-            } else {
-              setNewsMirrorState('failed')
-              setNewsMirrorError(
-                status?.detail || 'O canal oficial do YouTube nao devolveu uma live ativa agora.',
-              )
-            }
-          }
-        } catch (error) {
-          if (!cancelled) {
-            setNewsMirrorState('failed')
-            setNewsMirrorError(
-              error instanceof Error ? error.message : 'Falha ao resolver o canal oficial da ABC News.',
-            )
-          }
-        }
-        return
-      }
-
-      setResolvedNewsStreamUrl(selectedNewsLink.streamUrl || '')
-      setNewsMirrorState(selectedNewsLink.streamUrl || selectedNewsLink.embedUrl ? 'ready' : 'idle')
-    }
-
-    void resolveNews()
-
-    return () => {
-      cancelled = true
-    }
-  }, [selectedNewsLink])
-
-  useEffect(() => {
-    setWelcomeSectionOffsets((current) => {
-      const next = { ...current }
-      let changed = false
-
-      for (const section of welcomeBriefingSections) {
-        const maxOffset = Math.max(0, section.items.length - 3)
-        if ((next[section.id] || 0) > maxOffset) {
-          next[section.id] = 0
-          changed = true
-        }
-      }
-
-      return changed ? next : current
-    })
-  }, [welcomeBriefingSections])
-
-  useEffect(() => {
-    const hashToken = takeTwitchTokenFromHash()
-    if (hashToken) {
-      setSettings((current) => {
-        const next = { ...current, twitchAccessToken: hashToken }
-        saveJson(SETTINGS_KEY, next)
-        return next
-      })
-    }
-
-    const storedDraft = readJson<PersistedFormState | null>(FORM_STATE_KEY, null)
-    const storedConnection = readJson<PersistedConnection | null>(CONNECTION_KEY, null)
-
-    const initialSourceTab = storedDraft?.sourceTab || (storedConnection?.remember ? storedConnection.kind : 'xtream')
-    const initialXtream = withDefaultProxy(storedDraft?.xtream || (storedConnection?.remember ? storedConnection.xtream : defaultXtream))
-    const initialM3U = mergeM3U(storedDraft?.m3u || (storedConnection?.remember ? storedConnection.m3u : defaultM3U))
-
-    setSourceTab(initialSourceTab)
-    setXtream(initialXtream)
-    setM3U(initialM3U)
-
-    if (!storedConnection?.remember) return
-    if (initialSourceTab === 'xtream' && isReadyXtream(initialXtream)) void connectXtream(initialXtream, false)
-    if (initialSourceTab === 'm3u' && isReadyM3U(initialM3U)) void connectM3U(initialM3U, false)
-  }, [])
-
-  useEffect(() => saveJson(EMBEDS_KEY, embeds), [embeds])
-  useEffect(() => saveJson(MOVIES_KEY, movies), [movies])
-  useEffect(() => saveJson(SETTINGS_KEY, settings), [settings])
-  useEffect(() => saveJson(FAVORITES_KEY, favorites), [favorites])
-  useEffect(() => saveJson(ACTIVE_SURFACE_KEY, activeSurface), [activeSurface])
-  useEffect(() => saveJson(SHOW_LIVE_NOW_KEY, showLiveNowPanel), [showLiveNowPanel])
-  useEffect(() => {
-    if (!desktopNotificationsSupported) {
-      setNotificationPermission('unsupported')
-      return
-    }
-
-    const syncPermission = () => setNotificationPermission(Notification.permission)
-    syncPermission()
-
-    window.addEventListener('focus', syncPermission)
-    document.addEventListener('visibilitychange', syncPermission)
-
-    return () => {
-      window.removeEventListener('focus', syncPermission)
-      document.removeEventListener('visibilitychange', syncPermission)
-    }
-  }, [desktopNotificationsSupported])
-  useEffect(() => {
-    if (activeSurface !== 'news') {
-      syncNewsStripState()
-      return
-    }
-
-    const node = newsStripRef.current
-    if (!node) {
-      syncNewsStripState()
-      return
-    }
-
-    const handleScroll = () => syncNewsStripState()
-    const handleResize = () => syncNewsStripState()
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
-
-    node.addEventListener('scroll', handleScroll, { passive: true })
-    observer?.observe(node)
-    window.addEventListener('resize', handleResize)
-    window.requestAnimationFrame(syncNewsStripState)
-
-    return () => {
-      node.removeEventListener('scroll', handleScroll)
-      observer?.disconnect()
-      window.removeEventListener('resize', handleResize)
-    }
-  }, [activeSurface, selectedNewsId])
-
-  useEffect(() => {
-    const node = newsShortcutRef.current
-    if (!node) {
-      syncNewsShortcutState()
-      return
-    }
-
-    const handleScroll = () => syncNewsShortcutState()
-    const handleResize = () => syncNewsShortcutState()
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
-
-    node.addEventListener('scroll', handleScroll, { passive: true })
-    observer?.observe(node)
-    window.addEventListener('resize', handleResize)
-    window.requestAnimationFrame(syncNewsShortcutState)
-
-    return () => {
-      node.removeEventListener('scroll', handleScroll)
-      observer?.disconnect()
-      window.removeEventListener('resize', handleResize)
-    }
-  }, [])
-
-  useEffect(() => {
-    const hasMediaStrip = activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick'
-    if (!hasMediaStrip) {
-      syncMediaStripState()
-      return
-    }
-
-    const node = mediaStripRef.current
-    if (!node) {
-      syncMediaStripState()
-      return
-    }
-
-    const handleScroll = () => syncMediaStripState()
-    const handleResize = () => syncMediaStripState()
-    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(handleResize) : null
-
-    node.addEventListener('scroll', handleScroll, { passive: true })
-    observer?.observe(node)
-    window.addEventListener('resize', handleResize)
-    window.requestAnimationFrame(syncMediaStripState)
-
-    return () => {
-      node.removeEventListener('scroll', handleScroll)
-      observer?.disconnect()
-      window.removeEventListener('resize', handleResize)
-    }
-  }, [activeSurface, selectedEmbedId, activeFeedItems.length])
-  useEffect(() => {
-    saveJson<PersistedFormState>(FORM_STATE_KEY, { sourceTab, xtream, m3u })
-  }, [m3u, sourceTab, xtream])
-
-  useEffect(() => {
-    if (selectedChannel?.id) window.localStorage.setItem(LAST_CHANNEL_KEY, selectedChannel.id)
-  }, [activeSurface, selectedChannel?.id])
-  useEffect(() => {
-    if (selectedEmbedId) {
-      window.localStorage.setItem(SELECTED_EMBED_KEY, selectedEmbedId)
-      return
-    }
-
-    window.localStorage.removeItem(SELECTED_EMBED_KEY)
-  }, [selectedEmbedId])
-  useEffect(() => {
-    if (selectedRadioId) window.localStorage.setItem(SELECTED_RADIO_KEY, selectedRadioId)
-  }, [selectedRadioId])
-  useEffect(() => {
-    if (selectedMovieId) {
-      window.localStorage.setItem(SELECTED_MOVIE_KEY, selectedMovieId)
-      return
-    }
-
-    window.localStorage.removeItem(SELECTED_MOVIE_KEY)
-  }, [selectedMovieId])
-
-  useEffect(() => {
-    if (activeSurface === 'twitch' && !twitchEmbeds.length) {
-      if (youtubeEmbeds.length) {
-        setActiveSurface('youtube')
-        setSelectedEmbedId(youtubeEmbeds[0].id)
-      } else if (kickEmbeds.length) {
-        setActiveSurface('kick')
-        setSelectedEmbedId(kickEmbeds[0].id)
-      } else {
-        setActiveSurface('iptv')
-      }
-      return
-    }
-
-    if (activeSurface === 'youtube' && !youtubeEmbeds.length) {
-      if (kickEmbeds.length) {
-        setActiveSurface('kick')
-        setSelectedEmbedId(kickEmbeds[0].id)
-      } else if (twitchEmbeds.length) {
-        setActiveSurface('twitch')
-        setSelectedEmbedId(twitchEmbeds[0].id)
-      } else {
-        setActiveSurface('iptv')
-      }
-      return
-    }
-
-    if (activeSurface === 'kick' && !kickEmbeds.length) {
-      if (youtubeEmbeds.length) {
-        setActiveSurface('youtube')
-        setSelectedEmbedId(youtubeEmbeds[0].id)
-      } else if (twitchEmbeds.length) {
-        setActiveSurface('twitch')
-        setSelectedEmbedId(twitchEmbeds[0].id)
-      } else {
-        setActiveSurface('iptv')
-      }
-      return
-    }
-
-    if ((activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick') && activeEmbed) {
-      setSelectedEmbedId(activeEmbed.id)
-    }
-  }, [activeEmbed, activeSurface, kickEmbeds, twitchEmbeds, youtubeEmbeds])
-
-  useEffect(() => {
-    if (activeSurface !== 'radio') return
-    if (!selectedRadioStation && radioStations.length) {
-      setSelectedRadioId(radioStations[0].id)
-    }
-  }, [activeSurface, selectedRadioStation])
-
-  useEffect(() => {
-    if (activeSurface !== 'cinema') return
-    if (!selectedMovie && movies.length) {
-      setSelectedMovieId(movies[0].id)
-    }
-  }, [activeSurface, movies, selectedMovie])
+    window.localStorage.setItem(M3U_URL_KEY, m3uUrl)
+  }, [m3uUrl])
 
   useEffect(() => {
     const video = videoRef.current
-    if (!video || !selectedPlaybackChannel) return
-    const media: HTMLMediaElement = video
-
-    if (activeSurface === 'iptv' && media.dataset.initialMuteApplied !== 'true') {
-      media.defaultMuted = true
-      media.muted = true
-      media.dataset.initialMuteApplied = 'true'
-    } else if (activeSurface !== 'iptv') {
-      media.defaultMuted = false
-      media.muted = false
-    }
-
+    const streamUrl = activeItem?.streamUrl
     let cancelled = false
-    let suppressMediaError = false
-    const playbackSources = buildPlaybackSources(selectedPlaybackChannel)
-    let sourceAttempt = 0
-    let successLocked = false
-    let fallbackTimer = 0
 
-    setPlayerError('')
-    setPlayerState('Conectando stream...')
+    if (!video || !streamUrl) return
+    const media = video
 
-    if (hlsRef.current) {
-      hlsRef.current.destroy()
-      hlsRef.current = null
-    }
-    if (dashRef.current) {
-      void dashRef.current.reset()
-      dashRef.current = null
-    }
-    if (mpegtsRef.current) {
-      mpegtsRef.current.pause()
-      mpegtsRef.current.unload()
-      mpegtsRef.current.detachMediaElement()
-      mpegtsRef.current.destroy()
-      mpegtsRef.current = null
-    }
-
-    media.pause()
-    media.removeAttribute('src')
-    media.load()
-
-    const onWaiting = () => setPlayerState(activeSurface === 'radio' && radioReplay ? 'Carregando replay...' : 'Aguardando buffer...')
-    const onPlaying = () => setPlayerState(activeSurface === 'radio' ? radioPlaybackBadge : 'Ao vivo')
-    const onStalled = () => setPlayerState('Reconectando...')
-    const onLoadedMetadata = () => {
-      if (activeSurface !== 'news') return
-      for (const track of Array.from(media.textTracks || [])) {
-        track.mode = 'disabled'
-      }
-    }
-    const onCanPlay = () => {
-      window.clearTimeout(fallbackTimer)
-      successLocked = true
-      setPlayerState((current) => (current === 'Ao vivo' || current === radioPlaybackBadge ? current : 'Stream pronta'))
-    }
-    const onError = () => {
-      if (suppressMediaError || cancelled) return
-      void trySource(sourceAttempt + 1, 'O canal falhou no modo atual, tentando outro formato...')
-    }
-
-    media.addEventListener('waiting', onWaiting)
-    media.addEventListener('playing', onPlaying)
-    media.addEventListener('stalled', onStalled)
-    media.addEventListener('loadedmetadata', onLoadedMetadata)
-    media.addEventListener('canplay', onCanPlay)
-    media.addEventListener('error', onError)
-
-    const cleanupPlayers = () => {
-      window.clearTimeout(fallbackTimer)
-      suppressMediaError = true
+    const destroyHls = () => {
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
       }
-      if (dashRef.current) {
-        void dashRef.current.reset()
-        dashRef.current = null
-      }
-      if (mpegtsRef.current) {
-        mpegtsRef.current.pause()
-        mpegtsRef.current.unload()
-        mpegtsRef.current.detachMediaElement()
-        mpegtsRef.current.destroy()
-        mpegtsRef.current = null
-      }
-        media.pause()
-        media.removeAttribute('src')
-        media.load()
-      window.setTimeout(() => {
-        suppressMediaError = false
-      }, 0)
     }
 
-    const finishFailure = (message: string) => {
-      window.clearTimeout(fallbackTimer)
-      successLocked = false
-      setPlayerError(message)
-      setPlayerState('Falha no player')
+    const markReady = () => {
+      if (!cancelled) setPlayerState('ready')
     }
-
-    async function trySource(sourceIndex: number, failureReason?: string): Promise<void> {
-      const source = playbackSources[sourceIndex]
-      if (!source) {
-        finishFailure(
-          failureReason || 'Nao foi possivel abrir esta stream nem com os fallbacks disponiveis.',
-        )
-        return
-      }
-
-      sourceAttempt = sourceIndex
-      successLocked = false
-      cleanupPlayers()
-      if (cancelled) return
-
-      setPlayerState(
-        source.engine === 'dash'
-          ? sourceIndex === 0
-            ? 'Abrindo DASH oficial...'
-            : 'Tentando DASH novamente...'
-          :
-        source.engine === 'hls'
-          ? sourceIndex === 0
-            ? 'Abrindo HLS otimizado...'
-            : 'HLS falhou, tentando fallback TS...'
-          : source.engine === 'mpegts'
-            ? sourceIndex === 0
-              ? 'Abrindo stream TS otimizada...'
-              : 'Tentando fallback TS...'
-            : 'Tentando modo nativo...',
-      )
-
-      fallbackTimer = window.setTimeout(() => {
-        if (cancelled || successLocked || sourceAttempt !== sourceIndex) return
-        void trySource(
-          sourceIndex + 1,
-          'O provedor nao respondeu a tempo no formato atual. Tentando outro formato...',
-        )
-      }, source.engine === 'mpegts' ? 14000 : source.engine === 'dash' ? 16000 : 12000)
-
-      if (source.engine === 'dash') {
-        const imported = await import('shaka-player')
-        const shakaModule = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
-        const shakaApi = shakaModule as {
-          polyfill?: { installAll?: () => void }
-          Player?: new () => {
-            attach?: (mediaElement: HTMLMediaElement) => Promise<void>
-            configure: (settings: Record<string, unknown>) => void
-            addEventListener: (event: string, listener: (event: unknown) => void) => void
-            load: (source: string) => Promise<void>
-            destroy: () => Promise<void>
-          }
-        }
-
-        shakaApi.polyfill?.installAll?.()
-
-        if (!shakaApi.Player) {
-          void trySource(sourceIndex + 1, 'DASH nao disponivel neste navegador.')
-          return
-        }
-
-        const player = new shakaApi.Player()
-        dashRef.current = { reset: () => player.destroy() }
-        if (player.attach) {
-          try {
-            await player.attach(media)
-          } catch (error) {
-            const detail = error instanceof Error ? error.message : 'Falha ao acoplar o player DASH.'
-            void trySource(sourceIndex + 1, detail)
-            return
-          }
-        }
-        player.configure({
-          streaming: {
-            lowLatencyMode: false,
-            bufferingGoal: activeSurface === 'radio' ? 30 : 18,
-            rebufferingGoal: activeSurface === 'radio' ? 8 : 4,
-            bufferBehind: activeSurface === 'radio' ? 30 : 20,
-            retryParameters: {
-              maxAttempts: 5,
-              baseDelay: 1000,
-              backoffFactor: 2,
-              fuzzFactor: 0.35,
-              timeout: 20000,
-            },
-          },
-          manifest: {
-            dash: {
-              ignoreMinBufferTime: true,
-            },
-          },
-          abr: {
-            enabled: true,
-          },
-        })
-
-        player.addEventListener('error', (event) => {
-          const payload = event as { detail?: { message?: string; severity?: number } } | undefined
-          if (cancelled || successLocked) return
-          void trySource(
-            sourceIndex + 1,
-            payload?.detail?.message || 'DASH recusado pela origem da stream.',
-          )
-        })
-
-        try {
-          await player.load(source.url)
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : 'DASH recusado pela origem da stream.'
-          void trySource(sourceIndex + 1, detail)
-          return
-        }
-
-        window.clearTimeout(fallbackTimer)
-        successLocked = true
-        const nextState = await attemptMediaPlayback(
-          media,
-          activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
-          { stabilizeRadio: activeSurface === 'radio' },
-        )
-        if (!cancelled) setPlayerState(nextState)
-        return
-      }
-
-      if (source.engine === 'hls') {
-        const { default: HlsClient } = await import('hls.js')
-        if (cancelled) return
-
-        if (!HlsClient.isSupported()) {
-          void trySource(sourceIndex + 1, 'HLS nao disponivel aqui. Mudando para outro formato...')
-          return
-        }
-
-        let retriedNetwork = false
-        const hls = new HlsClient({
-          enableWorker: true,
-          lowLatencyMode: false,
-          backBufferLength: activeSurface === 'radio' ? 60 : 30,
-          liveSyncDurationCount: activeSurface === 'radio' ? 6 : 4,
-          liveMaxLatencyDurationCount: activeSurface === 'radio' ? 18 : 12,
-          maxBufferLength: activeSurface === 'radio' ? 45 : 30,
-          maxMaxBufferLength: activeSurface === 'radio' ? 90 : 60,
-          manifestLoadingTimeOut: 15000,
-          levelLoadingTimeOut: 15000,
-          fragLoadingTimeOut: 20000,
-          manifestLoadingMaxRetry: 4,
-          levelLoadingMaxRetry: 4,
-          fragLoadingMaxRetry: 5,
-        })
-
-        hlsRef.current = hls
-        hls.attachMedia(media)
-        hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(source.url))
-        hls.on(HlsClient.Events.MANIFEST_PARSED, async () => {
-          window.clearTimeout(fallbackTimer)
-          successLocked = true
-          const nextState = await attemptMediaPlayback(
-            media,
-            activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
-            { stabilizeRadio: activeSurface === 'radio' },
-          )
-          if (!cancelled) setPlayerState(nextState)
-        })
-        hls.on(HlsClient.Events.ERROR, async (_, data) => {
-          if (!data.fatal) return
-
-            if (data.type === HlsClient.ErrorTypes.NETWORK_ERROR && !retriedNetwork) {
-              retriedNetwork = true
-              setPlayerState('Reconectando HLS...')
-              hls.startLoad()
-              return
-          }
-
-            if (data.type === HlsClient.ErrorTypes.MEDIA_ERROR) {
-              hls.recoverMediaError()
-              return
-            }
-
-          void trySource(
-            sourceIndex + 1,
-            `HLS recusado: ${data.details || 'erro fatal no stream.'}`,
-          )
-        })
-        return
-      }
-
-      if (source.engine === 'mpegts') {
-        const imported = await import('mpegts.js')
-        const mpegts = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
-        const moduleApi = mpegts as {
-          getFeatureList?: () => { mseLivePlayback?: boolean }
-          createPlayer?: (
-            mediaDataSource: { type: string; isLive: boolean; url: string; cors: boolean },
-            config: Record<string, unknown>,
-          ) => {
-            attachMediaElement: (mediaElement: HTMLMediaElement) => void
-            detachMediaElement: () => void
-            destroy: () => void
-            load: () => void
-            play: () => Promise<void> | void
-            pause: () => void
-            unload: () => void
-            on: (event: string, listener: (...args: unknown[]) => void) => void
-          }
-        }
-
-        if (!moduleApi.getFeatureList?.().mseLivePlayback || !moduleApi.createPlayer) {
-          void trySource(sourceIndex + 1, 'TS otimizado nao disponivel neste navegador.')
-          return
-        }
-
-        const player = moduleApi.createPlayer(
-          {
-            type: 'mse',
-            isLive: true,
-            url: source.url,
-            cors: true,
-          },
-          {
-            enableWorker: true,
-            enableStashBuffer: true,
-            stashInitialSize: 786432,
-            isLive: true,
-            lazyLoad: false,
-            liveBufferLatencyChasing: false,
-            liveSync: false,
-            autoCleanupSourceBuffer: true,
-            autoCleanupMaxBackwardDuration: 40,
-            autoCleanupMinBackwardDuration: 20,
-          },
-        )
-
-        mpegtsRef.current = player
-        player.attachMediaElement(media)
-        player.load()
-        player.on('error', async () => {
-          void trySource(sourceIndex + 1, 'Fluxo TS recusado no player otimizado.')
-        })
-        window.clearTimeout(fallbackTimer)
-        successLocked = true
-        const nextState = await attemptMediaPlayback(
-          media,
-          activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
-          { stabilizeRadio: activeSurface === 'radio' },
-        )
-        if (!cancelled) setPlayerState(nextState)
-        return
-      }
-
-      if (
-        media.canPlayType('application/vnd.apple.mpegurl') ||
-        media.canPlayType('video/mp2t') ||
-        media.canPlayType('audio/mpeg') ||
-        media.canPlayType('audio/mp4') ||
-        media.canPlayType('audio/x-m4a')
-      ) {
-        media.src = source.url
-        window.clearTimeout(fallbackTimer)
-        successLocked = true
-        const nextState = await attemptMediaPlayback(
-          media,
-          activeSurface === 'radio' && radioReplay ? 'Clique em play para iniciar o replay' : 'Clique em play para iniciar',
-          { stabilizeRadio: activeSurface === 'radio' },
-        )
-        if (!cancelled) setPlayerState(nextState)
-        return
-      }
-
-      void trySource(sourceIndex + 1, 'Formato nativo indisponivel. Tentando outro caminho...')
-    }
-
-    void trySource(0)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(fallbackTimer)
-      media.removeEventListener('waiting', onWaiting)
-      media.removeEventListener('playing', onPlaying)
-      media.removeEventListener('stalled', onStalled)
-      media.removeEventListener('loadedmetadata', onLoadedMetadata)
-      media.removeEventListener('canplay', onCanPlay)
-      media.removeEventListener('error', onError)
-      cleanupPlayers()
-    }
-  }, [activeSurface, radioPlaybackBadge, radioReplay, selectedPlaybackChannel?.id, selectedPlaybackChannel?.streamUrl])
-
-  useEffect(() => {
-    const video = videoRef.current
-
-    if (!video || activeSurface !== 'radio') {
-      setRadioSeekWindowSeconds(0)
-      return
-    }
-
-    const updateSeekWindow = () => {
-      if (!video.seekable.length) {
-        setRadioSeekWindowSeconds(0)
-        return
-      }
-
-      const index = video.seekable.length - 1
-      const start = video.seekable.start(index)
-      const end = video.seekable.end(index)
-
-      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-        setRadioSeekWindowSeconds(0)
-        return
-      }
-
-      setRadioSeekWindowSeconds(Math.max(0, end - start))
-
-    }
-
-    updateSeekWindow()
-
-    const interval = window.setInterval(updateSeekWindow, 15000)
-    video.addEventListener('loadedmetadata', updateSeekWindow)
-    video.addEventListener('durationchange', updateSeekWindow)
-    video.addEventListener('progress', updateSeekWindow)
-    video.addEventListener('seeked', updateSeekWindow)
-
-    return () => {
-      window.clearInterval(interval)
-      video.removeEventListener('loadedmetadata', updateSeekWindow)
-      video.removeEventListener('durationchange', updateSeekWindow)
-      video.removeEventListener('progress', updateSeekWindow)
-      video.removeEventListener('seeked', updateSeekWindow)
-    }
-  }, [activeSurface, radioReplay, selectedRadioStation?.id])
-
-  useEffect(() => {
-    if (activeSurface !== 'radio' || !selectedRadioStation || !canShowRadioGuide) {
-      setRadioGuide(null)
-      setRadioGuideError('')
-      setRadioGuideState('idle')
-      return
-    }
-
-    let cancelled = false
-
-    const refreshGuide = async () => {
+    const markPlaying = () => {
       if (!cancelled) {
-        setRadioGuideState((current) => (current === 'ready' ? current : 'loading'))
-        setRadioGuideError('')
+        setPlayerState('playing')
+        setPlayerError('')
       }
+    }
+    const markWaiting = () => {
+      if (!cancelled) setPlayerState('loading')
+    }
+    const markVideoError = () => {
+      if (!cancelled) {
+        setPlayerState('error')
+        setPlayerError(media.error?.message || 'O navegador recusou essa stream.')
+      }
+    }
 
+    const playWhenPossible = async () => {
       try {
-        const snapshot = await loadRadioGuide(selectedRadioStation, DEFAULT_XTREAM_PROXY_URL)
-        if (cancelled) return
-        setRadioGuide(snapshot)
-        setRadioGuideState('ready')
-      } catch (error) {
-        if (cancelled) return
-        setRadioGuide(null)
-        setRadioGuideState('failed')
-        setRadioGuideError(
-          error instanceof Error
-            ? error.message
-            : 'Nao consegui ler a programacao oficial dessa radio agora.',
-        )
-      }
-    }
-
-    void refreshGuide()
-    const interval = window.setInterval(refreshGuide, 5 * 60_000)
-
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [activeSurface, canShowRadioGuide, selectedRadioStation?.id])
-
-  useEffect(() => {
-    let isActive = true
-
-    const refresh = async () => {
-      if (
-        typeof document !== 'undefined'
-        && document.visibilityState === 'hidden'
-        && !desktopNotificationsEnabled
-      ) {
-        return
-      }
-
-      const nextStatus: Record<string, EmbedStatus> = {}
-      const twitchChannels = Array.from(
-        new Set(
-          embeds
-            .filter((item) => item.platform === 'twitch')
-            .map((item) => item.channel.trim().toLowerCase())
-            .filter(Boolean),
-        ),
-      )
-
-      if (twitchChannels.length && settings.twitchClientId && settings.twitchAccessToken) {
-        try {
-          Object.assign(nextStatus, await fetchTwitchStatuses(twitchChannels, settings.twitchClientId, settings.twitchAccessToken))
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : TWITCH_STATUS_HELP
-          twitchChannels.forEach((channel) => {
-            nextStatus[channel] = { label: 'Erro', state: 'error', detail, updatedAt: new Date().toISOString() }
-          })
-        }
-      } else {
-        twitchChannels.forEach((channel) => {
-          nextStatus[channel] = { label: 'Sem auth', state: 'unknown', detail: TWITCH_STATUS_HELP, updatedAt: new Date().toISOString() }
-        })
-      }
-
-      const youtubeChannels = Array.from(
-        new Set(
-          embeds
-            .filter((item) => item.platform === 'youtube')
-            .map((item) => item.channel.trim())
-            .filter(Boolean),
-        ),
-      )
-
-      if (youtubeChannels.length) {
-        try {
-          Object.assign(
-            nextStatus,
-            await fetchYoutubeStatuses(youtubeChannels, DEFAULT_XTREAM_PROXY_URL),
-          )
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : YOUTUBE_STATUS_HELP
-          youtubeChannels.forEach((channel) => {
-            nextStatus[channel.toLowerCase()] = {
-              label: 'Erro',
-              state: 'error',
-              detail,
-              updatedAt: new Date().toISOString(),
-            }
-          })
-        }
-      }
-
-      const kickChannels = Array.from(
-        new Set(
-          embeds
-            .filter((item) => item.platform === 'kick')
-            .map((item) => item.channel.trim().toLowerCase())
-            .filter(Boolean),
-        ),
-      )
-
-      if (kickChannels.length && settings.kickClientId && settings.kickClientSecret) {
-        try {
-          let accessToken = settings.kickAppAccessToken
-          let expiresAt = settings.kickAppTokenExpiresAt
-
-          if (!accessToken || !isTokenFresh(expiresAt)) {
-            const token = await fetchKickAppAccessToken(
-              settings.kickClientId,
-              settings.kickClientSecret,
-              DEFAULT_XTREAM_PROXY_URL,
-            )
-            accessToken = token.accessToken
-            expiresAt = token.expiresAt
-
-            if (isActive) {
-              setSettings((current) => {
-                const next = {
-                  ...current,
-                  kickAppAccessToken: accessToken,
-                  kickAppTokenExpiresAt: expiresAt,
-                }
-                saveJson(SETTINGS_KEY, next)
-                return next
-              })
-            }
-          }
-
-          const officialKickStatuses = await fetchKickStatuses(
-            kickChannels,
-            accessToken,
-            DEFAULT_XTREAM_PROXY_URL,
-          )
-          Object.assign(nextStatus, officialKickStatuses)
-
-          const channelsNeedingProfileFallback = kickChannels.filter((channel) => {
-            const status = officialKickStatuses[channel]
-            return !status?.avatarUrl?.trim() || !status?.displayName?.trim()
-          })
-
-          if (channelsNeedingProfileFallback.length) {
-            try {
-              const workerKickStatuses = await fetchKickStatusesFromWorker(
-                channelsNeedingProfileFallback,
-                DEFAULT_XTREAM_PROXY_URL,
-              )
-
-              channelsNeedingProfileFallback.forEach((channel) => {
-                const currentStatus = officialKickStatuses[channel]
-                const fallbackStatus = workerKickStatuses[channel]
-
-                if (!currentStatus || !fallbackStatus) return
-
-                nextStatus[channel] = {
-                  ...currentStatus,
-                  avatarUrl: currentStatus.avatarUrl?.trim() || fallbackStatus.avatarUrl,
-                  displayName: currentStatus.displayName?.trim() || fallbackStatus.displayName,
-                }
-              })
-            } catch {
-              // Keep the official Kick status if the worker fallback fails.
-            }
-          }
-        } catch (error) {
-          const detail = error instanceof Error ? error.message : KICK_STATUS_HELP
-          kickChannels.forEach((channel) => {
-            nextStatus[channel] = { label: 'Erro', state: 'error', detail, updatedAt: new Date().toISOString() }
-          })
-        }
-      } else {
-        try {
-          Object.assign(
-            nextStatus,
-            await fetchKickStatusesFromWorker(kickChannels, DEFAULT_XTREAM_PROXY_URL),
-          )
-        } catch {
-          kickChannels.forEach((channel) => {
-            nextStatus[channel] = {
-              label: 'Sem auth',
-              state: 'unknown',
-              detail: KICK_STATUS_HELP,
-              updatedAt: new Date().toISOString(),
-            }
-          })
-        }
-      }
-
-      await Promise.all(
-        embeds
-          .filter((item) => item.statusEndpoint?.trim())
-          .map(async (item) => {
-            const statusKey = item.channel.toLowerCase()
-            const currentStatus = nextStatus[statusKey]
-            try {
-              nextStatus[statusKey] = await fetchCustomStatus(item.statusEndpoint!.trim())
-            } catch (error) {
-              nextStatus[statusKey] = currentStatus || {
-                label: 'Indisponivel',
-                state: 'unknown',
-                detail: error instanceof Error ? error.message : 'Falha ao consultar status externo.',
-                updatedAt: new Date().toISOString(),
-              }
-            }
-          }),
-      )
-
-      if (isActive) setStatusMap(nextStatus)
-    }
-
-    void refresh()
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void refresh()
-      }
-    }
-
-    const interval = window.setInterval(() => void refresh(), LIVE_STATUS_REFRESH_MS)
-    document.addEventListener('visibilitychange', onVisibilityChange)
-    return () => {
-      isActive = false
-      window.clearInterval(interval)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
-    }
-  }, [
-    embeds,
-    settings.kickAppAccessToken,
-    settings.kickAppTokenExpiresAt,
-    settings.kickClientId,
-    settings.kickClientSecret,
-    settings.twitchAccessToken,
-    settings.twitchClientId,
-    desktopNotificationsEnabled,
-  ])
-
-  useEffect(() => {
-    const trackedEmbeds = embeds.filter((item) => item.platform === 'twitch' || item.platform === 'kick')
-    const nextStates: Record<string, LiveState> = {}
-
-    trackedEmbeds.forEach((item) => {
-      const key = `${item.platform}:${item.channel.trim().toLowerCase()}`
-      nextStates[key] = statusMap[item.channel.trim().toLowerCase()]?.state || 'unknown'
-    })
-
-    if (!hasPrimedLiveNotificationsRef.current) {
-      previousLiveStatesRef.current = nextStates
-      hasPrimedLiveNotificationsRef.current = true
-      return
-    }
-
-    if (!desktopNotificationsEnabled || notificationPermission !== 'granted') {
-      previousLiveStatesRef.current = nextStates
-      return
-    }
-
-    trackedEmbeds.forEach((item) => {
-      const channelKey = item.channel.trim().toLowerCase()
-      const key = `${item.platform}:${channelKey}`
-      const previousState = previousLiveStatesRef.current[key] || 'unknown'
-      const currentState = nextStates[key]
-      const status = statusMap[channelKey]
-
-      if (currentState === 'online' && previousState !== 'online') {
-        const notification = new Notification(
-          `${embedDisplayName(item, status)} entrou ao vivo`,
-          {
-            body: `${embedPlatformLabel(item.platform)} ao vivo agora no seu painel.`,
-            icon: status?.avatarUrl,
-            tag: key,
-          },
-        )
-
-        notification.onclick = () => {
-          window.focus()
-          activateEmbed(item)
-          notification.close()
-        }
-      }
-    })
-
-    previousLiveStatesRef.current = nextStates
-  }, [desktopNotificationsEnabled, embeds, notificationPermission, statusMap])
-
-  useEffect(() => {
-    let isActive = true
-
-    const twitchChannels = Array.from(
-      new Set(
-        embeds
-          .filter((item) => item.platform === 'twitch')
-          .map((item) => item.channel.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    )
-    const youtubeChannels = Array.from(
-      new Set(
-        embeds
-          .filter((item) => item.platform === 'youtube')
-          .map((item) => item.channel.trim())
-          .filter(Boolean),
-      ),
-    )
-    const kickChannels = Array.from(
-      new Set(
-        embeds
-          .filter((item) => item.platform === 'kick')
-          .map((item) => item.channel.trim().toLowerCase())
-          .filter(Boolean),
-      ),
-    )
-
-    if (!twitchChannels.length && !youtubeChannels.length && !kickChannels.length) {
-      setRecentVods([])
-      setRecentVodsError('')
-      setRecentVodsLoading(false)
-      return
-    }
-
-    const loadRecentVods = async () => {
-      setRecentVodsLoading(true)
-      setRecentVodsError('')
-
-      const loaders = [
-        youtubeChannels.length
-          ? fetchYoutubeRecentVods(youtubeChannels, DEFAULT_XTREAM_PROXY_URL).catch(() => [] as RecentVodItem[])
-          : Promise.resolve([] as RecentVodItem[]),
-        kickChannels.length
-          ? fetchKickRecentVods(kickChannels, DEFAULT_XTREAM_PROXY_URL).catch(() => [] as RecentVodItem[])
-          : Promise.resolve([] as RecentVodItem[]),
-        twitchChannels.length && settings.twitchClientId && settings.twitchAccessToken
-          ? fetchTwitchRecentVods(
-              twitchChannels,
-              settings.twitchClientId,
-              settings.twitchAccessToken,
-            ).catch(() => [] as RecentVodItem[])
-          : Promise.resolve([] as RecentVodItem[]),
-      ]
-
-      try {
-        const [youtubeItems, kickItems, twitchItems] = await Promise.all(loaders)
-        if (!isActive) return
-
-        const merged = [...youtubeItems, ...kickItems, ...twitchItems]
-          .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
-          .slice(0, 12)
-
-        setRecentVods(merged)
-      } catch (error) {
-        if (!isActive) return
-        setRecentVodsError(error instanceof Error ? error.message : 'Nao foi possivel carregar os VODs recentes.')
-      } finally {
-        if (isActive) {
-          setRecentVodsLoading(false)
-        }
-      }
-    }
-
-    void loadRecentVods()
-
-    const interval = window.setInterval(() => {
-      void loadRecentVods()
-    }, 5 * 60_000)
-
-    return () => {
-      isActive = false
-      window.clearInterval(interval)
-    }
-  }, [
-    embeds,
-    settings.twitchAccessToken,
-    settings.twitchClientId,
-  ])
-
-  useEffect(() => {
-    if (!isTheaterMode) {
-      document.body.style.overflow = ''
-      return
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsTheaterMode(false)
-      }
-    }
-
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', handleKeyDown)
-
-    return () => {
-      document.body.style.overflow = ''
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isTheaterMode])
-
-  useEffect(() => {
-    const destroyTwitchPlayer = () => {
-      try {
-        twitchPlayerRef.current?.pause?.()
+        media.muted = isMuted
+        await media.play()
       } catch {
-        // Ignore pause failures while unmounting.
-      }
-      try {
-        twitchPlayerRef.current?.destroy?.()
-      } catch {
-        // Ignore destroy failures while unmounting.
-      }
-      twitchPlayerRef.current = null
-      if (twitchPlayerHostRef.current) {
-        twitchPlayerHostRef.current.innerHTML = ''
+        if (!cancelled) setPlayerState('ready')
       }
     }
 
-    if (activeSurface !== 'twitch' || !activeEmbed || !twitchPlayerHostRef.current) {
-      destroyTwitchPlayer()
-      return
-    }
-
-    let cancelled = false
-    setPlayerError('')
-    setPlayerState('Abrindo Twitch...')
-
-    const boot = async () => {
-      try {
-        await ensureTwitchPlayerScript()
-        if (cancelled || !twitchPlayerHostRef.current || !window.Twitch?.Player) return
-
-        destroyTwitchPlayer()
-
-        const player = new window.Twitch.Player(twitchPlayerHostRef.current, {
-          channel: activeEmbed.channel,
-          parent: [window.location.hostname || 'localhost'],
-          autoplay: true,
-          muted: true,
-          width: '100%',
-          height: '100%',
-        })
-
-        twitchPlayerRef.current = player
-
-        const startPlayback = () => {
-          if (cancelled) return
-          try {
-            player.setMuted?.(true)
-            player.setVolume?.(0)
-            player.play?.()
-          } catch {
-            // Twitch player may reject play until ready; keep quiet and let the UI continue.
-          }
-          setPlayerState('Twitch ao vivo')
-        }
-
-        const readyEvent = window.Twitch.Embed?.VIDEO_READY || 'ready'
-        player.addEventListener?.(readyEvent, startPlayback)
-        window.setTimeout(startPlayback, 450)
-      } catch (error) {
-        if (!cancelled) {
-          setPlayerError(error instanceof Error ? error.message : 'Falha ao abrir a Twitch agora.')
-          setPlayerState('Falha ao abrir Twitch')
-        }
-      }
-    }
-
-    void boot()
-
-    return () => {
-      cancelled = true
-      destroyTwitchPlayer()
-    }
-  }, [activeEmbed, activeSurface])
-
-  async function connectXtream(credentials = xtream, persist = true) {
-    const controller = new AbortController()
-    const nextCredentials = withDefaultProxy(credentials)
-
-    try {
-      setIsLoading(true)
-      setLoadError('')
-      setTransferMessage('')
-      const nextPlaylist = await fetchXtreamPlaylist(nextCredentials, controller.signal)
-      setPlaylist(nextPlaylist)
-      setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
-      navigateSitePage('iptv')
-      setXtream(nextCredentials)
-      if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'xtream', remember: settings.rememberConnection, xtream: nextCredentials, m3u })
-    } catch (error) {
-      setLoadError(formatXtreamError(error, nextCredentials))
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  async function connectM3U(credentials = m3u, persist = true) {
-    const controller = new AbortController()
-
-    try {
-      setIsLoading(true)
-      setLoadError('')
-      setTransferMessage('')
-      const nextPlaylist = await fetchM3UPlaylist(credentials, controller.signal)
-      setPlaylist(nextPlaylist)
-      setSelectedChannelId(nextPlaylist.channels[0]?.id ?? null)
-      navigateSitePage('iptv')
-      setM3U(credentials)
-      if (persist) saveJson<PersistedConnection>(CONNECTION_KEY, { kind: 'm3u', remember: settings.rememberConnection, xtream, m3u: credentials })
-    } catch (error) {
-      setLoadError(formatM3UError(error, credentials.url))
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  function connectTwitch() {
-    if (settings.twitchClientId.trim()) window.location.href = buildTwitchAuthUrl(settings.twitchClientId)
-  }
-
-  async function enableDesktopLiveNotifications() {
-    if (!desktopNotificationsSupported) return
-
-    const permission = await Notification.requestPermission()
-    setNotificationPermission(permission)
-
-    if (permission === 'granted') {
-      setSettings((current) => ({ ...current, desktopLiveNotifications: true }))
-    }
-  }
-
-  function setDesktopLiveNotificationsEnabled(nextValue: boolean) {
-    if (!desktopNotificationsSupported) return
-
-    if (nextValue && notificationPermission !== 'granted') {
-      void enableDesktopLiveNotifications()
-      return
-    }
-
-    setSettings((current) => ({ ...current, desktopLiveNotifications: nextValue }))
-  }
-
-  function setSurface(surface: MediaSurface) {
-    setSelectedVod(null)
-    setActiveSurface(surface)
-
-    if (surface === 'twitch') {
-      setSelectedEmbedId((current) => current && twitchEmbeds.some((item) => item.id === current) ? current : (twitchEmbeds[0]?.id ?? null))
-      return
-    }
-
-    if (surface === 'youtube') {
-      setSelectedEmbedId((current) => current && youtubeEmbeds.some((item) => item.id === current) ? current : (youtubeEmbeds[0]?.id ?? null))
-      return
-    }
-
-    if (surface === 'kick') {
-      setSelectedEmbedId((current) => current && kickEmbeds.some((item) => item.id === current) ? current : (kickEmbeds[0]?.id ?? null))
-      return
-    }
-
-    if (surface === 'radio') {
-      setSelectedRadioId((current) => current && radioStations.some((item) => item.id === current) ? current : (radioStations[0]?.id ?? ''))
-      return
-    }
-
-    if (surface === 'cinema') {
-      setSelectedMovieId((current) => current && movies.some((item) => item.id === current) ? current : (movies[0]?.id ?? null))
-    }
-  }
-
-  function activateIPTV(channelId?: string) {
-    if (channelId) setSelectedChannelId(channelId)
-    navigateSitePage('iptv')
-  }
-
-  function activateEmbed(embed: EmbedStream) {
-    setSelectedEmbedId(embed.id)
-    setSurface(embed.platform)
-    setPlayerError('')
-    setPlayerState(
-      embed.platform === 'twitch'
-        ? 'Twitch em foco'
-        : embed.platform === 'youtube'
-          ? 'YouTube em foco'
-          : 'Kick em foco',
-      )
-    }
-
-  function activateVod(vod: RecentVodItem) {
-    setSelectedVod(vod)
-    setPlayerError('')
-    setPlayerState('Replay recente carregado no palco')
-  }
-
-  function toggleTheaterMode() {
-    setIsTheaterMode((current) => !current)
-  }
-
-  function renderTheaterButton() {
-    return (
-      <button
-        class={classNames('ghost-button', 'compact', 'theater-toggle-button', isTheaterMode && 'active')}
-        type="button"
-        onClick={toggleTheaterMode}
-      >
-        {isTheaterMode ? 'Sair do teatro' : 'Modo teatro'}
-      </button>
-    )
-  }
-
-  function activateRadio(radioId?: string) {
-    if (radioId) setSelectedRadioId(radioId)
-    setRadioReplay(null)
-    setSurface('radio')
-    setPlayerError('')
-    setPlayerState('Radio em foco')
-  }
-
-  async function seekRadioBack(secondsBack: number) {
-    const video = videoRef.current
-    setPlayerError('')
-
-    if (video && video.seekable.length) {
-      const rangeIndex = video.seekable.length - 1
-      const start = video.seekable.start(rangeIndex)
-      const end = video.seekable.end(rangeIndex)
-      const availableWindow = Math.max(0, end - start)
-
-      if (availableWindow >= secondsBack) {
-        setRadioReplay(null)
-        video.currentTime = Math.max(start, end - secondsBack)
-        void video.play().catch(() => {})
-        setPlayerState(`Replay ${formatWindowLabel(secondsBack)} atras`)
-        return
-      }
-    }
-
-    if (!selectedRadioStation) return
-
-    if (selectedRadioStation.catchupMode === 'global' && selectedRadioStation.catchupIndexHref) {
-      try {
-        setPlayerState(`Buscando replay oficial ${formatWindowLabel(secondsBack)}...`)
-        const replay = await resolveGlobalCatchupReplay(
-          selectedRadioStation,
-          secondsBack,
-          DEFAULT_XTREAM_PROXY_URL,
-        )
-        setRadioReplay(replay)
-        setPlayerState(`Replay ${formatWindowLabel(secondsBack)} atras`)
-        return
-      } catch (error) {
-        setPlayerError(error instanceof Error ? error.message : 'Falha ao abrir o replay oficial agora.')
-        setPlayerState('Falha no replay')
-        return
-      }
-    }
-
-    setPlayerError('Essa radio nao expoe rewind direto no feed atual. Use o catch up oficial quando estiver disponivel.')
-  }
-
-  function jumpRadioToLive() {
-    if (radioReplay) {
-      setRadioReplay(null)
+    async function loadStream() {
+      destroyHls()
+      setPlayerState('loading')
       setPlayerError('')
-      setPlayerState('Voltando ao vivo...')
-      return
-    }
+      media.pause()
+      media.removeAttribute('src')
+      media.load()
 
-    const video = videoRef.current
-    if (!video || !video.seekable.length) return
+      media.addEventListener('canplay', markReady)
+      media.addEventListener('playing', markPlaying)
+      media.addEventListener('waiting', markWaiting)
+      media.addEventListener('error', markVideoError)
 
-    const rangeIndex = video.seekable.length - 1
-    const end = video.seekable.end(rangeIndex)
-    video.currentTime = Math.max(0, end - 2)
-    void video.play().catch(() => {})
-    setPlayerState('Voltando ao vivo...')
-  }
+      const isHls = /\.m3u8?($|\?)/i.test(streamUrl)
 
-  async function addEmbed() {
-    const rawChannel = embedDraft.channel.trim()
-    if (!rawChannel) return
-
-    let normalizedChannel = rawChannel
-    if (embedDraft.platform === 'youtube') {
-      try {
-        normalizedChannel = await resolveYoutubeChannelInput(rawChannel, DEFAULT_XTREAM_PROXY_URL)
-      } catch (error) {
-        setLoadError(error instanceof Error ? error.message : 'Nao consegui entender esse link do YouTube.')
+      if (!isHls) {
+        media.src = streamUrl
+        media.load()
+        await playWhenPossible()
         return
       }
-    }
 
-    const nextEmbed = {
-      id: crypto.randomUUID(),
-      platform: embedDraft.platform,
-      channel: normalizedChannel,
-      title: embedDraft.title.trim() || `${embedDraft.platform} / ${normalizedChannel}`,
-      statusEndpoint: embedDraft.statusEndpoint?.trim() || undefined,
-    }
-    setEmbeds((current) => [
-      nextEmbed,
-      ...current,
-    ])
-    setSelectedEmbedId(nextEmbed.id)
-    setActiveSurface(nextEmbed.platform)
-    setEmbedDraft({ id: '', platform: 'twitch', channel: '', title: '', statusEndpoint: '' })
-    setLoadError('')
-  }
-
-  function addMovie() {
-    const driveUrl = movieDraft.driveUrl.trim()
-    const previewUrl = buildDrivePreviewUrl(driveUrl)
-    if (!driveUrl || !previewUrl) {
-      setLoadError('Cole um link compartilhado de arquivo do Google Drive para adicionar em Cinema.')
-      return
-    }
-
-    const nextMovie: MovieItem = {
-      id: crypto.randomUUID(),
-      title: movieDraft.title.trim() || 'Filme no Drive',
-      driveUrl,
-      previewUrl,
-      openUrl: buildDriveOpenUrl(driveUrl),
-    }
-
-    setMovies((current) => [nextMovie, ...current])
-    setSelectedMovieId(nextMovie.id)
-    setSurface('cinema')
-    setMovieDraft({ title: '', driveUrl: '' })
-    setLoadError('')
-  }
-
-  function toggleFavorite(channelId: string) {
-    setFavorites((current) => (current.includes(channelId) ? current.filter((id) => id !== channelId) : [channelId, ...current]))
-  }
-
-  function removeEmbed(embedId: string) {
-    setEmbeds((current) => current.filter((entry) => entry.id !== embedId))
-
-    if (selectedEmbedId === embedId) {
-      const nextTwitch = twitchEmbeds.find((entry) => entry.id !== embedId)
-      const nextYouTube = youtubeEmbeds.find((entry) => entry.id !== embedId)
-      const nextKick = kickEmbeds.find((entry) => entry.id !== embedId)
-
-      if (activeSurface === 'twitch' && nextTwitch) {
-        setSelectedEmbedId(nextTwitch.id)
-      } else if (activeSurface === 'youtube' && nextYouTube) {
-        setSelectedEmbedId(nextYouTube.id)
-      } else if (activeSurface === 'kick' && nextKick) {
-        setSelectedEmbedId(nextKick.id)
-      } else {
-        setSelectedEmbedId(null)
-        setActiveSurface('iptv')
+      if (media.canPlayType('application/vnd.apple.mpegurl')) {
+        media.src = streamUrl
+        media.load()
+        await playWhenPossible()
+        return
       }
-    }
-  }
 
-  function removeMovie(movieId: string) {
-    const nextMovie = movies.find((item) => item.id !== movieId) || null
-    setMovies((current) => current.filter((item) => item.id !== movieId))
-
-    if (selectedMovieId === movieId) {
-      setSelectedMovieId(nextMovie?.id || null)
-      if (!nextMovie) {
-        setActiveSurface('iptv')
+      const { default: HlsClient } = await import('hls.js')
+      if (!HlsClient.isSupported()) {
+        setPlayerState('error')
+        setPlayerError('Este navegador nao oferece suporte HLS neste modo.')
+        return
       }
-    }
-  }
 
-  function exportConnectionBundle() {
-    const payload: ConnectionTransferBundle = {
-      version: 1,
-      sourceTab,
-      xtream,
-      m3u,
-    }
+      const hls = new HlsClient({
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 60,
+        liveSyncDurationCount: 3,
+      })
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    })
-    const objectUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = objectUrl
-    link.download = `iptv-pages-hub-${sourceTab}-backup.json`
-    link.click()
-    URL.revokeObjectURL(objectUrl)
-    setLoadError('')
-    setTransferMessage('Configuracao exportada. Leve esse arquivo para o PC do trabalho e importe la.')
-  }
+      hlsRef.current = hls
+      hls.attachMedia(media)
+      hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(streamUrl))
+      hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
+        void playWhenPossible()
+      })
+      hls.on(HlsClient.Events.ERROR, (_event, data: { fatal?: boolean; type?: string }) => {
+        if (!data.fatal) return
 
-  function exportSiteBundle() {
-    const payload: SiteTransferBundle = {
-      version: 1,
-      sourceTab,
-      xtream,
-      m3u,
-      settings,
-      embeds,
-      favorites,
-      activeSurface,
-      selectedEmbedId,
-      selectedRadioId,
-      movies,
-      selectedMovieId,
-      showLiveNowPanel,
+        if (data.type === 'networkError') {
+          setPlayerError('Oscilacao de rede. Tentando religar a stream.')
+          hls.startLoad()
+          return
+        }
+
+        if (data.type === 'mediaError') {
+          setPlayerError('Erro de midia. Recuperando o player.')
+          hls.recoverMediaError()
+          return
+        }
+
+        setPlayerState('error')
+        setPlayerError('A stream recusou o player nativo.')
+      })
     }
 
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: 'application/json;charset=utf-8',
-    })
-    const objectUrl = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = objectUrl
-    link.download = 'iptv-pages-hub-site-backup.json'
-    link.click()
-    URL.revokeObjectURL(objectUrl)
-    setLoadError('')
-    setTransferMessage('Backup completo do site exportado. Esse arquivo leva APIs, feeds, favoritos e preferencias para outro PC.')
-  }
+    void loadStream()
 
-  async function importConnectionBundle(event: Event) {
-    const input = event.currentTarget as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
+    return () => {
+      cancelled = true
+      media.removeEventListener('canplay', markReady)
+      media.removeEventListener('playing', markPlaying)
+      media.removeEventListener('waiting', markWaiting)
+      media.removeEventListener('error', markVideoError)
+      destroyHls()
+    }
+  }, [activeItem?.streamUrl, isMuted, reloadToken])
+
+  async function loadPlaylist(event: Event) {
+    event.preventDefault()
+    const controller = new AbortController()
 
     try {
-      const rawText = await file.text()
-      const payload = JSON.parse(rawText) as Partial<ConnectionTransferBundle>
-      const nextSourceTab = payload.sourceTab === 'm3u' ? 'm3u' : 'xtream'
-      const nextXtream = withDefaultProxy(payload.xtream ? payload.xtream as XtreamCredentials : defaultXtream)
-      const nextM3U = mergeM3U(payload.m3u)
-
-      setSourceTab(nextSourceTab)
-      setXtream(nextXtream)
-      setM3U(nextM3U)
-      saveJson<PersistedFormState>(FORM_STATE_KEY, {
-        sourceTab: nextSourceTab,
-        xtream: nextXtream,
-        m3u: nextM3U,
-      })
-      setLoadError('')
-      setTransferMessage('Configuracao importada neste navegador. Agora e so conectar a playlist.')
-    } catch {
-      setTransferMessage('')
-      setLoadError('Nao consegui importar esse arquivo. Use um backup gerado pelo botao Exportar.')
-    } finally {
-      input.value = ''
+      setPlaylistState('loading')
+      setPlaylistError('')
+      const nextPlaylist = await fetchM3UPlaylist({ url: m3uUrl }, controller.signal)
+      setPlaylist(nextPlaylist)
+      setSelectedGroup('Todos')
+      setSelectedChannelId(nextPlaylist.channels[0]?.id || '')
+      setPlaylistState('ready')
+      setView('iptv')
+    } catch (error) {
+      setPlaylistState('error')
+      setPlaylistError(error instanceof Error ? error.message : 'Nao foi possivel carregar a playlist.')
     }
   }
 
-  async function importSiteBundle(event: Event) {
-    const input = event.currentTarget as HTMLInputElement
-    const file = input.files?.[0]
-    if (!file) return
+  async function playActiveVideo() {
+    const video = videoRef.current
+    if (!video) return
 
     try {
-      const rawText = await file.text()
-      const payload = JSON.parse(rawText) as Partial<SiteTransferBundle>
-      const nextSourceTab = payload.sourceTab === 'm3u' ? 'm3u' : 'xtream'
-      const nextXtream = withDefaultProxy(payload.xtream ? payload.xtream as XtreamCredentials : defaultXtream)
-      const nextM3U = mergeM3U(payload.m3u)
-        const nextSettings = mergeSettings(payload.settings)
-        const nextEmbeds = normalizeEmbeds(payload.embeds)
-        const nextMovies = normalizeMovies(payload.movies)
-        const nextFavorites = Array.isArray(payload.favorites)
-          ? payload.favorites.map((item) => String(item || '').trim()).filter(Boolean)
-          : []
-        const nextActiveSurface = payload.activeSurface === 'twitch'
-          || payload.activeSurface === 'youtube'
-          || payload.activeSurface === 'kick'
-          || payload.activeSurface === 'news'
-          || payload.activeSurface === 'radio'
-          || payload.activeSurface === 'cinema'
-          || payload.activeSurface === 'iptv'
-          ? payload.activeSurface
-          : 'iptv'
-        const nextSelectedEmbedId = payload.selectedEmbedId ? String(payload.selectedEmbedId) : null
-        const nextSelectedRadioId = payload.selectedRadioId && radioStations.some((item) => item.id === payload.selectedRadioId)
-          ? payload.selectedRadioId
-          : (radioStations[0]?.id || '')
-        const nextSelectedMovieId = payload.selectedMovieId && nextMovies.some((item) => item.id === payload.selectedMovieId)
-          ? payload.selectedMovieId
-          : (nextMovies[0]?.id || null)
-        const nextShowLiveNowPanel = Boolean(payload.showLiveNowPanel)
-
-        setSourceTab(nextSourceTab)
-        setXtream(nextXtream)
-        setM3U(nextM3U)
-        setSettings(nextSettings)
-        setEmbeds(nextEmbeds)
-        setMovies(nextMovies)
-        setFavorites(nextFavorites)
-        setActiveSurface(nextActiveSurface)
-        setSelectedEmbedId(nextSelectedEmbedId)
-        setSelectedRadioId(nextSelectedRadioId)
-        setSelectedMovieId(nextSelectedMovieId)
-        setShowLiveNowPanel(nextShowLiveNowPanel)
-
-      saveJson<PersistedFormState>(FORM_STATE_KEY, {
-        sourceTab: nextSourceTab,
-        xtream: nextXtream,
-        m3u: nextM3U,
-      })
-      saveJson<AppSettings>(SETTINGS_KEY, nextSettings)
-      saveJson<EmbedStream[]>(EMBEDS_KEY, nextEmbeds)
-      saveJson<MovieItem[]>(MOVIES_KEY, nextMovies)
-      saveJson<string[]>(FAVORITES_KEY, nextFavorites)
-      saveJson<MediaSurface>(ACTIVE_SURFACE_KEY, nextActiveSurface)
-      saveJson<boolean>(SHOW_LIVE_NOW_KEY, nextShowLiveNowPanel)
-      saveJson<PersistedConnection>(CONNECTION_KEY, {
-        kind: nextSourceTab,
-        remember: nextSettings.rememberConnection,
-        xtream: nextXtream,
-        m3u: nextM3U,
-      })
-
-      if (nextSelectedEmbedId) {
-        window.localStorage.setItem(SELECTED_EMBED_KEY, nextSelectedEmbedId)
-      } else {
-        window.localStorage.removeItem(SELECTED_EMBED_KEY)
-      }
-
-      if (nextSelectedRadioId) {
-        window.localStorage.setItem(SELECTED_RADIO_KEY, nextSelectedRadioId)
-      }
-
-      if (nextSelectedMovieId) {
-        window.localStorage.setItem(SELECTED_MOVIE_KEY, nextSelectedMovieId)
-      } else {
-        window.localStorage.removeItem(SELECTED_MOVIE_KEY)
-      }
-
-      setLoadError('')
-      setTransferMessage('Backup completo importado. APIs, feeds, favoritos e preferencias ja ficaram salvos neste navegador.')
+      video.muted = isMuted
+      await video.play()
+      setPlayerState('playing')
+      setPlayerError('')
     } catch {
-      setTransferMessage('')
-      setLoadError('Nao consegui importar esse backup completo. Use um arquivo gerado pelo botao Exportar site.')
-    } finally {
-      input.value = ''
+      setPlayerState('error')
+      setPlayerError('O navegador bloqueou o play automatico. Use o controle nativo do video.')
     }
   }
 
-  function navigateSitePage(next: SitePage) {
-    setSitePage(next)
-    if (next === 'iptv') {
-      setSelectedVod(null)
-      setActiveSurface('iptv')
-    }
-
-    const nextHash = `#${next}`
-    if (window.location.hash !== nextHash) {
-      window.location.hash = nextHash
-    }
+  function selectNative(feedId: string) {
+    setSelectedNativeId(feedId)
+    setView('live')
   }
 
-  function toggleWelcomeTileAudio(slot: 'left' | 'right', nextMuted: boolean) {
-    setWelcomeAudioFocus(nextMuted ? (current) => (current === slot ? null : current) : slot)
+  function selectChannel(channelId: string) {
+    setSelectedChannelId(channelId)
+    setView('iptv')
   }
 
-  function advanceWelcomeSection(sectionId: BriefingSectionId, itemCount: number) {
-    if (itemCount <= 3) return
-
-    setWelcomeSectionOffsets((current) => {
-      const currentOffset = current[sectionId] || 0
-      const maxOffset = Math.max(0, itemCount - 3)
-      const nextOffset = currentOffset >= maxOffset ? 0 : Math.min(currentOffset + 3, maxOffset)
-      return {
-        ...current,
-        [sectionId]: nextOffset,
-      }
-    })
-  }
-
-  function renderIptvChannelCard(channel: Channel, context = 'guide') {
-    const isActive = channel.id === selectedChannel?.id
-    const isFavorite = favorites.includes(channel.id)
-
-    return (
-      <article
-        class={classNames('iptv-channel-card', isActive && 'active', isFavorite && 'saved')}
-        key={`${context}:${channel.id}`}
-      >
-        <button
-          class="iptv-channel-main"
-          type="button"
-          onClick={() => activateIPTV(channel.id)}
-        >
-          <span class="iptv-channel-number">{channelNumberLabel(channelOrdinalMap.get(channel.id))}</span>
-          <span class="iptv-channel-logo">
-            {channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <strong>{channel.name.slice(0, 2).toUpperCase()}</strong>}
-          </span>
-          <span class="iptv-channel-copy">
-            <strong>{channel.name}</strong>
-            <small>{channel.tvgId || channel.group}</small>
-          </span>
-        </button>
-        <button
-          aria-label={isFavorite ? `Remover ${channel.name} dos favoritos` : `Salvar ${channel.name} nos favoritos`}
-          class={isFavorite ? 'favorite-button active iptv-card-favorite' : 'favorite-button iptv-card-favorite'}
-          type="button"
-          onClick={() => toggleFavorite(channel.id)}
-        >
-          {isFavorite ? 'Salvo' : 'Fav'}
-        </button>
-      </article>
-    )
-  }
+  const statusLabel = {
+    idle: 'Aguardando',
+    loading: 'Carregando',
+    ready: 'Pronto',
+    playing: 'Ao vivo',
+    error: 'Falha',
+  }[playerState]
 
   return (
-    <div class={classNames('app-shell', isTheaterMode && 'theater-mode')}>
-      {sitePage === 'welcome' && showDailyBriefingModal ? (
-        <div
-          aria-hidden="true"
-          class="daily-briefing-modal-backdrop"
-          onClick={() => setShowDailyBriefingModal(false)}
-        >
-          <section
-            aria-labelledby="daily-briefing-title"
-            aria-modal="true"
-            class="daily-briefing-modal"
-            onClick={(event) => event.stopPropagation()}
-            role="dialog"
-          >
-            <div class="daily-briefing-modal-topline">
-              <div>
-                <p class="section-tag">Briefing de abertura</p>
-                <h2 id="daily-briefing-title">As noticias mais fortes do dia</h2>
-                <p class="helper-copy">
-                  {briefingSourceSummary
-                    ? `Atualizado com ${briefingSourceSummary}.`
-                    : 'Atualizando os feeds de noticias agora.'}
-                </p>
-              </div>
-              <div class="daily-briefing-modal-actions">
-                <button
-                  class="ghost-button compact"
-                  type="button"
-                  onClick={() => {
-                    navigateSitePage('hub')
-                    setSurface('news')
-                    setShowDailyBriefingModal(false)
-                  }}
-                >
-                  Ir para Noticias
-                </button>
-                <button
-                  aria-label="Fechar resumo do dia"
-                  class="ghost-button compact"
-                  type="button"
-                  onClick={() => setShowDailyBriefingModal(false)}
-                >
-                  Fechar
-                </button>
-              </div>
-            </div>
-
-            {welcomeLeadBriefing ? (
-              <article class="daily-briefing-lead">
-                <div class="daily-briefing-lead-copy">
-                  <span class="pill soft">{welcomeLeadBriefing.source}</span>
-                  <h3>{welcomeLeadBriefing.title}</h3>
-                  <p>{welcomeLeadBriefing.summary}</p>
-                </div>
-                <div class="daily-briefing-lead-meta">
-                  <span class="pill">{formatBriefingTime(welcomeLeadBriefing.publishedAt)}</span>
-                  <a
-                    class="primary-button briefing-link-button"
-                    href={welcomeLeadBriefing.href}
-                    rel="noreferrer"
-                    target="_blank"
-                  >
-                    Ler origem
-                  </a>
-                </div>
-              </article>
-            ) : (
-              <div class="empty-state compact-empty">
-                <strong>
-                  {briefingState === 'loading' ? 'Montando o resumo do dia...' : 'Resumo indisponivel agora.'}
-                </strong>
-                <span>
-                  {briefingError || 'Assim que os feeds responderem, as manchetes entram aqui automaticamente.'}
-                </span>
-              </div>
-            )}
-
-            <div class="daily-briefing-list">
-              {welcomeBriefingHighlights.slice(1).map((item) => (
-                <article class="headline-card briefing-modal-card" key={item.id}>
-                  <div class="headline-card-meta">
-                    <span>{item.source}</span>
-                    <span>{formatBriefingTime(item.publishedAt)}</span>
-                  </div>
-                  <h3>{item.title}</h3>
-                  <p>{item.summary}</p>
-                  <a href={item.href} rel="noreferrer" target="_blank">
-                    Abrir cobertura
-                  </a>
-                </article>
-              ))}
-            </div>
-          </section>
+    <div class="app-shell">
+      <header class="app-topbar">
+        <div>
+          <h1>IPTV Pages Hub</h1>
+          <p>Player nativo leve com feeds testados e playlist M3U.</p>
         </div>
-      ) : null}
-
-      {sitePage === 'welcome' ? (
-        <section class="welcome-mock-page">
-          <div class="welcome-mock-actions">
-            <button class="primary-button" type="button" onClick={() => navigateSitePage('iptv')}>Abrir IPTV</button>
-            <button class="ghost-button" type="button" onClick={() => navigateSitePage('hub')}>Entrar no hub</button>
-            <button class="ghost-button" type="button" onClick={() => setShowDailyBriefingModal(true)}>Abrir resumo</button>
-          </div>
-
-          <section class="welcome-mock-hero">
-            <div class="welcome-mock-greeting">
-              <p class="eyebrow">Neon Briefing</p>
-              <h1>{welcomeGreeting}, Fábio!</h1>
-              <p>hoje é {welcomeDateTitleLabel}</p>
-            </div>
-
-            <div class="welcome-mock-times">
-              {welcomeTimeChips.map((item) => (
-                <div class={`welcome-mock-time-pill ${item.tone}`} key={item.id}>
-                  <div class="welcome-mock-time-pill-meta">
-                    <span class="welcome-mock-time-pill-orb" aria-hidden="true" />
-                    <div>
-                      <strong>{item.code}</strong>
-                      <small>{item.city}</small>
-                    </div>
-                  </div>
-                  <span class="welcome-mock-time-pill-value">{item.value}</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          <section class="welcome-mock-multiview" aria-label="Multiview de noticias">
-            <div class="welcome-mock-player-shell">
-              <WelcomeMultiviewTile
-                isMuted={welcomeAudioFocus !== 'left'}
-                onToggleMuted={(nextMuted) => toggleWelcomeTileAudio('left', nextMuted)}
-                options={welcomeMultiviewOptions}
-                selectedId={welcomeLeftNewsId}
-                slotLabel="Canal A"
-              />
-              <div class="welcome-mock-channel-toolbar">
-                <div class="welcome-mock-channel-summary">
-                  <span class="section-tag">Canal A</span>
-                  <strong>{welcomeLeftSelectedLink?.name || 'Selecione um canal'}</strong>
-                </div>
-                <div class="welcome-mock-channel-buttons" role="group" aria-label="Trocar canal do player esquerdo">
-                  {welcomeMultiviewOptions.map((item) => (
-                    <button
-                      class={item.id === welcomeLeftNewsId ? 'active' : ''}
-                      key={`left-${item.id}`}
-                      type="button"
-                      onClick={() => setWelcomeLeftNewsId(item.id)}
-                    >
-                      {item.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div class="welcome-mock-player-shell">
-              <WelcomeMultiviewTile
-                isMuted={welcomeAudioFocus !== 'right'}
-                onToggleMuted={(nextMuted) => toggleWelcomeTileAudio('right', nextMuted)}
-                options={welcomeMultiviewOptions}
-                selectedId={welcomeRightNewsId}
-                slotLabel="Canal B"
-              />
-              <div class="welcome-mock-channel-toolbar">
-                <div class="welcome-mock-channel-summary">
-                  <span class="section-tag">Canal B</span>
-                  <strong>{welcomeRightSelectedLink?.name || 'Selecione um canal'}</strong>
-                </div>
-                <div class="welcome-mock-channel-buttons" role="group" aria-label="Trocar canal do player direito">
-                  {welcomeMultiviewOptions.map((item) => (
-                    <button
-                      class={item.id === welcomeRightNewsId ? 'active' : ''}
-                      key={`right-${item.id}`}
-                      type="button"
-                      onClick={() => setWelcomeRightNewsId(item.id)}
-                    >
-                      {item.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </section>
-
-          <section class="welcome-mock-news-section" aria-label="Noticias do dia">
-            <h2>Veja as noticias do dia:</h2>
-            {welcomeBriefingHighlights.length ? (
-              <div class="welcome-mock-news-sections">
-                {welcomeBriefingSections.map((section) => (
-                  <section class="welcome-mock-news-block" key={section.id}>
-                    <div class="welcome-mock-news-block-heading">
-                      <div>
-                        <p class="section-tag">{section.tag}</p>
-                        <h3>{section.title}</h3>
-                      </div>
-                      <div class="welcome-mock-news-block-actions">
-                        <p>{section.description}</p>
-                        {section.items.length > 3 ? (
-                          <button
-                            aria-label={`Ver mais noticias em ${section.title}`}
-                            class="welcome-mock-news-next"
-                            type="button"
-                            onClick={() => advanceWelcomeSection(section.id, section.items.length)}
-                          >
-                            <span>Mais</span>
-                            <strong>→</strong>
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div class="welcome-mock-news-grid">
-                      {section.items.length ? (
-                        section.items
-                          .slice(
-                            welcomeSectionOffsets[section.id],
-                            welcomeSectionOffsets[section.id] + 3,
-                          )
-                        .map((item) => (
-                          <a class="welcome-mock-news-card" href={item.href} key={item.id} rel="noreferrer" target="_blank">
-                            <div class="welcome-mock-news-meta">
-                              <span>{item.source}</span>
-                              <small>{formatBriefingTime(item.publishedAt)}</small>
-                            </div>
-                            <strong>{item.title}</strong>
-                            <p>{item.summary}</p>
-                            <span class="welcome-mock-news-link">Abrir cobertura</span>
-                          </a>
-                        ))
-                      ) : (
-                        <article class="welcome-mock-news-card empty">
-                          <strong>Sem cards nessa faixa agora.</strong>
-                          <p>Assim que as fontes de {section.tag.toLowerCase()} responderem, os destaques entram aqui automaticamente.</p>
-                        </article>
-                      )}
-                    </div>
-                  </section>
-                ))}
-              </div>
-            ) : (
-              <div class="welcome-mock-news-grid">
-                <article class="welcome-mock-news-card empty">
-                  <strong>{briefingState === 'loading' ? 'Carregando noticias do dia...' : 'Noticias indisponiveis agora.'}</strong>
-                  <p>{briefingError || 'Assim que os feeds responderem, os cards de leitura entram aqui automaticamente.'}</p>
-                </article>
-              </div>
-            )}
-          </section>
-        </section>
-      ) : sitePage === 'iptv' ? (
-        <header class="topbar iptv-topbar">
-          <div>
-            <p class="eyebrow">IPTV Pages Hub</p>
-            <h1>Guia IPTV</h1>
-            <p class="hero-subcopy">Uma pagina dedicada para navegar por grupos como em menu de TV a cabo, com player, busca e canais no mesmo fluxo.</p>
-            <LiveDashboardMeta />
-          </div>
-          <div class="surface-switch hero-surface-switch">
-            <button class="active" type="button" onClick={() => navigateSitePage('iptv')}>IPTV</button>
-            <button type="button" onClick={() => navigateSitePage('hub')}>Hub completo</button>
-            <button type="button" onClick={() => { navigateSitePage('hub'); setSurface('news') }}>Noticias</button>
-            <button type="button" onClick={() => { navigateSitePage('hub'); setSurface('radio') }}>Radios</button>
-            <button type="button" onClick={() => navigateSitePage('welcome')}>Welcome</button>
-          </div>
-        </header>
-      ) : (
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">IPTV Pages Hub</p>
-            <h1>Hub completo de canais, streams e players</h1>
-            <p class="hero-subcopy">O restante do site segue em modo hub com players, sidebars e gerenciamento completo.</p>
-            <LiveDashboardMeta />
-          </div>
-          <div class="surface-switch hero-surface-switch">
-            <button type="button" onClick={() => navigateSitePage('iptv')}>IPTV</button>
-            <button class={activeSurface === 'twitch' ? 'active' : ''} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>Twitch</button>
-            <button class={activeSurface === 'youtube' ? 'active youtube-tab' : 'youtube-tab'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YouTube</button>
-            <button class={activeSurface === 'kick' ? 'active' : ''} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
-            <button class={activeSurface === 'news' ? 'active' : ''} type="button" onClick={() => setSurface('news')}>Noticias</button>
-            <button class={activeSurface === 'radio' ? 'active' : ''} type="button" onClick={() => setSurface('radio')}>Radios</button>
-            <button class={activeSurface === 'cinema' ? 'active cinema-tab' : 'cinema-tab'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
-            <button class="ghost-button compact hero-back-button" type="button" onClick={() => navigateSitePage('welcome')}>Welcome</button>
-          </div>
-        </header>
-      )}
-
-      {sitePage === 'iptv' ? (
-        <main class="iptv-page" aria-label="Guia IPTV dedicado">
-          <section class="iptv-hero-grid">
-            <section class="panel iptv-player-panel">
-              <div class="iptv-player-heading">
-                <div>
-                  <p class="section-tag">Tocando agora</p>
-                  <h2>{selectedChannel?.name || 'Selecione um canal'}</h2>
-                  <p class="helper-copy">{selectedChannel?.group || 'Carregue uma playlist para abrir a grade IPTV.'}</p>
-                </div>
-                <div class="pill-row">
-                  <span class="pill active-group">CH {channelNumberLabel(selectedChannelNumber)}</span>
-                  {selectedChannel ? (
-                    <button
-                      class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'}
-                      type="button"
-                      onClick={() => toggleFavorite(selectedChannel.id)}
-                    >
-                      {favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}
-                    </button>
-                  ) : null}
-                  {renderTheaterButton()}
-                </div>
-              </div>
-
-              <div class="iptv-player-frame player-frame">
-                <video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} />
-              </div>
-              {playerError ? <p class="alert error">{playerError}</p> : null}
-
-              <div class="iptv-now-grid">
-                <article class="subtle-card compact-card">
-                  <p class="section-tag">Status</p>
-                  <h3>{playerState}</h3>
-                  <p class="helper-copy">O player fica fixo no topo da pagina IPTV para trocar canais sem voltar ao hub.</p>
-                </article>
-                <article class="subtle-card compact-card">
-                  <p class="section-tag">Origem</p>
-                  <h3>{playlist?.sourceLabel || 'Sem playlist'}</h3>
-                  <p class="helper-copy">{playlist ? `${PT_BR_NUMBER.format(channels.length)} canais carregados em ${PT_BR_NUMBER.format(playlist.groups.length)} grupos.` : 'Entre com Xtream ou M3U no controle ao lado.'}</p>
-                </article>
-                <article class="subtle-card compact-card iptv-stream-card">
-                  <p class="section-tag">Stream</p>
-                  <h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao'}</h3>
-                </article>
-              </div>
-            </section>
-
-            <aside class="panel iptv-remote-panel">
-              <div class="panel-heading">
-                <div>
-                  <p class="section-tag">Controle IPTV</p>
-                  <h2>Busca, grupos e playlist</h2>
-                </div>
-                <span class="pill">{PT_BR_NUMBER.format(visibleChannels.length)} visiveis</span>
-              </div>
-
-              <div class="iptv-remote-stats">
-                <div><strong>{PT_BR_NUMBER.format(channels.length)}</strong><span>Canais</span></div>
-                <div><strong>{PT_BR_NUMBER.format(playlist?.groups.length || 0)}</strong><span>Grupos</span></div>
-                <div><strong>{PT_BR_NUMBER.format(favoriteChannels.length)}</strong><span>Favoritos</span></div>
-              </div>
-
-              <div class="field-grid compact iptv-search-grid">
-                <label>
-                  <span>Buscar canal</span>
-                  <input
-                    placeholder="Nome, grupo ou EPG"
-                    value={searchTerm}
-                    onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)}
-                  />
-                </label>
-                <label class="group-field">
-                  <span>Grupo</span>
-                  <select
-                    class="group-select"
-                    value={groupFilter}
-                    onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}
-                  >
-                    <option value="Todos">Todos</option>
-                    {(playlist?.groups ?? []).map((group) => <option key={group} value={group}>{group}</option>)}
-                  </select>
-                </label>
-              </div>
-
-              <div class="iptv-quick-actions">
-                <button class={groupFilter === 'Todos' ? 'ghost-button compact active-soft' : 'ghost-button compact'} type="button" onClick={() => setGroupFilter('Todos')}>Todos</button>
-                <button class="ghost-button compact" disabled={!favoriteChannels.length} type="button" onClick={() => favoriteChannels[0] && activateIPTV(favoriteChannels[0].id)}>Favoritos</button>
-                <button class="ghost-button compact" type="button" onClick={() => { setSearchTerm(''); setGroupFilter('Todos') }}>Limpar filtros</button>
-              </div>
-
-              <div class="iptv-favorite-strip">
-                {favoriteChannels.length ? favoriteChannels.slice(0, 8).map((channel) => (
-                  <button
-                    class={selectedChannel?.id === channel.id ? 'iptv-favorite-chip active' : 'iptv-favorite-chip'}
-                    key={`favorite-chip:${channel.id}`}
-                    type="button"
-                    onClick={() => activateIPTV(channel.id)}
-                  >
-                    <span>{channelNumberLabel(channelOrdinalMap.get(channel.id))}</span>
-                    <strong>{channel.name}</strong>
-                  </button>
-                )) : (
-                  <p class="helper-copy">Canais salvos aparecem aqui como atalhos de controle remoto.</p>
-                )}
-              </div>
-
-              <div class="subtle-card stack compact-card iptv-connect-card">
-                <div class="source-switch">
-                  <button class={sourceTab === 'xtream' ? 'active' : ''} type="button" onClick={() => setSourceTab('xtream')}>Xtream</button>
-                  <button class={sourceTab === 'm3u' ? 'active' : ''} type="button" onClick={() => setSourceTab('m3u')}>M3U</button>
-                </div>
-                {sourceTab === 'xtream' ? (
-                  <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectXtream() }}>
-                    <label><span>Servidor</span><input placeholder="http://painel.exemplo.com" value={xtream.serverUrl} onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                    <label><span>Proxy HTTPS</span><input placeholder="https://seu-proxy.workers.dev" value={xtream.proxyUrl || ''} onInput={(event) => setXtream((current) => ({ ...current, proxyUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                    <div class="field-grid compact">
-                      <label><span>Usuario</span><input value={xtream.username} onInput={(event) => setXtream((current) => ({ ...current, username: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                      <label><span>Senha</span><input type="password" value={xtream.password} onInput={(event) => setXtream((current) => ({ ...current, password: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                    </div>
-                    <label><span>Saida</span><select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'auto' | 'm3u8' | 'ts' }))}><option value="auto">auto</option><option value="m3u8">m3u8</option><option value="ts">ts</option></select></label>
-                    <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Carregando...' : 'Entrar com Xtream'}</button>
-                  </form>
-                ) : (
-                  <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectM3U() }}>
-                    <label><span>URL M3U</span><input placeholder="https://exemplo.com/lista.m3u" value={m3u.url} onInput={(event) => setM3U({ url: (event.currentTarget as HTMLInputElement).value })} /></label>
-                    <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Lendo playlist...' : 'Abrir M3U'}</button>
-                  </form>
-                )}
-                {loadError ? <p class="alert error">{loadError}</p> : null}
-              </div>
-            </aside>
-          </section>
-
-          <section class="iptv-guide-shell">
-            <nav class="panel iptv-group-rail" aria-label="Grupos IPTV">
-              <div class="iptv-group-rail-heading">
-                <p class="section-tag">Categorias</p>
-                <h2>Grupos</h2>
-              </div>
-              <button
-                class={groupFilter === 'Todos' ? 'iptv-group-button active' : 'iptv-group-button'}
-                type="button"
-                onClick={() => setGroupFilter('Todos')}
-              >
-                <span class="iptv-group-mark all">TV</span>
-                <span><strong>Todos os grupos</strong><small>{PT_BR_NUMBER.format(playlist?.groups.length || 0)} grupos</small></span>
-              </button>
-              {iptvGroupSections.map((section) => (
-                <button
-                  class={groupFilter === section.group ? 'iptv-group-button active' : 'iptv-group-button'}
-                  key={section.group}
-                  type="button"
-                  onClick={() => setGroupFilter(section.group)}
-                >
-                  <span class={classNames('iptv-group-mark', iptvGroupToneClass(section.group))}>{iptvGroupShortLabel(section.group)}</span>
-                  <span>
-                    <strong>{section.group}</strong>
-                    <small>{PT_BR_NUMBER.format(section.total)} canais{section.favoriteCount ? ` - ${section.favoriteCount} salvos` : ''}</small>
-                  </span>
-                </button>
-              ))}
-            </nav>
-
-            <section class="iptv-channel-browse" aria-label="Canais IPTV por grupo">
-              {favoriteChannels.length ? (
-                <section class="panel iptv-shelf iptv-favorites-shelf">
-                  <div class="iptv-shelf-heading">
-                    <div>
-                      <p class="section-tag">Atalhos</p>
-                      <h2>Favoritos IPTV</h2>
-                    </div>
-                    <span class="pill">{PT_BR_NUMBER.format(favoriteChannels.length)} salvos</span>
-                  </div>
-                  <div class="iptv-channel-grid compact">
-                    {favoriteChannels.slice(0, IPTV_GUIDE_GROUP_CHANNEL_LIMIT).map((channel) => renderIptvChannelCard(channel, 'favorites'))}
-                  </div>
-                </section>
-              ) : null}
-
-              {iptvGuideSections.length ? iptvGuideSections.map((section) => {
-                const shelfLimit = groupFilter === 'Todos' && !normalizedSearch
-                  ? IPTV_GUIDE_GROUP_CHANNEL_LIMIT
-                  : visibleCount
-                const shelfChannels = section.channels.slice(0, shelfLimit)
-
-                return (
-                  <section class="panel iptv-shelf" key={`shelf:${section.group}`}>
-                    <div class="iptv-shelf-heading">
-                      <div>
-                        <p class="section-tag">Grupo IPTV</p>
-                        <h2>{section.group}</h2>
-                      </div>
-                      <div class="pill-row">
-                        <span class="pill">{PT_BR_NUMBER.format(section.channels.length)} encontrados</span>
-                        <span class="pill soft">{PT_BR_NUMBER.format(section.total)} no grupo</span>
-                      </div>
-                    </div>
-                    <div class="iptv-channel-grid">
-                      {shelfChannels.map((channel) => renderIptvChannelCard(channel, section.group))}
-                    </div>
-                    {section.channels.length > shelfLimit ? (
-                      <div class="load-more-row">
-                        <button
-                          class="ghost-button"
-                          type="button"
-                          onClick={() => {
-                            setGroupFilter(section.group)
-                            setVisibleCount((current) => current + CHANNEL_BATCH_STEP)
-                          }}
-                        >
-                          Abrir grade completa de {section.group}
-                        </button>
-                      </div>
-                    ) : null}
-                  </section>
-                )
-              }) : (
-                <section class="panel iptv-shelf">
-                  <div class="empty-state">
-                    <strong>Nenhum canal encontrado.</strong>
-                    <span>Conecte uma playlist ou ajuste busca e grupo no controle IPTV.</span>
-                  </div>
-                </section>
-              )}
-
-              {hiddenIptvGuideGroupCount ? (
-                <div class="iptv-more-groups-note">
-                  <span>{hiddenIptvGuideGroupCount} grupos adicionais ficam no menu Categorias para a grade nao virar uma lista infinita.</span>
-                </div>
-              ) : null}
-
-              {groupFilter !== 'Todos' && hasMoreChannels ? (
-                <div class="load-more-row">
-                  <button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>
-                    Adicionar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)}
-                  </button>
-                </div>
-              ) : null}
-            </section>
-          </section>
-        </main>
-      ) : sitePage === 'hub' ? (
-      <>
-      <section class="mobile-showcase" aria-label="Destaques mobile">
-        <div class="mobile-showcase-card">
-          <div class="mobile-showcase-heading">
-            <div>
-              <p class="section-tag">Ao vivo agora</p>
-              <h2>Stories de live</h2>
-            </div>
-            <span class="pill soft">{liveEmbeds.length ? `${liveEmbeds.length} no ar` : 'Sem lives'}</span>
-          </div>
-          {liveEmbeds.length ? (
-            <div class="mobile-live-story-row">
-              {liveEmbeds.map((item) => {
-                const status = statusMap[item.channel.toLowerCase()]
-                const avatarUrl = embedAvatarUrl(status)
-
-                return (
-                  <button
-                    key={item.id}
-                    class={activeEmbed?.id === item.id ? 'mobile-live-story active' : 'mobile-live-story'}
-                    type="button"
-                    onClick={() => activateEmbed(item)}
-                  >
-                    <div class={classNames('mobile-live-story-shell', `platform-${item.platform}`)}>
-                      <div class={classNames('mobile-live-story-avatar', avatarUrl ? 'has-image' : '')}>
-                        {avatarUrl ? <img alt={embedDisplayName(item, status)} loading="lazy" src={avatarUrl} /> : <span>{embedAvatarText(item)}</span>}
-                      </div>
-                      <span class="mobile-live-story-badge">LIVE</span>
-                    </div>
-                    <strong>{embedDisplayName(item, status)}</strong>
-                    <span>{embedPlatformLabel(item.platform)}</span>
-                  </button>
-                )
-              })}
-            </div>
-          ) : (
-            <div class="empty-state compact-empty mobile-empty-state">
-              <strong>Nenhuma live detectada agora.</strong>
-              <span>Twitch, YouTube e Kick entram aqui automaticamente quando o status vier online.</span>
-            </div>
-          )}
-        </div>
-
-        <div class="mobile-showcase-card">
-          <div class="mobile-showcase-heading">
-            <div>
-              <p class="section-tag">Noticias</p>
-              <h2>Miniaturas dos canais</h2>
-            </div>
-            <span class="pill soft">{newsLinks.length} canais</span>
-          </div>
-          <div class="mobile-news-card-row">
-            {orderedNewsLinks.map((item) => (
-              <button
-                key={item.id}
-                class={classNames('mobile-news-card', newsPosterToneClass(item), selectedNewsLink.id === item.id && activeSurface === 'news' && 'active')}
-                type="button"
-                onClick={() => {
-                  setSelectedVod(null)
-                  setSelectedNewsId(item.id)
-                  setSurface('news')
-                }}
-              >
-                <div class="mobile-news-card-poster">
-                  <span class="mobile-news-card-badge">{newsPlaybackLabel(item)}</span>
-                  <span class="mobile-news-card-source">{newsSourceLabel(item)}</span>
-                  <strong>{newsPosterMonogram(item.name)}</strong>
-                </div>
-                <div class="mobile-news-card-copy">
-                  <strong>{item.name}</strong>
-                  <span>{item.streamUrl ? 'Player rapido' : item.embedUrl ? 'Embed leve' : 'Abrir origem'}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <div class="feed-strip-shell news-shortcuts-shell">
-        <button aria-label="Ver canais anteriores" class="feed-strip-nav" disabled={!newsShortcutLeftReady} type="button" onClick={() => scrollNewsShortcut('left')}>
-          <span aria-hidden="true">‹</span>
-        </button>
-        <div class="news-shortcuts feed-strip-scroll" ref={newsShortcutRef}>
-          {orderedNewsLinks.map((item) => (
-              <button class={activeSurface === 'news' && selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedNewsId(item.id); setSurface('news') }}>
-              <span>{item.name}</span>
-              <strong>{item.streamUrl || item.embedUrl ? 'PLAY' : 'LINK'}</strong>
+        <nav aria-label="Navegacao principal" class="view-tabs">
+          {(Object.keys(viewLabels) as AppView[]).map((item) => (
+            <button
+              class={classNames(view === item && 'active')}
+              key={item}
+              type="button"
+              onClick={() => setView(item)}
+            >
+              {viewLabels[item]}
             </button>
           ))}
-        </div>
-        <button aria-label="Ver mais canais" class="feed-strip-nav" disabled={!newsShortcutRightReady} type="button" onClick={() => scrollNewsShortcut('right')}>
-          <span aria-hidden="true">›</span>
-        </button>
-      </div>
+        </nav>
+      </header>
 
-      <main class={classNames('hub-grid', leftSidebarCollapsed && 'left-collapsed', rightSidebarCollapsed && 'right-collapsed')}>
-        <aside class={classNames('panel sidebar-panel', leftSidebarCollapsed && 'collapsed')}>
-          <div class="sidebar-panel-topline">
-            {leftSidebarCollapsed ? null : (
-              <div>
-                <p class="section-tag">Menu esquerdo</p>
-                <h2>Navegacao</h2>
-              </div>
-            )}
-            <button
-              class="ghost-button compact sidebar-collapse-button"
-              type="button"
-              onClick={() => setLeftSidebarCollapsed((current) => !current)}
-            >
-              {leftSidebarCollapsed ? 'Abrir' : 'Colapsar'}
-            </button>
-          </div>
-          {leftSidebarCollapsed ? (
-            <div class="sidebar-mini-stack">
-              <button class={activeSurface === 'news' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('news')}>News</button>
-              <button class={activeSurface === 'iptv' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => navigateSitePage('iptv')}>IPTV</button>
-              <button class={activeSurface === 'twitch' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>TW</button>
-              <button class={activeSurface === 'youtube' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>YT</button>
-              <button class={activeSurface === 'kick' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>Kick</button>
-              <button class={activeSurface === 'radio' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('radio')}>Radio</button>
-              <button class={activeSurface === 'cinema' ? 'sidebar-rail-button active' : 'sidebar-rail-button'} type="button" onClick={() => setSurface('cinema')}>Cinema</button>
-            </div>
-          ) : (
-          <div class="sidebar-stack">
-            <div class="sidebar-section active surface-nav-section">
-              <button class="section-toggle active" type="button">
-                <span>Superficies</span>
-                <small>Navegacao principal</small>
-              </button>
-              <div class="sidebar-content">
-                <div class="surface-nav-grid">
-                  <button class={activeSurface === 'news' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('news')}>
-                    <strong>Noticias</strong>
-                    <span>{newsLinks.length} canais</span>
-                  </button>
-                  <button class={activeSurface === 'iptv' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => navigateSitePage('iptv')}>
-                    <strong>IPTV</strong>
-                    <span>{playlist?.channels.length || 0} canais</span>
-                  </button>
-                  <button class={activeSurface === 'twitch' ? 'surface-nav-card active' : 'surface-nav-card'} disabled={!twitchEmbeds.length} type="button" onClick={() => setSurface('twitch')}>
-                    <strong>Twitch</strong>
-                    <span>{onlineTwitchCount} ao vivo</span>
-                  </button>
-                  <button class={activeSurface === 'youtube' ? 'surface-nav-card active' : 'surface-nav-card'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setSurface('youtube')}>
-                    <strong>YouTube</strong>
-                    <span>{onlineYouTubeCount} ao vivo</span>
-                  </button>
-                  <button class={activeSurface === 'kick' ? 'surface-nav-card active' : 'surface-nav-card'} disabled={!kickEmbeds.length} type="button" onClick={() => setSurface('kick')}>
-                    <strong>Kick</strong>
-                    <span>{onlineKickCount} ao vivo</span>
-                  </button>
-                  <button class={activeSurface === 'radio' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('radio')}>
-                    <strong>Radios</strong>
-                    <span>{radioStations.length} emissoras</span>
-                  </button>
-                  <button class={activeSurface === 'cinema' ? 'surface-nav-card active' : 'surface-nav-card'} type="button" onClick={() => setSurface('cinema')}>
-                    <strong>Cinema</strong>
-                    <span>{movies.length} filmes</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div class="sidebar-section active">
-              <button class={showLiveNowPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowLiveNowPanel((current) => !current)}>
-                <span>Ao vivo agora</span>
-                <small>{liveEmbeds.length ? `${liveEmbeds.length} no ar agora` : 'Nenhum feed live'}</small>
-              </button>
-              {showLiveNowPanel ? <div class="sidebar-content">
-                {liveEmbeds.length ? (
-                  <div class="live-now-icon-grid">
-                    {liveEmbeds.map((item) => {
-                      const status = statusMap[item.channel.toLowerCase()]
-                      const avatarUrl = embedAvatarUrl(status)
-                      return (
-                        <button
-                          key={item.id}
-                          class={activeEmbed?.id === item.id ? 'live-now-icon-card active' : 'live-now-icon-card'}
-                          type="button"
-                          onClick={() => activateEmbed(item)}
-                        >
-                          <div class={classNames('live-now-icon-shell', `platform-${item.platform}`)}>
-                            <div class={classNames('live-now-icon-avatar', avatarUrl ? 'has-image' : '')}>
-                              {avatarUrl ? <img alt={embedDisplayName(item, status)} loading="lazy" src={avatarUrl} /> : <span>{embedAvatarText(item)}</span>}
-                            </div>
-                            <span class={classNames('live-now-dot', `platform-${item.platform}`)} />
-                          </div>
-                          <strong>{embedDisplayName(item, status)}</strong>
-                          <span>{item.channel}</span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                ) : <div class="empty-state compact-empty"><strong>Nenhum feed ao vivo agora.</strong><span>Twitch, YouTube e Kick aparecem aqui automaticamente quando o status vier como online.</span></div>}
-              </div> : null}
-            </div>
-
-            <div class="sidebar-section active">
-              <button class={showFavoriteIptvPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowFavoriteIptvPanel((current) => !current)}>
-                <span>Favoritos IPTV</span>
-                <small>{favoriteChannels.length ? `${favoriteChannels.length} canais salvos` : 'Nenhum favorito salvo'}</small>
-              </button>
-              {showFavoriteIptvPanel ? <div class="sidebar-content">
-                {favoriteChannels.length ? (
-                  <div class="live-now-icon-grid favorites-icon-grid">
-                    {favoriteChannels.map((channel) => (
-                      <button
-                        key={channel.id}
-                        class={selectedChannel?.id === channel.id ? 'live-now-icon-card active' : 'live-now-icon-card'}
-                        type="button"
-                        onClick={() => {
-                          activateIPTV(channel.id)
-                        }}
-                      >
-                        <div class="live-now-icon-shell platform-iptv">
-                          <div class={classNames('live-now-icon-avatar', channel.logo ? 'has-image' : '')}>
-                            {channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}
-                          </div>
-                        </div>
-                        <strong>{channel.name}</strong>
-                        <span>{channel.group}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : <div class="empty-state compact-empty"><strong>Nenhum favorito IPTV salvo.</strong><span>Favorite canais na lista IPTV e eles aparecem aqui em forma de atalho.</span></div>}
-              </div> : null}
-            </div>
-
-            <div class="sidebar-section">
-              <button class={showConnectionPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowConnectionPanel((current) => !current)}>
-                <span>Conexao e backup</span>
-                <small>{playlist?.sourceLabel || 'Sem playlist'}</small>
-              </button>
-              {showConnectionPanel ? (
-                <div class="sidebar-content stack">
-                  <div class="source-switch">
-                    <button class={sourceTab === 'xtream' ? 'active' : ''} type="button" onClick={() => setSourceTab('xtream')}>Xtream Codes</button>
-                    <button class={sourceTab === 'm3u' ? 'active' : ''} type="button" onClick={() => setSourceTab('m3u')}>M3U URL</button>
-                  </div>
-                  {sourceTab === 'xtream' ? (
-                    <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectXtream() }}>
-                      <label><span>Servidor</span><input placeholder="http://ou-https://painel.exemplo.com" value={xtream.serverUrl} onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                      <label><span>Proxy HTTPS</span><input placeholder="https://seu-proxy.exemplo.workers.dev" value={xtream.proxyUrl || ''} onInput={(event) => setXtream((current) => ({ ...current, proxyUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                      {xtreamNeedsHttps ? <div class="alert warn compact-alert"><strong>Servidor em HTTP</strong><span>GitHub Pages roda em HTTPS. Sem proxy, o navegador bloqueia esse login.</span><div class="inline-actions"><button class="ghost-button compact" type="button" onClick={() => setXtream((current) => ({ ...current, serverUrl: xtreamHttpsSuggestion }))}>Trocar para {xtreamHttpsSuggestion}</button></div></div> : null}
-                      <div class="field-grid"><label><span>Usuario</span><input value={xtream.username} onInput={(event) => setXtream((current) => ({ ...current, username: (event.currentTarget as HTMLInputElement).value }))} /></label><label><span>Senha</span><input type="password" value={xtream.password} onInput={(event) => setXtream((current) => ({ ...current, password: (event.currentTarget as HTMLInputElement).value }))} /></label></div>
-                      <label><span>Saida para browser</span><select value={xtream.output} onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as 'auto' | 'm3u8' | 'ts' }))}><option value="auto">auto (testa melhor caminho)</option><option value="m3u8">m3u8</option><option value="ts">ts</option></select></label>
-                      <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Carregando playlist...' : 'Entrar com Xtream'}</button>
-                    </form>
-                  ) : (
-                    <form class="stack" onSubmit={(event) => { event.preventDefault(); void connectM3U() }}>
-                      <label><span>URL da playlist</span><input placeholder="https://exemplo.com/lista.m3u" value={m3u.url} onInput={(event) => setM3U({ url: (event.currentTarget as HTMLInputElement).value })} /></label>
-                      <button class="primary-button" disabled={isLoading} type="submit">{isLoading ? 'Lendo playlist...' : 'Abrir M3U'}</button>
-                    </form>
-                  )}
-                    <div class="subtle-card stack compact-card">
-                      <label class="check-row"><input checked={settings.rememberConnection} type="checkbox" onChange={(event) => setSettings((current) => ({ ...current, rememberConnection: (event.currentTarget as HTMLInputElement).checked }))} /><span>Lembrar neste navegador</span></label>
-                      <div class="button-row"><button class="ghost-button" type="button" onClick={exportConnectionBundle}>Exportar conexao</button><button class="ghost-button" type="button" onClick={() => fileInputRef.current?.click()}>Importar conexao</button><input ref={fileInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importConnectionBundle} /></div>
-                      <div class="button-row"><button class="ghost-button" type="button" onClick={exportSiteBundle}>Exportar site</button><button class="ghost-button" type="button" onClick={() => siteBackupInputRef.current?.click()}>Importar site</button><input ref={siteBackupInputRef} accept=".json,application/json" class="hidden-input" type="file" onChange={importSiteBundle} /></div>
-                      {transferMessage ? <p class="helper-copy">{transferMessage}</p> : null}
-                    </div>
-                  {loadError ? <p class="alert error">{loadError}</p> : null}
-                </div>
-              ) : null}
-            </div>
-
-            <div class={activeSurface === 'iptv' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showIptvPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowIptvPanel((current) => !current)}>
-                <span>Lista IPTV</span>
-                <small>{PT_BR_NUMBER.format(visibleChannels.length)} canais</small>
-              </button>
-              {showIptvPanel ? (
-                <div class="sidebar-content stack">
-                  <div class="field-grid compact sidebar-filters">
-                    <label><span>Buscar</span><input placeholder="Nome, grupo ou EPG" value={searchTerm} onInput={(event) => setSearchTerm((event.currentTarget as HTMLInputElement).value)} /></label>
-                    <label class="group-field"><span>Grupo</span><select class="group-select" value={groupFilter} onChange={(event) => setGroupFilter((event.currentTarget as HTMLSelectElement).value)}><option value="Todos">Todos</option>{(playlist?.groups ?? []).map((group) => <option key={group} value={group}>{group}</option>)}</select></label>
-                  </div>
-                  <div class="group-summary"><span class="pill active-group">{groupFilter}</span><span class="helper-copy">{playlist?.groups.length || 0} grupos</span></div>
-                  <div class="sidebar-list">
-                    {displayedChannels.length ? displayedChannels.map((channel) => {
-                      const isFavorite = favorites.includes(channel.id)
-                      const isActive = channel.id === selectedChannel?.id
-
-                      return (
-                        <div
-                          aria-pressed={isActive}
-                          class={isActive ? 'list-row active' : 'list-row'}
-                          key={channel.id}
-                          onClick={() => activateIPTV(channel.id)}
-                          onKeyDown={(event) => {
-                            if (event.key === 'Enter' || event.key === ' ') {
-                              event.preventDefault()
-                              activateIPTV(channel.id)
-                            }
-                          }}
-                          role="button"
-                          tabIndex={0}
-                        >
-                          <div class="list-row-art">{channel.logo ? <img alt={channel.name} loading="lazy" src={channel.logo} /> : <span>{channel.name.slice(0, 2).toUpperCase()}</span>}</div>
-                          <div class="list-row-copy"><strong>{channel.name}</strong><span>{channel.group}</span></div>
-                          <button
-                            aria-label={isFavorite ? `Remover ${channel.name} dos favoritos` : `Salvar ${channel.name} nos favoritos`}
-                            class={isFavorite ? 'favorite-button active' : 'favorite-button'}
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              toggleFavorite(channel.id)
-                            }}
-                          >
-                            {isFavorite ? 'Salvo' : 'Fav'}
-                          </button>
-                        </div>
-                      )
-                    }) : <div class="empty-state compact-empty"><strong>Nenhum canal encontrado.</strong><span>Ajuste os filtros ou conecte uma playlist.</span></div>}
-                  </div>
-                  {hasMoreChannels ? <div class="load-more-row"><button class="ghost-button" type="button" onClick={() => setVisibleCount((current) => current + CHANNEL_BATCH_STEP)}>Adicionar mais {Math.min(CHANNEL_BATCH_STEP, visibleChannels.length - displayedChannels.length)}</button></div> : null}
-                </div>
-              ) : null}
-            </div>
-
-            <div class={activeSurface === 'twitch' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showTwitchPanel ? 'section-toggle active' : 'section-toggle'} disabled={!twitchEmbeds.length} type="button" onClick={() => setShowTwitchPanel((current) => !current)}>
-                <span>Feeds Twitch</span>
-                <small>{onlineTwitchCount} ao vivo - {twitchEmbeds.length} total</small>
-              </button>
-              {showTwitchPanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedTwitchEmbeds.length ? sortedTwitchEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'twitch')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Twitch cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
-            </div>
-
-            <div class={activeSurface === 'youtube' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showYouTubePanel ? 'section-toggle active' : 'section-toggle'} disabled={!youtubeEmbeds.length} type="button" onClick={() => setShowYouTubePanel((current) => !current)}>
-                <span>Feeds YouTube</span>
-                <small>{onlineYouTubeCount} ao vivo - {youtubeEmbeds.length} total</small>
-              </button>
-              {showYouTubePanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedYouTubeEmbeds.length ? sortedYouTubeEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'youtube')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed do YouTube cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
-            </div>
-
-            <div class={activeSurface === 'kick' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showKickPanel ? 'section-toggle active' : 'section-toggle'} disabled={!kickEmbeds.length} type="button" onClick={() => setShowKickPanel((current) => !current)}>
-                <span>Feeds Kick</span>
-                <small>{`${onlineKickCount} ao vivo - ${kickEmbeds.length} total`}</small>
-              </button>
-              {showKickPanel ? <div class="sidebar-content"><div class="sidebar-list">{sortedKickEmbeds.length ? sortedKickEmbeds.map((item) => { const status = statusMap[item.channel.toLowerCase()]; return <button key={item.id} class={activeEmbed?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateEmbed(item)}><div class="list-row-copy"><strong>{item.title}</strong><span>{item.channel}</span></div><span class={statusTone(status?.state || 'unknown', 'kick')}>{status?.label || 'Aguardando'}</span></button> }) : <div class="empty-state compact-empty"><strong>Nenhum feed da Kick cadastrado.</strong><span>Adicione um canal no painel da direita.</span></div>}</div></div> : null}
-              {showKickPanel && !onlineKickCount && kickEmbeds.length ? <div class="sidebar-content"><p class="helper-copy">O worker do app atualiza o status da Kick em segundo plano. Se algum canal seguir sem selo, eu ja deixei o override manual disponivel no painel da direita.</p></div> : null}
-            </div>
-
-            <div class={activeSurface === 'news' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showNewsPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowNewsPanel((current) => !current)}>
-                <span>Noticias ao vivo</span>
-                <small>{newsLinks.length} links</small>
-              </button>
-              {showNewsPanel ? <div class="sidebar-content"><div class="sidebar-list">{orderedNewsLinks.map((item) => <button key={item.id} class={selectedNewsLink.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}><div class="list-row-copy"><strong>{item.name}</strong><span>{item.source}</span></div><span class="status-chip unknown">Link</span></button>)}</div></div> : null}
-            </div>
-
-            <div class={activeSurface === 'radio' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showRadioPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowRadioPanel((current) => !current)}>
-                <span>Radios</span>
-                <small>{radioStations.length} emissoras</small>
-              </button>
-              {showRadioPanel ? (
-                <div class="sidebar-content stack">
-                  <div class="group-summary">
-                    <span class="pill active-group">{selectedRadioStation?.source || 'Ao vivo'}</span>
-                    <span class="helper-copy">{Object.keys(radioCategoryCounts).length} grupos</span>
-                  </div>
-                  <div class="sidebar-list">
-                    {radioStations.map((item) => (
-                      <button key={item.id} class={selectedRadioStation?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => activateRadio(item.id)}>
-                        <div class="list-row-art">{item.logo ? <img alt={item.name} loading="lazy" src={item.logo} /> : <span>{item.name.slice(0, 2).toUpperCase()}</span>}</div>
-                        <div class="list-row-copy">
-                          <strong>{item.name}</strong>
-                          <span>{item.category} · {item.source}</span>
-                        </div>
-                        <span class="status-chip unknown">{item.rewindHours ? `${item.rewindHours}h` : 'Live'}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div class={activeSurface === 'cinema' ? 'sidebar-section active' : 'sidebar-section'}>
-              <button class={showCinemaPanel ? 'section-toggle active' : 'section-toggle'} type="button" onClick={() => setShowCinemaPanel((current) => !current)}>
-                <span>Cinema</span>
-                <small>{movies.length} filmes</small>
-              </button>
-              {showCinemaPanel ? <div class="sidebar-content"><div class="sidebar-list">{movies.length ? movies.map((item) => <button key={item.id} class={selectedMovie?.id === item.id ? 'list-row active media-row' : 'list-row media-row'} type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}><div class="list-row-copy"><strong>{item.title}</strong><span>Google Drive preview</span></div><span class="status-chip unknown">Drive</span></button>) : <div class="empty-state compact-empty"><strong>Nenhum filme cadastrado.</strong><span>Cole um link compartilhado do Drive no painel da direita.</span></div>}</div></div> : null}
+      <main class="workspace">
+        <section class="player-panel" aria-label="Player nativo">
+          <div class="player-frame">
+            <video
+              ref={videoRef}
+              controls
+              muted={isMuted}
+              playsInline
+              poster=""
+              onVolumeChange={(event) => setIsMuted((event.currentTarget as HTMLVideoElement).muted)}
+            />
+            <div class={classNames('player-badge', playerState === 'error' && 'danger', playerState === 'playing' && 'live')}>
+              {statusLabel}
             </div>
           </div>
-          )}
-        </aside>
 
-        <section class="panel stage-panel">
-          {selectedVod ? (
-            <div class="feed-strip stage-feed-strip">
-              <span class="feed-pill active">{recentVodPlatformLabel(selectedVod.platform)}</span>
-              <span class="feed-pill">{selectedVod.channel}</span>
-              <span class="feed-pill">{formatRecentVodAge(selectedVod.publishedAt)}</span>
-              <span class="feed-pill soft">{selectedVod.durationLabel || 'Replay recente'}</span>
+          <div class="now-playing">
+            <div>
+              <span class="kicker">{activeItem.group}</span>
+              <h2>{activeItem.name}</h2>
+              <p>{activeItem.note}</p>
             </div>
-          ) : activeSurface === 'news' ? (
-            <div class="feed-strip-shell stage-feed-strip">
-              <button aria-label="Ver canais anteriores" class="feed-strip-nav" disabled={!newsStripLeftReady} type="button" onClick={() => scrollNewsStrip('left')}>
-                <span aria-hidden="true">‹</span>
+            <div class="player-actions">
+              <button type="button" onClick={() => { void playActiveVideo() }}>
+                <Icon name="play" />
+                Tocar
               </button>
-              <div class="feed-strip feed-strip-scroll" ref={newsStripRef}>
-                {orderedNewsLinks.map((item) => (
-                  <button class={selectedNewsLink.id === item.id ? 'feed-pill news-feed-pill active button-pill' : 'feed-pill news-feed-pill button-pill'} key={item.id} type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}>
-                    <span>{item.name}</span>
-                    <strong>{item.streamUrl || item.embedUrl ? 'LIVE' : 'LINK'}</strong>
-                  </button>
-                ))}
-              </div>
-              <button aria-label="Ver mais canais" class="feed-strip-nav" disabled={!newsStripRightReady} type="button" onClick={() => scrollNewsStrip('right')}>
-                <span aria-hidden="true">›</span>
+              <button type="button" onClick={() => setReloadToken((current) => current + 1)}>
+                <Icon name="reload" />
+                Recarregar
               </button>
+              <a href={activeItem.href} rel="noreferrer" target="_blank">
+                <Icon name="external" />
+                Origem
+              </a>
             </div>
-          ) : activeSurface === 'twitch' || activeSurface === 'youtube' || activeSurface === 'kick' ? (
-            <div class="feed-strip-shell stage-feed-strip">
-              <button aria-label="Ver feeds anteriores" class="feed-strip-nav" disabled={!mediaStripLeftReady} type="button" onClick={() => scrollMediaStrip('left')}>
-                <span aria-hidden="true">&lsaquo;</span>
-              </button>
-              <div class="feed-strip stage-feed-strip media-stage-strip feed-strip-scroll" ref={mediaStripRef}>
-                {activeFeedItems.map((item) => {
-                  const status = statusMap[item.channel.toLowerCase()]
-                  return (
-                    <button class={feedPillTone(item.platform, activeEmbed?.id === item.id)} key={item.id} type="button" onClick={() => activateEmbed(item)}>
-                      <span>{item.channel}</span>
-                      <strong>{status?.label || 'OFF'}</strong>
-                    </button>
-                  )
-                })}
-              </div>
-              <button aria-label="Ver mais feeds" class="feed-strip-nav" disabled={!mediaStripRightReady} type="button" onClick={() => scrollMediaStrip('right')}>
-                <span aria-hidden="true">&rsaquo;</span>
-              </button>
-            </div>
-          ) : (
-            <div class="feed-strip stage-feed-strip">
-              {activeSurface === 'iptv' ? (
-                <>
-                  <span class="feed-pill active">{groupFilter}</span>
-                  <span class="feed-pill">{favorites.length} favoritos</span>
-                  <span class="feed-pill">{PT_BR_NUMBER.format(visibleChannels.length)} visiveis</span>
-                  <span class="feed-pill soft">{playerState}</span>
-                </>
-              ) : activeSurface === 'radio' ? (
-                <>
-                  <span class="feed-pill active">{selectedRadioStation?.source || 'Radio'}</span>
-                  <span class="feed-pill">{radioStations.length} radios</span>
-                  <span class="feed-pill">{selectedRadioStation?.category || 'Ao vivo'}</span>
-                  <span class="feed-pill soft">{radioPlaybackBadge}</span>
-                </>
-              ) : activeSurface === 'cinema' ? (
-                <>
-                  <span class="feed-pill active cinema-pill">Cinema</span>
-                  <span class="feed-pill">{movies.length} filmes</span>
-                  <span class="feed-pill soft">{selectedMovie?.title || 'Selecione um filme'}</span>
-                </>
-                ) : (
-                  null
-                )}
-              </div>
-            )}
+          </div>
 
-          {selectedVod ? (
-            <>
-              <div class="panel-heading">
-                <div><p class="section-tag">Replay recente</p><h2>{selectedVod.title}</h2></div>
-                <div class="pill-row"><span class={recentVodStatusTone(selectedVod.platform)}>{recentVodPlatformLabel(selectedVod.platform)}</span>{renderTheaterButton()}<a class="ghost-button compact" href={selectedVod.watchUrl} rel="noreferrer" target="_blank">Abrir original</a></div>
-              </div>
-              <div class="player-frame embed-stage-frame news-embed-frame">
-                <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(selectedVod.playbackUrl || selectedVod.watchUrl)} title={selectedVod.title} />
-              </div>
-              <div class="player-meta">
-                <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedVod.channel}</h3><p class="helper-copy">{selectedVod.detail || 'Replay recente carregado a partir dos canais que voce ja segue.'}</p></div>
-                <div class="subtle-card compact-card"><p class="section-tag">Publicado</p><h3>{formatRecentVodAge(selectedVod.publishedAt)}</h3><p class="helper-copy">{selectedVod.durationLabel || 'Abrindo o VOD direto no palco principal para voce voltar entre live e replay sem sair do site.'}</p></div>
-              </div>
-            </>
-          ) : activeSurface === 'iptv' ? (
-            <>
-              <div class="panel-heading">
-                <div><p class="section-tag">IPTV ao vivo</p><h2>{selectedChannel?.name || 'Selecione um canal'}</h2></div>
-                <div class="pill-row">{selectedChannel ? <button class={favorites.includes(selectedChannel.id) ? 'favorite-pill active' : 'favorite-pill'} type="button" onClick={() => toggleFavorite(selectedChannel.id)}>{favorites.includes(selectedChannel.id) ? 'Favorito' : 'Favoritar'}</button> : null}<span class="pill">{selectedChannel?.group || 'Sem grupo'}</span>{renderTheaterButton()}</div>
-              </div>
-              <div class="player-frame"><video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} /></div>
-              <div class="player-meta">
-                <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">A sidebar fica focada em navegacao e o palco central abre um feed por vez.</p></div>
-                <div class="subtle-card compact-card"><p class="section-tag">URL da stream</p><h3 class="small-text">{selectedChannel?.streamUrl || 'Aguardando selecao de canal'}</h3></div>
-              </div>
-              {playerError ? <p class="alert error">{playerError}</p> : null}
-            </>
-          ) : activeSurface === 'news' ? (
-            <>
-              <div class="panel-heading">
-                <div><p class="section-tag">Noticias ao vivo</p><h2>{selectedNewsLink.name}</h2></div>
-                <div class="pill-row"><span class="pill">{selectedNewsLink.source}</span>{renderTheaterButton()}<a class="ghost-button compact" href={selectedNewsLink.href} rel="noreferrer" target="_blank">Abrir transmissao</a></div>
-              </div>
-              {selectedNewsPlayback ? (
-                <>
-                  <div class="player-frame"><video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} /></div>
-                  <div class="player-meta">
-                    <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
-                    <div class="subtle-card compact-card"><p class="section-tag">Status</p><h3>{playerState}</h3><p class="helper-copy">Feed de noticias rodando no mesmo player leve usado no site, via HLS/DASH oficial quando disponivel.</p></div>
-                  </div>
-                  {playerError ? <p class="alert error">{playerError}</p> : null}
-                </>
-              ) : newsMirrorState === 'resolving' ? (
-                <div class="subtle-card compact-card news-stage-card">
-                  <h3>Preparando {selectedNewsLink.name}</h3>
-                  <p class="helper-copy">Resolvendo o feed leve desse canal para evitar o iframe pesado e abrir mais rapido no palco.</p>
-                </div>
-              ) : selectedNewsLink.topLevelOnly ? (
-                <div class="subtle-card compact-card news-stage-card">
-                  <h3>{selectedNewsLink.name}</h3>
-                  <p class="helper-copy">{selectedNewsLink.note}</p>
-                  <p class="helper-copy">A Fox invalida o preview publico quando o player roda dentro de iframe. O botao acima abre a pagina oficial proxyada em contexto top-level, que foi o unico fluxo validado de forma estavel.</p>
-                </div>
-              ) : selectedNewsEmbedUrl ? (
-                <>
-                  <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedNewsEmbedUrl} title={selectedNewsLink.name} /></div>
-                  <div class="player-meta">
-                    <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{selectedNewsLink.name}</h3><p class="helper-copy">{selectedNewsLink.note}</p></div>
-                    <div class="subtle-card compact-card"><p class="section-tag">Origem</p><h3>{selectedNewsLink.source}</h3><p class="helper-copy">{newsMirrorError || 'Se o embed for bloqueado pela emissora ou pela sua regiao, use o botao para abrir a transmissao original.'}</p></div>
-                  </div>
-                </>
-              ) : (
-                <div class="subtle-card compact-card news-stage-card">
-                  <h3>{selectedNewsLink.name}</h3>
-                  <p class="helper-copy">{selectedNewsLink.note}</p>
-                  <p class="helper-copy">Esse canal abre em outra guia para manter o site leve quando nao existe embed confiavel dentro da pagina.</p>
-                </div>
-              )}
-              <div class="feed-chip-grid news-link-grid">
-                {newsLinks.map((item) => (
-                  <article class={classNames('feed-chip-card', 'news-tile-card', newsPosterToneClass(item))} key={item.id}>
-                    <div class="news-tile-poster">
-                      <span class="news-tile-badge">{newsPlaybackLabel(item)}</span>
-                      <span class="news-tile-source">{newsSourceLabel(item)}</span>
-                      <strong>{newsPosterMonogram(item.name)}</strong>
-                    </div>
-                    <div class="news-tile-copy">
-                      <p class="section-tag">{item.source}</p>
-                      <h3>{item.name}</h3>
-                      <p class="helper-copy">{item.note}</p>
-                    </div>
-                    <div class="feed-chip-actions">
-                      <button class="ghost-button compact" type="button" onClick={() => { setSelectedVod(null); setSelectedNewsId(item.id) }}>Selecionar</button>
-                      <a class="ghost-button compact" href={item.href} rel="noreferrer" target="_blank">Abrir link</a>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </>
-          ) : activeSurface === 'radio' && selectedRadioStation ? (
-            <>
-              <div class="panel-heading">
-                <div>
-                  <p class="section-tag">Radios ao vivo</p>
-                  <h2>{selectedRadioStation.name}</h2>
-                </div>
-                <div class="pill-row">
-                  <span class="pill">{selectedRadioStation.source}</span>
-                  <span class="pill">{radioPlaybackBadge}</span>
-                  {renderTheaterButton()}
-                  <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">Abrir oficial</a>
-                </div>
-              </div>
-              <div class="player-frame radio-player-frame">
-                <div class={radioReplay ? 'radio-playback-badge replay' : 'radio-playback-badge live'}>
-                  <strong>{radioPlaybackBadge}</strong>
-                  <span>{radioPlaybackDetail}</span>
-                </div>
-                <div class="radio-stage-visual">
-                  <div class="radio-stage-logo">
-                    <img alt={selectedRadioStation.name} loading="lazy" src={selectedRadioStation.logo} />
-                  </div>
-                  <div class="radio-stage-copy">
-                    <p class="section-tag">Radio no palco</p>
-                    <h3>{selectedRadioStation.name}</h3>
-                    <p class="helper-copy">
-                      {radioReplay
-                        ? `Replay oficial carregado: ${radioReplay.title}.`
-                        : selectedRadioStation.note}
-                    </p>
-                  </div>
-                </div>
-                <video autoPlay controls playsInline preload="auto" ref={(node) => { videoRef.current = node }} />
-              </div>
-              <div class="player-meta">
-                <div class="subtle-card compact-card radio-summary-card">
-                  <div class="radio-summary-head">
-                    <div class="radio-summary-logo">
-                      <img alt={selectedRadioStation.name} loading="lazy" src={selectedRadioStation.logo} />
-                    </div>
-                    <div>
-                      <p class="section-tag">Fonte</p>
-                      <h3>{selectedRadioStation.name}</h3>
-                      <p class="helper-copy">{selectedRadioStation.note}</p>
-                    </div>
-                  </div>
-                </div>
-                <div class="subtle-card compact-card">
-                  <p class="section-tag">Rewind</p>
-                  <h3>{radioWindowLabel ? `Janela disponivel ${radioWindowLabel}` : 'Ao vivo direto'}</h3>
-                  <p class="helper-copy">
-                    {radioReplay
-                      ? `${radioReplay.title} entrou pelo catch up oficial de ${radioReplay.source || selectedRadioStation.source}.`
-                      : selectedRadioStation.rewindHours
-                        ? 'As radios da BBC entram em DASH oficial com janela longa. Quando a live nao expuser isso, o catch up oficial entra como fallback.'
-                        : selectedRadioStation.catchupHref
-                          ? 'Se a live nao expuser a janela de rewind, o site abre automaticamente o replay oficial quando voce clicar em voltar.'
-                          : 'Essa radio esta em live oficial. Se quiser ouvir programas anteriores, use o link de catch-up oficial.'}
-                  </p>
-                </div>
-              </div>
-              <div class="subtle-card radio-rewind-panel">
-                <div class="panel-heading">
-                  <div>
-                    <p class="section-tag">Controles rapidos</p>
-                    <h3>Recuar sem sair do palco</h3>
-                  </div>
-                  {selectedRadioStation.catchupHref ? (
-                    <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">
-                      Catch Up oficial
-                    </a>
-                  ) : null}
-                </div>
-                <div class="rewind-grid">
-                  {[900, 1800, 3600, 7200, 10800, 21600].map((seconds) => (
-                    <button
-                      class="ghost-button compact"
-                      disabled={radioSeekWindowSeconds < seconds && selectedRadioStation.catchupMode !== 'global'}
-                      key={seconds}
-                      type="button"
-                      onClick={() => seekRadioBack(seconds)}
-                    >
-                      -{formatWindowLabel(seconds)}
-                    </button>
-                  ))}
-                  <button class="primary-button rewind-live-button" type="button" onClick={jumpRadioToLive}>
-                    Ao vivo
-                  </button>
-                </div>
-                {!radioSeekWindowSeconds ? (
-                  <p class="helper-copy">
-                    {selectedRadioStation.catchupMode === 'global'
-                      ? 'Essa radio nao expoe rewind direto na live. Quando voce clicar em voltar, o player troca para o replay oficial da propria emissora.'
-                      : 'Esse feed nao expoe rewind direto no manifesto. Quando isso acontecer, use o link oficial de catch up.'}
-                  </p>
-                ) : null}
-              </div>
-              {playerError ? <p class="alert error">{playerError}</p> : null}
-            </>
-          ) : activeSurface === 'cinema' && selectedMovie ? (
-            <>
-              <div class="panel-heading">
-                <div><p class="section-tag">Cinema</p><h2>{selectedMovie.title}</h2></div>
-                <div class="pill-row"><span class="pill">Google Drive</span>{renderTheaterButton()}<a class="ghost-button compact" href={selectedMovie.openUrl} rel="noreferrer" target="_blank">Abrir no Drive</a></div>
-              </div>
-              <div class="player-frame embed-stage-frame news-embed-frame"><iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={selectedMovie.previewUrl} title={selectedMovie.title} /></div>
-              <div class="player-meta">
-                <div class="subtle-card compact-card"><p class="section-tag">Preview</p><h3>Drive em modo preview</h3><p class="helper-copy">O site tenta abrir o video direto no preview do Google Drive. Se o preview do Drive nao ficar bom, use o botao para abrir no Google Drive.</p></div>
-                <div class="subtle-card compact-card"><p class="section-tag">Legendas</p><h3>Dependem do Drive</h3><p class="helper-copy">Neste modo o player e o do proprio Google Drive, entao legenda e PiP dependem do preview deles.</p></div>
-              </div>
-            </>
-          ) : activeEmbed ? (
-            <>
-              <div class="panel-heading">
-                <div><p class="section-tag">{activeSurface === 'twitch' ? 'Twitch' : activeSurface === 'youtube' ? 'YouTube' : 'Kick'}</p><h2>{activeEmbed.title}</h2></div>
-                <div class="pill-row"><span class={statusTone(statusMap[activeEmbed.channel.toLowerCase()]?.state || 'unknown', activeSurface === 'kick' ? 'kick' : activeSurface === 'youtube' ? 'youtube' : 'twitch')}>{statusMap[activeEmbed.channel.toLowerCase()]?.label || 'Aguardando'}</span>{renderTheaterButton()}<a class="ghost-button compact" href={activeSurface === 'twitch' ? `https://twitch.tv/${activeEmbed.channel}` : activeSurface === 'youtube' ? (statusMap[activeEmbed.channel.toLowerCase()]?.watchUrl || `https://www.youtube.com/${activeEmbed.channel.startsWith('@') ? activeEmbed.channel : `@${activeEmbed.channel}`}`) : `https://kick.com/${activeEmbed.channel}`} rel="noreferrer" target="_blank">Abrir original</a></div>
-              </div>
-              <div class="player-frame embed-stage-frame">
-                {activeSurface === 'twitch'
-                  ? <div class="twitch-player-host" ref={twitchPlayerHostRef} />
-                  : activeSurface === 'youtube'
-                    ? statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl
-                      ? <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(statusMap[activeEmbed.channel.toLowerCase()]?.playbackUrl)} title={activeEmbed.title} />
-                      : <div class="empty-stage"><strong>Canal sem live agora.</strong><span>Quando o YouTube detectar uma live ativa nesse canal, ela abre aqui no palco.</span></div>
-                    : <iframe allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen loading="lazy" src={withAutoplayEmbedUrl(buildKickEmbedUrl(activeEmbed.channel))} title={activeEmbed.title} />}
-              </div>
-              <div class="player-meta">
-                <div class="subtle-card compact-card"><p class="section-tag">Canal</p><h3>{activeEmbed.channel}</h3><p class="helper-copy">{statusMap[activeEmbed.channel.toLowerCase()]?.detail || 'Feed ativo no palco principal.'}</p></div>
-                <div class="subtle-card compact-card"><p class="section-tag">Playback</p><h3>{activeSurface === 'youtube' ? 'Live oficial do YouTube' : 'Autoplay com mute inicial'}</h3><p class="helper-copy">{activeSurface === 'youtube' ? 'O app verifica a pagina /live do canal e, quando encontrar live ao vivo, abre o video direto no palco.' : 'Ao clicar no feed, o embed ja entra tocando. O mute inicial ajuda o navegador a liberar autoplay sem travar o palco.'}</p></div>
-              </div>
-            </>
-          ) : <div class="empty-stage"><strong>Nenhum feed selecionado.</strong><span>Escolha um canal ou feed na sidebar.</span></div>}
+          <dl class="source-grid">
+            <div>
+              <dt>Qualidade</dt>
+              <dd>{activeItem.quality}</dd>
+            </div>
+            <div>
+              <dt>Regiao</dt>
+              <dd>{activeItem.region}</dd>
+            </div>
+            <div>
+              <dt>Fonte</dt>
+              <dd>{activeItem.source}</dd>
+            </div>
+            <div>
+              <dt>Stream</dt>
+              <dd>{compactUrl(activeItem.streamUrl)}</dd>
+            </div>
+          </dl>
+
+          {playerError ? <p class="inline-alert">{playerError}</p> : null}
         </section>
 
-        {rightSidebarCollapsed ? (
-          <section class="panel manager-panel collapsed">
-            <div class="sidebar-panel-topline manager-panel-topline">
-              <button
-                class="ghost-button compact sidebar-collapse-button"
-                type="button"
-                onClick={() => setRightSidebarCollapsed(false)}
-              >
-                Abrir
-              </button>
+        <aside class="guide-panel" aria-label="Guia de canais">
+          <div class="guide-head">
+            <div>
+              <span class="kicker">{viewLabels[view]}</span>
+              <h2>{view === 'links' ? 'Fontes externas' : 'Guia'}</h2>
             </div>
-            <div class="sidebar-mini-stack manager-mini-stack">
-              <button class="sidebar-rail-button active" type="button" onClick={() => setShowDailyBriefingModal(true)}>Briefing</button>
-              <button class="sidebar-rail-button" type="button" onClick={() => setSurface('news')}>Canais</button>
-              <span class="pill soft">{embeds.length} feeds</span>
-              <span class="pill soft">{movies.length} filmes</span>
+            <label class="search-box">
+              <Icon name="search" />
+              <input
+                placeholder={view === 'iptv' ? 'Buscar na playlist' : 'Buscar feed'}
+                value={query}
+                onInput={(event) => setQuery((event.currentTarget as HTMLInputElement).value)}
+              />
+            </label>
+          </div>
+
+          {view === 'live' ? (
+            <div class="channel-list">
+              {filteredNativeFeeds.map((feed) => (
+                <button
+                  class={classNames('channel-row', selectedNative.id === feed.id && 'selected')}
+                  key={feed.id}
+                  type="button"
+                  onClick={() => selectNative(feed.id)}
+                >
+                  <span class="channel-mark">{feed.name.slice(0, 2).toUpperCase()}</span>
+                  <span>
+                    <strong>{feed.name}</strong>
+                    <small>{feed.region} · {feed.source}</small>
+                  </span>
+                  <em>{feed.quality}</em>
+                </button>
+              ))}
             </div>
-          </section>
-        ) : activeSurface === 'radio' && selectedRadioStation ? (
-          <section class="panel manager-panel radio-side-panel">
-            <div class="sidebar-panel-topline manager-panel-topline">
-              <div>
-                <p class="section-tag">Menu direito</p>
-                <h2>Biblioteca e controle</h2>
-              </div>
-              <button
-                class="ghost-button compact sidebar-collapse-button"
-                type="button"
-                onClick={() => setRightSidebarCollapsed(true)}
-              >
-                Colapsar
-              </button>
-            </div>
-            <div class="panel-heading">
-              <div><p class="section-tag">Biblioteca de radios</p><h2>{selectedRadioStation.name}</h2></div>
-              <span class="pill">{selectedRadioStation.source}</span>
-            </div>
-            <div class="feed-chip-grid">
-                <article class="feed-chip-card">
-                  <div>
-                    <p class="section-tag">Categoria</p>
-                    <h3>{selectedRadioStation.category}</h3>
-                    <p class="helper-copy">{selectedRadioStation.note}</p>
-                  </div>
-                  <div class="feed-chip-actions">
-                    <a class="ghost-button compact" href={selectedRadioStation.href} rel="noreferrer" target="_blank">BBC/Global oficial</a>
-                    {selectedRadioStation.scheduleHref ? <a class="ghost-button compact" href={selectedRadioStation.scheduleHref} rel="noreferrer" target="_blank">{selectedRadioStation.scheduleLabel || 'Abrir grade'}</a> : null}
-                    {selectedRadioStation.catchupHref ? <a class="ghost-button compact" href={selectedRadioStation.catchupHref} rel="noreferrer" target="_blank">Abrir catch up</a> : null}
-                  </div>
-                </article>
-                {canShowRadioGuide ? (
-                  <article class="feed-chip-card radio-guide-card">
-                  <div>
-                    <p class="section-tag">No ar agora</p>
-                    <h3>{radioGuide?.now?.title || (radioGuideState === 'loading' ? 'Carregando grade...' : 'Grade indisponivel agora')}</h3>
-                    <p class="helper-copy">
-                      {radioGuide?.now?.subtitle
-                        || radioGuide?.now?.description
-                        || (radioGuideState === 'loading'
-                          ? 'Lendo a fonte oficial dessa emissora.'
-                          : radioGuideError || 'Nao consegui puxar a programacao oficial agora.')}
-                    </p>
-                    </div>
-                    <div class="feed-chip-actions">
-                      {radioGuide?.now?.timeLabel ? <span class="pill">{radioGuide.now.timeLabel}</span> : null}
-                      {radioGuideUpdatedLabel ? <span class="pill soft">Atualizado {radioGuideUpdatedLabel} UK</span> : null}
-                      {!radioGuide?.now && radioGuideState === 'failed' && selectedRadioScheduleHref ? <a class="ghost-button compact" href={selectedRadioScheduleHref} rel="noreferrer" target="_blank">{selectedRadioStation?.scheduleLabel || 'Ver grade oficial'}</a> : null}
-                    </div>
-                  </article>
-                ) : null}
-              <article class="feed-chip-card">
-                <div>
-                  <p class="section-tag">Rewind no palco</p>
-                  <h3>{selectedRadioStation.rewindHours ? `Ate ${selectedRadioStation.rewindHours}h` : 'Live direto'}</h3>
-                  <p class="helper-copy">
-                    {selectedRadioStation.rewindHours
-                      ? 'Quando a BBC expor a janela ao vivo no manifesto, o palco deixa recuar varias horas sem sair do site.'
-                      : 'LBC e Radio X ficam no live oficial leve e usam Catch Up oficial para voltar em programas anteriores.'}
-                  </p>
+          ) : null}
+
+          {view === 'iptv' ? (
+            <div class="iptv-panel">
+              <form class="playlist-form" onSubmit={loadPlaylist}>
+                <label>
+                  <span>Playlist M3U</span>
+                  <input
+                    placeholder="https://exemplo.com/lista.m3u"
+                    value={m3uUrl}
+                    onInput={(event) => setM3uUrl((event.currentTarget as HTMLInputElement).value)}
+                  />
+                </label>
+                <button disabled={playlistState === 'loading' || !m3uUrl.trim()} type="submit">
+                  <Icon name="list" />
+                  Carregar
+                </button>
+              </form>
+
+              {playlist ? (
+                <div class="playlist-tools">
+                  <select
+                    aria-label="Filtrar grupo"
+                    value={selectedGroup}
+                    onChange={(event) => setSelectedGroup((event.currentTarget as HTMLSelectElement).value)}
+                  >
+                    {playlistGroups.map((group) => (
+                      <option key={group} value={group}>{group}</option>
+                    ))}
+                  </select>
+                  <span>{filteredChannels.length} de {playlist.channels.length} canais</span>
                 </div>
-                <div class="feed-chip-actions">
-                  <span class="pill">{radioPlaybackBadge}</span>
-                  {radioWindowLabel ? <span class="pill">Janela {radioWindowLabel}</span> : null}
-                </div>
-              </article>
-              {canShowRadioGuide ? (
-                <article class="feed-chip-card radio-guide-card">
-                  <div>
-                    <p class="section-tag">Programacao do dia</p>
-                    <h3>{radioGuide?.providerLabel || 'Fonte oficial'}</h3>
-                    <p class="helper-copy">
-                      {radioGuide?.upcoming.length
-                        ? 'Grade discreta, puxada so quando essa radio esta aberta.'
-                        : radioGuideState === 'loading'
-                          ? 'Montando os proximos programas oficiais.'
-                          : 'A fonte oficial nao entregou a grade completa agora.'}
-                    </p>
-                  </div>
-                  {radioGuide?.upcoming.length ? (
-                    <div class="radio-guide-list">
-                      {radioGuide.upcoming.slice(0, 4).map((entry) => (
-                        <div class="radio-guide-row" key={`${entry.timeLabel}-${entry.title}`}>
-                          <strong>{entry.timeLabel}</strong>
-                          <span>{entry.title}</span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : selectedRadioScheduleHref ? (
-                    <div class="feed-chip-actions">
-                      <a class="ghost-button compact" href={selectedRadioScheduleHref} rel="noreferrer" target="_blank">{selectedRadioStation?.scheduleLabel || 'Abrir grade oficial'}</a>
-                    </div>
-                  ) : null}
-                </article>
               ) : null}
-              <article class="feed-chip-card">
-                <div>
-                  <p class="section-tag">Outras radios</p>
-                  <h3>{radioStations.length - 1} opcoes a um clique</h3>
-                  <p class="helper-copy">A grade usa logos oficiais da BBC Sounds e da Global Player para manter a lista leve e legivel.</p>
-                </div>
-                <div class="feed-chip-actions">
-                  {radioStations.slice(0, 6).map((item) => (
-                    <button class="ghost-button compact" key={item.id} type="button" onClick={() => activateRadio(item.id)}>
-                      {item.name}
-                    </button>
-                  ))}
-                </div>
-              </article>
-            </div>
-          </section>
-        ) : (
-          <section class="panel manager-panel">
-            <div class="sidebar-panel-topline manager-panel-topline">
-              <div>
-                <p class="section-tag">Menu direito</p>
-                <h2>Gerenciamento</h2>
-              </div>
-              <button
-                class="ghost-button compact sidebar-collapse-button"
-                type="button"
-                onClick={() => setRightSidebarCollapsed(true)}
-              >
-                Colapsar
-              </button>
-            </div>
-            <div class="panel-heading">
-              <div><p class="section-tag">Gerenciar feeds</p><h2>Twitch, YouTube, Kick e Cinema</h2></div>
-              <span class="pill">{embeds.length} feeds cadastrados</span>
-            </div>
-            <div class="embed-tools">
-              <div class="subtle-card stack compact-card">
-                <div class="field-grid compact">
-                  <label><span>Twitch Client ID</span><input placeholder="Para status oficial da Twitch" value={settings.twitchClientId} onInput={(event) => setSettings((current) => ({ ...current, twitchClientId: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                  <label><span>Twitch token</span><input placeholder="Preenchido via OAuth" value={settings.twitchAccessToken} onInput={(event) => setSettings((current) => ({ ...current, twitchAccessToken: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                </div>
-                <div class="field-grid compact">
-                  <label><span>Kick Client ID</span><input placeholder="App da Kick para status oficial" value={settings.kickClientId} onInput={(event) => setSettings((current) => ({ ...current, kickClientId: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
-                  <label><span>Kick secret</span><input placeholder="Fica local neste navegador" type="password" value={settings.kickClientSecret} onInput={(event) => setSettings((current) => ({ ...current, kickClientSecret: (event.currentTarget as HTMLInputElement).value, kickAppAccessToken: '', kickAppTokenExpiresAt: '' }))} /></label>
-                </div>
-                <div class="button-row"><button class="ghost-button" type="button" onClick={connectTwitch}>Conectar Twitch OAuth</button></div>
-                <div class="subtle-card stack compact-card notification-settings-card">
-                  <label class="check-row">
-                    <input
-                      checked={desktopNotificationsEnabled}
-                      disabled={!desktopNotificationsSupported}
-                      type="checkbox"
-                      onChange={(event) => setDesktopLiveNotificationsEnabled((event.currentTarget as HTMLInputElement).checked)}
-                    />
-                    <span>Notificar no desktop quando Twitch ou Kick entrar ao vivo</span>
-                  </label>
-                  <div class="button-row">
-                    <button
-                      class="ghost-button compact"
-                      disabled={!desktopNotificationsSupported || notificationPermission === 'granted'}
-                      type="button"
-                      onClick={() => void enableDesktopLiveNotifications()}
-                    >
-                      {notificationPermission === 'granted'
-                        ? 'Permissao liberada'
-                        : notificationPermission === 'denied'
-                          ? 'Permissao bloqueada'
-                          : 'Permitir notificacoes'}
-                    </button>
-                    <span class="pill soft">
-                      {notificationPermission === 'unsupported'
-                        ? 'Somente desktop'
-                        : notificationPermission === 'granted'
-                          ? 'Desktop ativo'
-                          : notificationPermission === 'denied'
-                            ? 'Bloqueado no navegador'
-                            : 'Aguardando permissao'}
+
+              {playlistError ? <p class="inline-alert">{playlistError}</p> : null}
+
+              <div class="channel-list">
+                {filteredChannels.map((channel) => (
+                  <button
+                    class={classNames('channel-row', selectedChannel?.id === channel.id && 'selected')}
+                    key={channel.id}
+                    type="button"
+                    onClick={() => selectChannel(channel.id)}
+                  >
+                    <span class="channel-mark">{channel.name.slice(0, 2).toUpperCase()}</span>
+                    <span>
+                      <strong>{channel.name}</strong>
+                      <small>{channel.group}</small>
                     </span>
-                  </div>
-                  <p class="helper-copy">Esse alerta usa a notificacao do proprio navegador e so roda em desktop. No mobile ele fica desativado de proposito.</p>
-                </div>
-                <p class="helper-copy">Twitch usa OAuth do navegador. YouTube nao precisa de API key e a leitura do status vem da pagina /live via proxy. Na Kick, o site ja consulta o status oficial pelo worker do app.</p>
-              </div>
-              <div class="subtle-card stack compact-card">
-                <div class="field-grid compact">
-                  <label><span>Plataforma</span><select value={embedDraft.platform} onChange={(event) => setEmbedDraft((current) => ({ ...current, platform: (event.currentTarget as HTMLSelectElement).value as 'twitch' | 'youtube' | 'kick' }))}><option value="twitch">Twitch</option><option value="youtube">YouTube</option><option value="kick">Kick</option></select></label>
-                  <label><span>Canal</span><input placeholder={embedDraft.platform === 'youtube' ? '@vaush ou link do canal/live' : 'nome-do-canal'} value={embedDraft.channel} onInput={(event) => setEmbedDraft((current) => ({ ...current, channel: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                </div>
-                <label><span>Titulo</span><input placeholder="Ex.: Stream secundaria" value={embedDraft.title} onInput={(event) => setEmbedDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                <label><span>Endpoint de status opcional</span><input placeholder="https://seu-endpoint/status.json" value={embedDraft.statusEndpoint} onInput={(event) => setEmbedDraft((current) => ({ ...current, statusEndpoint: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                <button class="primary-button" type="button" onClick={addEmbed}>Adicionar feed</button>
-                {embedDraft.platform === 'youtube' ? <p class="helper-copy">Pode colar `@handle`, URL do canal ou URL `/live`. O app tenta normalizar isso antes de salvar.</p> : null}
-              </div>
-              <div class="subtle-card stack compact-card">
-                <div class="field-grid compact">
-                  <label><span>Titulo do filme</span><input placeholder="Ex.: Filme no Drive" value={movieDraft.title} onInput={(event) => setMovieDraft((current) => ({ ...current, title: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                  <label><span>Link compartilhado do Drive</span><input placeholder="https://drive.google.com/file/d/.../view" value={movieDraft.driveUrl} onInput={(event) => setMovieDraft((current) => ({ ...current, driveUrl: (event.currentTarget as HTMLInputElement).value }))} /></label>
-                </div>
-                <button class="primary-button" type="button" onClick={addMovie}>Adicionar em Cinema</button>
-                <p class="helper-copy">O site tenta abrir o arquivo em modo preview do Google Drive. Se o preview nao ficar bom, o botao Abrir no Drive fica disponivel no palco.</p>
-              </div>
-            </div>
-              <div class="feed-chip-grid">
-                {embeds.map((item) => {
-                  const status = statusMap[item.channel.toLowerCase()]
-                  return <article class="feed-chip-card" key={item.id}><div><p class="section-tag">{item.platform}</p><h3>{item.title}</h3><p class="helper-copy">{item.channel}</p></div><div class="feed-chip-actions"><span class={statusTone(status?.state || 'unknown', item.platform)}>{status?.label || 'Aguardando'}</span><button class="ghost-button compact" type="button" onClick={() => activateEmbed(item)}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeEmbed(item.id)}>Remover</button></div></article>
-                })}
-                {movies.map((item) => (
-                  <article class="feed-chip-card" key={item.id}><div><p class="section-tag">cinema</p><h3>{item.title}</h3><p class="helper-copy">Google Drive preview</p></div><div class="feed-chip-actions"><button class="ghost-button compact" type="button" onClick={() => { setSelectedMovieId(item.id); setSurface('cinema') }}>Abrir</button><button class="ghost-button compact" type="button" onClick={() => removeMovie(item.id)}>Remover</button></div></article>
+                    <em>{channel.streamUrl.toLowerCase().includes('.m3u8') ? 'HLS' : 'Auto'}</em>
+                  </button>
                 ))}
               </div>
-              <div class="vod-panel">
-                <div class="panel-heading compact-panel-heading">
-                  <div><p class="section-tag">VODs recentes</p><h3>Lives encerradas dos canais que voce ja segue</h3></div>
-                  <span class="pill">{recentVods.length} itens</span>
+
+              {!playlist && !playlistError ? (
+                <div class="empty-panel">
+                  <Icon name="list" />
+                  <p>Carregue uma playlist para montar o guia IPTV.</p>
                 </div>
-                {recentVodsLoading ? (
-                  <div class="empty-state compact-empty">
-                    <strong>Carregando VODs recentes...</strong>
-                    <span>Buscando replays do ultimo dia em Twitch, YouTube e Kick.</span>
-                  </div>
-                ) : recentVods.length ? (
-                  <div class="vod-card-list">
-                    {recentVods.map((item) => (
-                      <button
-                        class={selectedVod?.id === item.id ? 'vod-card active' : 'vod-card'}
-                        key={item.id}
-                        type="button"
-                        onClick={() => activateVod(item)}
-                      >
-                        <div class="vod-card-thumb">
-                          {item.thumbnailUrl ? <img alt={item.title} loading="lazy" src={item.thumbnailUrl} /> : <span>{item.channel.slice(0, 2).toUpperCase()}</span>}
-                        </div>
-                        <div class="vod-card-copy">
-                          <div class="vod-card-meta">
-                            <span class={recentVodStatusTone(item.platform)}>{recentVodPlatformLabel(item.platform)}</span>
-                            <small>{formatRecentVodAge(item.publishedAt)}</small>
-                          </div>
-                          <strong>{item.title}</strong>
-                          <span>{item.channel}</span>
-                          <small>{item.durationLabel || item.detail || 'Replay recente do canal.'}</small>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <div class="empty-state compact-empty">
-                    <strong>Nenhum VOD recente apareceu ainda.</strong>
-                    <span>O painel olha so para os canais que voce ja segue e mostra replays recentes do ultimo dia quando a plataforma entregar esse historico.</span>
-                  </div>
-                )}
-                {recentVodsError ? <p class="helper-copy vod-helper">{recentVodsError}</p> : null}
-              </div>
-            </section>
-          )}
+              ) : null}
+            </div>
+          ) : null}
+
+          {view === 'links' ? (
+            <div class="link-groups">
+              {Object.entries(groupedLinks).map(([group, links]) => (
+                <section class="link-group" key={group}>
+                  <h3>{group}</h3>
+                  {links.map((link) => (
+                    <a class="external-row" href={link.href} key={link.id} rel="noreferrer" target="_blank">
+                      <span>
+                        <strong>{link.name}</strong>
+                        <small>{link.reason}</small>
+                      </span>
+                      <Icon name="external" />
+                    </a>
+                  ))}
+                </section>
+              ))}
+            </div>
+          ) : null}
+        </aside>
       </main>
-      </>
-      ) : null}
     </div>
   )
 }
