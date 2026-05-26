@@ -429,6 +429,7 @@ export function App() {
 
     const playWhenPossible = async () => {
       try {
+        media.autoplay = true
         media.muted = isMuted
         await media.play()
       } catch {
@@ -458,15 +459,15 @@ export function App() {
         return
       }
 
-      if (media.canPlayType('application/vnd.apple.mpegurl')) {
-        media.src = streamUrl
-        media.load()
-        await playWhenPossible()
-        return
-      }
-
       const { default: HlsClient } = await import('hls.js')
       if (!HlsClient.isSupported()) {
+        if (media.canPlayType('application/vnd.apple.mpegurl')) {
+          media.src = streamUrl
+          media.load()
+          await playWhenPossible()
+          return
+        }
+
         setPlayerState('error')
         setPlayerError('Este navegador nao oferece suporte HLS neste modo.')
         return
@@ -594,6 +595,7 @@ export function App() {
         <section class="player-panel" aria-label="Player nativo">
           <div class="player-frame">
             <video
+              autoPlay
               ref={videoRef}
               controls
               muted={isMuted}
