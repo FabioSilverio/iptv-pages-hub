@@ -119,7 +119,7 @@ video {
 
 .view-tabs {
   display: inline-grid;
-  grid-template-columns: repeat(3, minmax(74px, 1fr));
+  grid-template-columns: repeat(4, minmax(74px, 1fr));
   padding: 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -164,6 +164,52 @@ video {
   position: relative;
   aspect-ratio: 16 / 9;
   background: #050608;
+}
+
+.audio-frame {
+  display: grid;
+  min-height: 310px;
+  aspect-ratio: auto;
+  grid-template-rows: 1fr auto;
+  padding: 24px;
+}
+
+.audio-frame video {
+  height: 58px;
+  border-radius: 8px;
+}
+
+.audio-cover {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  min-height: 190px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(34, 211, 197, 0.14), transparent 34%),
+    var(--panel-soft);
+  text-align: center;
+}
+
+.audio-cover span {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  border-radius: 12px;
+  background: #0c1116;
+  color: var(--teal);
+  font-weight: 900;
+}
+
+.audio-cover strong {
+  font-size: clamp(1.4rem, 3vw, 2rem);
+}
+
+.audio-cover small {
+  color: var(--muted);
 }
 
 .player-badge {
@@ -228,7 +274,9 @@ video {
 
 .player-actions button,
 .player-actions a,
-.playlist-form button {
+.playlist-form button,
+.source-tabs button,
+.rewind-actions button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -426,6 +474,7 @@ video {
 }
 
 .playlist-form input,
+.playlist-form select,
 .playlist-tools select {
   width: 100%;
   min-height: 42px;
@@ -437,9 +486,37 @@ video {
   padding: 0 11px;
 }
 
-.playlist-form button:disabled {
+.playlist-form button:disabled,
+.rewind-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.48;
+}
+
+.source-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0d1217;
+}
+
+.source-tabs button {
+  min-height: 38px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.source-tabs button.active {
+  background: #e8edf1;
+  color: #0a0d10;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .playlist-tools {
@@ -464,6 +541,43 @@ video {
   width: 28px;
   height: 28px;
   color: var(--teal);
+}
+
+.radio-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.radio-rewind-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 12px;
+}
+
+.radio-rewind-card strong,
+.radio-rewind-card small {
+  display: block;
+}
+
+.radio-rewind-card small {
+  margin-top: 4px;
+  color: var(--muted);
+}
+
+.rewind-actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rewind-actions button {
+  min-height: 36px;
+  padding: 0 8px;
+  background: var(--panel-strong);
+  color: var(--text);
 }
 
 .link-groups {
@@ -502,7 +616,9 @@ video {
 .channel-row:hover,
 .player-actions button:hover,
 .player-actions a:hover,
-.playlist-form button:hover {
+.playlist-form button:hover,
+.source-tabs button:hover,
+.rewind-actions button:hover {
   border-color: rgba(34, 211, 197, 0.72);
 }
 
@@ -550,16 +666,78 @@ video {
 
 @media (max-width: 540px) {
   .app-shell {
-    width: min(100% - 14px, 520px);
+    width: min(100% - 12px, 520px);
+    padding-bottom: 20px;
+  }
+
+  .app-topbar {
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .app-topbar p {
+    font-size: 0.95rem;
   }
 
   .view-tabs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .view-tabs button {
+    min-height: 36px;
+    padding: 0 4px;
+    font-size: 0.9rem;
+  }
+
+  .player-frame {
+    aspect-ratio: 4 / 3;
+  }
+
+  .audio-frame {
+    min-height: 250px;
+    padding: 16px;
+  }
+
+  .audio-cover {
+    min-height: 140px;
+  }
+
+  .audio-cover span {
+    width: 54px;
+    height: 54px;
+  }
+
+  .audio-frame video {
+    height: 50px;
+  }
+
+  .now-playing,
+  .guide-panel {
+    padding: 14px;
+  }
+
+  .player-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .player-actions a {
+    grid-column: 1 / -1;
+  }
+
+  .form-grid,
+  .playlist-tools {
     grid-template-columns: 1fr;
   }
 
-  .source-grid,
-  .playlist-tools {
-    grid-template-columns: 1fr;
+  .source-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 0 14px 14px;
+  }
+
+  .rewind-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .channel-row {

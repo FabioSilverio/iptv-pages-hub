@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "hls.js": "^1.6.15",
-    "preact": "^10.29.0"
+    "preact": "^10.29.0",
+    "shaka-player": "^5.1.6"
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.10.4",

@@ -16,7 +16,7 @@ export interface RadioStation {
 }
 
 const BBC_DASH_BASE =
-  'https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/cfs'
+  'https://a.files.bbci.co.uk/ms6/live/3441A116-B12E-4D2F-ACA8-C1984642FA4B/audio/simulcast/dash/nonuk/pc_hd_abr_v2/aks'
 
 function buildBbcLogoUrl(logoId: string) {
   return `https://sounds.files.bbci.co.uk/3.9.4/networks/${logoId}/blocks-colour_600x600.png`

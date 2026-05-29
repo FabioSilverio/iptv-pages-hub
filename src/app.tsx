@@ -1,9 +1,26 @@
 import type Hls from 'hls.js'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
-import { fetchM3UPlaylist, type Channel, type PlaylistSession } from './lib/iptv'
+import {
+  fetchM3UPlaylist,
+  fetchXtreamPlaylist,
+  type Channel,
+  type PlaylistSession,
+  type XtreamCredentials,
+} from './lib/iptv'
+import { radioStations as baseRadioStations, type RadioStation } from './lib/radios'
 
-type AppView = 'live' | 'iptv' | 'links'
+type AppView = 'live' | 'iptv' | 'radios' | 'links'
+type IptvSource = 'm3u' | 'xtream'
 type PlayerState = 'idle' | 'loading' | 'ready' | 'playing' | 'error'
+
+interface DashPlayer {
+  attach: (element: HTMLMediaElement) => Promise<void>
+  configure?: (config: Record<string, unknown>) => void
+  load: (url: string) => Promise<void>
+  destroy: () => Promise<void>
+  seekRange: () => { start: number; end: number }
+  goToLive?: () => void
+}
 
 interface VerifiedFeed {
   id: string
@@ -35,11 +52,28 @@ interface PlayerItem {
   href: string
   streamUrl: string
   note: string
+  mode?: 'tv' | 'radio'
+  rewindHours?: number
 }
 
 const M3U_URL_KEY = 'iptv-pages-lite.m3u-url'
+const XTREAM_KEY = 'iptv-pages-lite.xtream'
+const IPTV_SOURCE_KEY = 'iptv-pages-lite.iptv-source'
 const LAST_NATIVE_KEY = 'iptv-pages-lite.last-native'
+const LAST_RADIO_KEY = 'iptv-pages-lite.last-radio'
 const LAST_VIEW_KEY = 'iptv-pages-lite.view'
+const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
+const COPE_REWIND_LIMIT_MS = 5 * 60 * 60 * 1000
+const DASH_REWIND_SEGMENT_LIMIT = 4000
+const RADIO_REWIND_OPTIONS = [15, 60, 120, 300]
+
+const defaultXtream: XtreamCredentials = {
+  serverUrl: '',
+  username: '',
+  password: '',
+  output: 'auto',
+  proxyUrl: DEFAULT_XTREAM_PROXY_URL,
+}
 
 const verifiedFeeds: VerifiedFeed[] = [
   {
@@ -224,9 +258,56 @@ const externalLinks: ExternalFeedLink[] = [
   },
 ]
 
+const extraRadioStations: RadioStation[] = [
+  {
+    id: 'talksport-uk',
+    name: 'talkSPORT',
+    source: 'talkSPORT',
+    category: 'UK Sport',
+    logo: '',
+    href: 'https://talksport.com/',
+    streamUrl: 'https://radio.talksport.com/stream',
+    note: 'Feed MP3 publico da talkSPORT. Mantido leve no player nativo.',
+  },
+  {
+    id: 'tmc-sp',
+    name: 'Radio TMC Sao Paulo',
+    source: 'TMC / StreamTheWorld',
+    category: 'Brasil Esportes',
+    logo: 'https://img.radios.com.br/radio/lg/radio8803_1760319906.png',
+    href: 'https://tmc360.com.br/',
+    streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/RT_SP.mp3',
+    note: 'TMC Sao Paulo 100.1 FM, antiga Transamerica, em MP3 oficial via StreamTheWorld.',
+  },
+  {
+    id: 'energia-97-sp',
+    name: 'Energia 97 FM',
+    source: 'Energia 97',
+    category: 'Brasil Musica',
+    logo: '',
+    href: 'https://www.97fm.com.br/',
+    streamUrl: 'https://streaming.inweb.com.br/energia',
+    note: 'Energia 97 FM Sao Paulo, feed AAC/HTTPs testado via RadioBrowser.',
+  },
+  {
+    id: 'cope-es',
+    name: 'COPE Espanha',
+    source: 'COPE / Flumotion',
+    category: 'Espanha Noticias',
+    logo: 'https://www.cope.es/favicon/cope/apple-touch-icon-192x192.png',
+    href: 'https://www.cope.es/directos/malaga',
+    streamUrl: 'https://flucast-bl03.flumotion.com/cope/net1.mp3',
+    note: 'Feed MP3 da COPE Espanha. O buffer local permite voltar ate 5 horas depois que a aba fica aberta.',
+    rewindHours: 5,
+  },
+]
+
+const radioStations: RadioStation[] = [...baseRadioStations, ...extraRadioStations]
+
 const viewLabels: Record<AppView, string> = {
   live: 'Ao vivo',
   iptv: 'IPTV',
+  radios: 'Radios',
   links: 'Links',
 }
 
@@ -236,9 +317,20 @@ function readStoredValue(key: string) {
   return window.localStorage.getItem(key) || ''
 }
 
+function readStoredJson<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback
+
+  try {
+    const rawValue = window.localStorage.getItem(key)
+    return rawValue ? { ...fallback, ...JSON.parse(rawValue) } : fallback
+  } catch {
+    return fallback
+  }
+}
+
 function viewFromHash(hash: string): AppView | null {
   const value = hash.replace('#', '')
-  return value === 'iptv' || value === 'links' || value === 'live' ? value : null
+  return value === 'iptv' || value === 'links' || value === 'live' || value === 'radios' ? value : null
 }
 
 function readInitialView(): AppView {
@@ -248,7 +340,7 @@ function readInitialView(): AppView {
   if (hashView) return hashView
 
   const stored = readStoredValue(LAST_VIEW_KEY)
-  return stored === 'iptv' || stored === 'links' || stored === 'live' ? stored : 'live'
+  return stored === 'iptv' || stored === 'links' || stored === 'live' || stored === 'radios' ? stored : 'live'
 }
 
 function compactUrl(rawUrl: string) {
@@ -258,6 +350,21 @@ function compactUrl(rawUrl: string) {
   } catch {
     return rawUrl
   }
+}
+
+function formatRewindLabel(minutes: number) {
+  return minutes < 60 ? `${minutes} min` : `${Math.floor(minutes / 60)} h`
+}
+
+function getMediaSeekRange(media: HTMLMediaElement, dashPlayer?: DashPlayer | null) {
+  if (media.seekable.length) {
+    return {
+      start: media.seekable.start(0),
+      end: media.seekable.end(media.seekable.length - 1),
+    }
+  }
+
+  return dashPlayer?.seekRange()
 }
 
 function channelToPlayerItem(channel: Channel): PlayerItem {
@@ -271,6 +378,22 @@ function channelToPlayerItem(channel: Channel): PlayerItem {
     href: channel.streamUrl,
     streamUrl: channel.streamUrl,
     note: channel.logo ? 'Canal carregado da playlist importada.' : 'Canal da playlist importada.',
+  }
+}
+
+function radioToPlayerItem(station: RadioStation): PlayerItem {
+  return {
+    id: station.id,
+    name: station.name,
+    group: station.category,
+    region: station.source,
+    quality: station.streamUrl.toLowerCase().includes('.mpd') ? 'DASH' : 'Audio',
+    source: station.source,
+    href: station.href,
+    streamUrl: station.streamUrl,
+    note: station.note,
+    mode: 'radio',
+    rewindHours: station.rewindHours,
   }
 }
 
@@ -298,24 +421,39 @@ function Icon({ name }: { name: 'play' | 'reload' | 'external' | 'search' | 'lis
 export function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
+  const shakaRef = useRef<DashPlayer | null>(null)
+  const copeBufferAbortRef = useRef<AbortController | null>(null)
+  const copeBufferChunksRef = useRef<Array<{ at: number; chunk: Uint8Array }>>([])
+  const replayUrlRef = useRef('')
 
   const [view, setView] = useState<AppView>(() => readInitialView())
   const [selectedNativeId, setSelectedNativeId] = useState(() => readStoredValue(LAST_NATIVE_KEY) || verifiedFeeds[0].id)
+  const [selectedRadioId, setSelectedRadioId] = useState(() => readStoredValue(LAST_RADIO_KEY) || radioStations[0].id)
   const [playerState, setPlayerState] = useState<PlayerState>('idle')
   const [playerError, setPlayerError] = useState('')
   const [reloadToken, setReloadToken] = useState(0)
   const [isMuted, setIsMuted] = useState(true)
   const [query, setQuery] = useState('')
+  const [iptvSource, setIptvSource] = useState<IptvSource>(() => readStoredValue(IPTV_SOURCE_KEY) === 'xtream' ? 'xtream' : 'm3u')
   const [m3uUrl, setM3uUrl] = useState(() => readStoredValue(M3U_URL_KEY))
+  const [xtream, setXtream] = useState<XtreamCredentials>(() => readStoredJson<XtreamCredentials>(XTREAM_KEY, defaultXtream))
   const [playlist, setPlaylist] = useState<PlaylistSession | null>(null)
   const [playlistState, setPlaylistState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [playlistError, setPlaylistError] = useState('')
   const [selectedGroup, setSelectedGroup] = useState('Todos')
   const [selectedChannelId, setSelectedChannelId] = useState('')
+  const [radioReplayItem, setRadioReplayItem] = useState<PlayerItem | null>(null)
+  const [copeBufferState, setCopeBufferState] = useState<'idle' | 'recording' | 'blocked'>('idle')
+  const [copeBufferSeconds, setCopeBufferSeconds] = useState(0)
 
   const selectedNative = useMemo(
     () => verifiedFeeds.find((feed) => feed.id === selectedNativeId) || verifiedFeeds[0],
     [selectedNativeId],
+  )
+
+  const selectedRadio = useMemo(
+    () => radioStations.find((station) => station.id === selectedRadioId) || radioStations[0],
+    [selectedRadioId],
   )
 
   const filteredNativeFeeds = useMemo(() => {
@@ -324,6 +462,15 @@ export function App() {
 
     return verifiedFeeds.filter((feed) =>
       `${feed.name} ${feed.group} ${feed.region} ${feed.source}`.toLowerCase().includes(normalized),
+    )
+  }, [query, view])
+
+  const filteredRadioStations = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized || view !== 'radios') return radioStations
+
+    return radioStations.filter((station) =>
+      `${station.name} ${station.category} ${station.source}`.toLowerCase().includes(normalized),
     )
   }, [query, view])
 
@@ -348,9 +495,16 @@ export function App() {
     [filteredChannels, playlist, selectedChannelId],
   )
 
-  const activeItem = view === 'iptv' && selectedChannel
+  const activeItem: PlayerItem = view === 'iptv' && selectedChannel
     ? channelToPlayerItem(selectedChannel)
-    : selectedNative
+    : view === 'radios'
+      ? radioReplayItem || radioToPlayerItem(selectedRadio)
+      : selectedNative
+
+  const radioRewindMinutes = useMemo(() => {
+    const maxMinutes = (selectedRadio.rewindHours || 0) * 60
+    return RADIO_REWIND_OPTIONS.filter((minutes) => minutes <= maxMinutes)
+  }, [selectedRadio.rewindHours])
 
   const groupedLinks = useMemo(() => {
     return externalLinks.reduce<Record<string, ExternalFeedLink[]>>((groups, link) => {
@@ -382,6 +536,10 @@ export function App() {
   }, [view])
 
   useEffect(() => {
+    setQuery('')
+  }, [view])
+
+  useEffect(() => {
     if (typeof window === 'undefined') return
 
     window.localStorage.setItem(LAST_NATIVE_KEY, selectedNativeId)
@@ -390,8 +548,26 @@ export function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    window.localStorage.setItem(LAST_RADIO_KEY, selectedRadioId)
+  }, [selectedRadioId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    window.localStorage.setItem(IPTV_SOURCE_KEY, iptvSource)
+  }, [iptvSource])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
     window.localStorage.setItem(M3U_URL_KEY, m3uUrl)
   }, [m3uUrl])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    window.localStorage.setItem(XTREAM_KEY, JSON.stringify(xtream))
+  }, [xtream])
 
   useEffect(() => {
     const video = videoRef.current
@@ -405,6 +581,13 @@ export function App() {
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
+      }
+    }
+    const destroyShaka = async () => {
+      const dashPlayer = shakaRef.current
+      if (dashPlayer) {
+        shakaRef.current = null
+        await dashPlayer.destroy().catch(() => undefined)
       }
     }
 
@@ -439,6 +622,7 @@ export function App() {
 
     async function loadStream() {
       destroyHls()
+      await destroyShaka()
       setPlayerState('loading')
       setPlayerError('')
       media.pause()
@@ -451,8 +635,58 @@ export function App() {
       media.addEventListener('error', markVideoError)
 
       const isHls = /\.m3u8?($|\?)/i.test(streamUrl)
+      const isDash = /\.mpd($|\?)/i.test(streamUrl)
 
       if (!isHls) {
+        if (isDash) {
+          const imported = await import('shaka-player')
+          if (cancelled) return
+
+          const shakaModule = (imported as unknown as { default?: Record<string, unknown> })?.default ?? imported
+          const shakaApi = shakaModule as {
+            polyfill?: { installAll?: () => void }
+            Player?: new () => DashPlayer
+          }
+
+          shakaApi.polyfill?.installAll?.()
+          if (!shakaApi.Player) {
+            setPlayerState('error')
+            setPlayerError('Player DASH indisponivel neste navegador.')
+            return
+          }
+
+          const dashPlayer = new shakaApi.Player()
+          dashPlayer.configure?.({
+            manifest: {
+              dash: {
+                initialSegmentLimit: DASH_REWIND_SEGMENT_LIMIT,
+              },
+            },
+          })
+          shakaRef.current = dashPlayer
+          await dashPlayer.attach(media)
+          if (cancelled) {
+            await dashPlayer.destroy().catch(() => undefined)
+            return
+          }
+
+          await dashPlayer.load(streamUrl)
+          if (cancelled) {
+            await dashPlayer.destroy().catch(() => undefined)
+            return
+          }
+
+          const seekRange = getMediaSeekRange(media, dashPlayer)
+          if (seekRange) {
+            media.currentTime = seekRange.end
+          } else {
+            dashPlayer.goToLive?.()
+          }
+
+          await playWhenPossible()
+          return
+        }
+
         media.src = streamUrl
         media.load()
         await playWhenPossible()
@@ -515,8 +749,63 @@ export function App() {
       media.removeEventListener('waiting', markWaiting)
       media.removeEventListener('error', markVideoError)
       destroyHls()
+      void destroyShaka()
     }
-  }, [activeItem?.streamUrl, isMuted, reloadToken])
+  }, [activeItem?.id, activeItem?.streamUrl, isMuted, reloadToken])
+
+  useEffect(() => {
+    copeBufferAbortRef.current?.abort()
+    copeBufferChunksRef.current = []
+    setCopeBufferSeconds(0)
+
+    if (view !== 'radios' || selectedRadio.id !== 'cope-es') {
+      setCopeBufferState('idle')
+      return
+    }
+
+    const controller = new AbortController()
+    copeBufferAbortRef.current = controller
+    setCopeBufferState('recording')
+
+    const pruneBuffer = () => {
+      const cutoff = Date.now() - COPE_REWIND_LIMIT_MS
+      copeBufferChunksRef.current = copeBufferChunksRef.current.filter((entry) => entry.at >= cutoff)
+      const firstChunk = copeBufferChunksRef.current[0]
+      setCopeBufferSeconds(firstChunk ? Math.max(0, Math.floor((Date.now() - firstChunk.at) / 1000)) : 0)
+    }
+
+    const timer = window.setInterval(pruneBuffer, 10_000)
+
+    async function recordCopeBuffer() {
+      try {
+        const response = await fetch(selectedRadio.streamUrl, {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+
+        if (!response.ok || !response.body) {
+          throw new Error('Sem corpo de audio para buffer.')
+        }
+
+        const reader = response.body.getReader()
+        while (!controller.signal.aborted) {
+          const result = await reader.read()
+          if (result.done) break
+          copeBufferChunksRef.current.push({ at: Date.now(), chunk: result.value })
+          pruneBuffer()
+        }
+      } catch {
+        if (!controller.signal.aborted) setCopeBufferState('blocked')
+      }
+    }
+
+    void recordCopeBuffer()
+
+    return () => {
+      window.clearInterval(timer)
+      controller.abort()
+    }
+  }, [selectedRadio.id, selectedRadio.streamUrl, view])
 
   async function loadPlaylist(event: Event) {
     event.preventDefault()
@@ -534,6 +823,31 @@ export function App() {
     } catch (error) {
       setPlaylistState('error')
       setPlaylistError(error instanceof Error ? error.message : 'Nao foi possivel carregar a playlist.')
+    }
+  }
+
+  async function loadXtream(event: Event) {
+    event.preventDefault()
+    const controller = new AbortController()
+
+    try {
+      setPlaylistState('loading')
+      setPlaylistError('')
+      const nextPlaylist = await fetchXtreamPlaylist(
+        {
+          ...xtream,
+          proxyUrl: xtream.proxyUrl?.trim() || DEFAULT_XTREAM_PROXY_URL,
+        },
+        controller.signal,
+      )
+      setPlaylist(nextPlaylist)
+      setSelectedGroup('Todos')
+      setSelectedChannelId(nextPlaylist.channels[0]?.id || '')
+      setPlaylistState('ready')
+      setView('iptv')
+    } catch (error) {
+      setPlaylistState('error')
+      setPlaylistError(error instanceof Error ? error.message : 'Nao foi possivel entrar no Xtream.')
     }
   }
 
@@ -557,9 +871,108 @@ export function App() {
     setView('live')
   }
 
+  function selectRadio(radioId: string) {
+    setRadioReplayItem(null)
+    setSelectedRadioId(radioId)
+    setView('radios')
+  }
+
   function selectChannel(channelId: string) {
     setSelectedChannelId(channelId)
     setView('iptv')
+  }
+
+  function playCopeReplay(minutesBack: number) {
+    const targetTime = Date.now() - minutesBack * 60_000
+    const chunks = copeBufferChunksRef.current.filter((entry) => entry.at >= targetTime)
+
+    if (!chunks.length) {
+      setPlayerError('Ainda nao ha buffer suficiente da COPE para esse ponto.')
+      return
+    }
+
+    if (replayUrlRef.current) URL.revokeObjectURL(replayUrlRef.current)
+    const replayUrl = URL.createObjectURL(new Blob(
+      chunks.map((entry) => {
+        const copy = new Uint8Array(entry.chunk.byteLength)
+        copy.set(entry.chunk)
+        return copy.buffer
+      }),
+      { type: 'audio/mpeg' },
+    ))
+    replayUrlRef.current = replayUrl
+    setRadioReplayItem({
+      ...radioToPlayerItem(selectedRadio),
+      id: `${selectedRadio.id}:replay:${minutesBack}`,
+      name: `${selectedRadio.name} - replay`,
+      streamUrl: replayUrl,
+      href: selectedRadio.href,
+      note: `Replay local da COPE a partir de aproximadamente ${minutesBack} min atras. O buffer existe enquanto esta aba fica aberta.`,
+    })
+    setReloadToken((current) => current + 1)
+  }
+
+  function seekRadioRewind(minutesBack: number) {
+    if (selectedRadio.id === 'cope-es') {
+      playCopeReplay(minutesBack)
+      return
+    }
+
+    const video = videoRef.current
+    const dashPlayer = shakaRef.current
+    if (!video || !dashPlayer || !selectedRadio.streamUrl.toLowerCase().includes('.mpd')) {
+      setPlayerState('error')
+      setPlayerError('Esta radio nao tem arquivo nativo de 2 horas. Use BBC ou COPE com buffer aberto.')
+      return
+    }
+
+    const seekRange = getMediaSeekRange(video, dashPlayer)
+    if (!seekRange) {
+      setPlayerState('error')
+      setPlayerError('O player ainda esta preparando a janela de rewind. Tente de novo em alguns segundos.')
+      return
+    }
+
+    const windowSeconds = seekRange.end - seekRange.start
+    const offsetSeconds = minutesBack * 60
+    if (!Number.isFinite(windowSeconds) || windowSeconds <= 0) {
+      setPlayerState('error')
+      setPlayerError('O player ainda esta preparando a janela de rewind. Tente de novo em alguns segundos.')
+      return
+    }
+
+    if (windowSeconds < offsetSeconds) {
+      setPlayerError(`Esta radio liberou apenas ${Math.floor(windowSeconds / 60)} min de rewind agora.`)
+    } else {
+      setPlayerError('')
+    }
+
+    video.currentTime = Math.max(seekRange.start, seekRange.end - offsetSeconds)
+    void video.play().then(() => setPlayerState('playing')).catch(() => setPlayerState('ready'))
+  }
+
+  function returnRadioLive() {
+    if (replayUrlRef.current) {
+      URL.revokeObjectURL(replayUrlRef.current)
+      replayUrlRef.current = ''
+    }
+    setRadioReplayItem(null)
+
+    const video = videoRef.current
+    const dashPlayer = shakaRef.current
+    if (selectedRadio.streamUrl.toLowerCase().includes('.mpd') && video && dashPlayer) {
+      const seekRange = getMediaSeekRange(video, dashPlayer)
+      if (seekRange) {
+        video.currentTime = seekRange.end
+      } else {
+        dashPlayer.goToLive?.()
+      }
+      void video.play().then(() => setPlayerState('playing')).catch(() => setPlayerState('ready'))
+      setPlayerError('')
+      return
+    }
+
+    setReloadToken((current) => current + 1)
   }
 
   const statusLabel = {
@@ -575,7 +988,7 @@ export function App() {
       <header class="app-topbar">
         <div>
           <h1>IPTV Pages Hub</h1>
-          <p>Player nativo leve com feeds testados e playlist M3U.</p>
+          <p>Player nativo leve com feeds testados, IPTV Xtream/M3U e radios.</p>
         </div>
         <nav aria-label="Navegacao principal" class="view-tabs">
           {(Object.keys(viewLabels) as AppView[]).map((item) => (
@@ -593,9 +1006,17 @@ export function App() {
 
       <main class="workspace">
         <section class="player-panel" aria-label="Player nativo">
-          <div class="player-frame">
+          <div class={classNames('player-frame', activeItem.mode === 'radio' && 'audio-frame')}>
+            {activeItem.mode === 'radio' ? (
+              <div class="audio-cover">
+                <span>{activeItem.name.slice(0, 2).toUpperCase()}</span>
+                <strong>{activeItem.name}</strong>
+                <small>{activeItem.source}</small>
+              </div>
+            ) : null}
             <video
               autoPlay
+              key={activeItem.streamUrl}
               ref={videoRef}
               controls
               muted={isMuted}
@@ -656,12 +1077,12 @@ export function App() {
           <div class="guide-head">
             <div>
               <span class="kicker">{viewLabels[view]}</span>
-              <h2>{view === 'links' ? 'Fontes externas' : 'Guia'}</h2>
+              <h2>{view === 'links' ? 'Fontes externas' : view === 'radios' ? 'Radios' : 'Guia'}</h2>
             </div>
             <label class="search-box">
               <Icon name="search" />
               <input
-                placeholder={view === 'iptv' ? 'Buscar na playlist' : 'Buscar feed'}
+                placeholder={view === 'iptv' ? 'Buscar na playlist' : view === 'radios' ? 'Buscar radio' : 'Buscar feed'}
                 value={query}
                 onInput={(event) => setQuery((event.currentTarget as HTMLInputElement).value)}
               />
@@ -680,7 +1101,7 @@ export function App() {
                   <span class="channel-mark">{feed.name.slice(0, 2).toUpperCase()}</span>
                   <span>
                     <strong>{feed.name}</strong>
-                    <small>{feed.region} · {feed.source}</small>
+                    <small>{feed.region} - {feed.source}</small>
                   </span>
                   <em>{feed.quality}</em>
                 </button>
@@ -690,20 +1111,79 @@ export function App() {
 
           {view === 'iptv' ? (
             <div class="iptv-panel">
-              <form class="playlist-form" onSubmit={loadPlaylist}>
-                <label>
-                  <span>Playlist M3U</span>
-                  <input
-                    placeholder="https://exemplo.com/lista.m3u"
-                    value={m3uUrl}
-                    onInput={(event) => setM3uUrl((event.currentTarget as HTMLInputElement).value)}
-                  />
-                </label>
-                <button disabled={playlistState === 'loading' || !m3uUrl.trim()} type="submit">
-                  <Icon name="list" />
-                  Carregar
-                </button>
-              </form>
+              <div class="source-tabs">
+                <button class={classNames(iptvSource === 'm3u' && 'active')} type="button" onClick={() => setIptvSource('m3u')}>M3U</button>
+                <button class={classNames(iptvSource === 'xtream' && 'active')} type="button" onClick={() => setIptvSource('xtream')}>Xtream</button>
+              </div>
+
+              {iptvSource === 'm3u' ? (
+                <form class="playlist-form" onSubmit={loadPlaylist}>
+                  <label>
+                    <span>Playlist M3U</span>
+                    <input
+                      placeholder="https://exemplo.com/lista.m3u"
+                      value={m3uUrl}
+                      onInput={(event) => setM3uUrl((event.currentTarget as HTMLInputElement).value)}
+                    />
+                  </label>
+                  <button disabled={playlistState === 'loading' || !m3uUrl.trim()} type="submit">
+                    <Icon name="list" />
+                    Carregar
+                  </button>
+                </form>
+              ) : (
+                <form class="playlist-form" onSubmit={loadXtream}>
+                  <label>
+                    <span>Servidor</span>
+                    <input
+                      placeholder="https://servidor.com:8080"
+                      value={xtream.serverUrl}
+                      onInput={(event) => setXtream((current) => ({ ...current, serverUrl: (event.currentTarget as HTMLInputElement).value }))}
+                    />
+                  </label>
+                  <div class="form-grid">
+                    <label>
+                      <span>Usuario</span>
+                      <input
+                        value={xtream.username}
+                        onInput={(event) => setXtream((current) => ({ ...current, username: (event.currentTarget as HTMLInputElement).value }))}
+                      />
+                    </label>
+                    <label>
+                      <span>Senha</span>
+                      <input
+                        type="password"
+                        value={xtream.password}
+                        onInput={(event) => setXtream((current) => ({ ...current, password: (event.currentTarget as HTMLInputElement).value }))}
+                      />
+                    </label>
+                  </div>
+                  <div class="form-grid">
+                    <label>
+                      <span>Formato</span>
+                      <select
+                        value={xtream.output}
+                        onChange={(event) => setXtream((current) => ({ ...current, output: (event.currentTarget as HTMLSelectElement).value as XtreamCredentials['output'] }))}
+                      >
+                        <option value="auto">auto</option>
+                        <option value="m3u8">m3u8</option>
+                        <option value="ts">ts</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Proxy</span>
+                      <input
+                        value={xtream.proxyUrl || ''}
+                        onInput={(event) => setXtream((current) => ({ ...current, proxyUrl: (event.currentTarget as HTMLInputElement).value }))}
+                      />
+                    </label>
+                  </div>
+                  <button disabled={playlistState === 'loading' || !xtream.serverUrl.trim() || !xtream.username.trim() || !xtream.password.trim()} type="submit">
+                    <Icon name="list" />
+                    Entrar
+                  </button>
+                </form>
+              )}
 
               {playlist ? (
                 <div class="playlist-tools">
@@ -746,6 +1226,65 @@ export function App() {
                   <p>Carregue uma playlist para montar o guia IPTV.</p>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+
+          {view === 'radios' ? (
+            <div class="radio-panel">
+              {selectedRadio.rewindHours ? (
+                <div class="radio-rewind-card">
+                  <div>
+                    <strong>{selectedRadio.id === 'cope-es' ? 'Buffer local COPE' : 'Rewind da radio'}</strong>
+                    <small>
+                      {selectedRadio.id === 'cope-es'
+                        ? copeBufferState === 'recording'
+                          ? `${Math.floor(copeBufferSeconds / 60)} min gravados nesta aba. Para 2 h, deixe a COPE aberta ate completar 120 min.`
+                          : copeBufferState === 'blocked'
+                            ? 'O navegador bloqueou o buffer local'
+                            : 'Abra a COPE para iniciar o buffer'
+                        : `Janela nativa de ate ${selectedRadio.rewindHours} h no stream DASH. Use 2 h para voltar direto.`}
+                    </small>
+                  </div>
+                  <div class="rewind-actions">
+                    {radioRewindMinutes.map((minutes) => (
+                      <button
+                        disabled={selectedRadio.id === 'cope-es' && copeBufferSeconds < minutes * 60}
+                        key={minutes}
+                        type="button"
+                        onClick={() => seekRadioRewind(minutes)}
+                      >
+                        {formatRewindLabel(minutes)}
+                      </button>
+                    ))}
+                    <button disabled={selectedRadio.id === 'cope-es' && !radioReplayItem} type="button" onClick={returnRadioLive}>Ao vivo</button>
+                  </div>
+                </div>
+              ) : (
+                <div class="radio-rewind-card">
+                  <div>
+                    <strong>Sem rewind nativo</strong>
+                    <small>Esta origem e apenas ao vivo. Para voltar 2 h direto, use as radios BBC; na COPE o buffer comeca quando a aba fica aberta.</small>
+                  </div>
+                </div>
+              )}
+
+              <div class="channel-list">
+                {filteredRadioStations.map((station) => (
+                  <button
+                    class={classNames('channel-row', selectedRadio.id === station.id && !radioReplayItem && 'selected')}
+                    key={station.id}
+                    type="button"
+                    onClick={() => selectRadio(station.id)}
+                  >
+                    <span class="channel-mark">{station.name.slice(0, 2).toUpperCase()}</span>
+                    <span>
+                      <strong>{station.name}</strong>
+                      <small>{station.category} - {station.source}</small>
+                    </span>
+                    <em>{station.streamUrl.toLowerCase().includes('.mpd') ? 'DASH' : 'Audio'}</em>
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
 
