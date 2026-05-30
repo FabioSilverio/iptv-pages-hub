@@ -1,6 +1,7 @@
 import type Hls from 'hls.js'
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import {
+  buildProxyUrl,
   fetchM3UPlaylist,
   fetchXtreamPlaylist,
   type Channel,
@@ -51,6 +52,7 @@ interface PlayerItem {
   source: string
   href: string
   streamUrl: string
+  fallbackStreamUrl?: string
   note: string
   mode?: 'tv' | 'radio'
   rewindHours?: number
@@ -367,6 +369,57 @@ function getMediaSeekRange(media: HTMLMediaElement, dashPlayer?: DashPlayer | nu
   return dashPlayer?.seekRange()
 }
 
+function getProxyTargetUrl(requestUrl: string) {
+  try {
+    return new URL(requestUrl).searchParams.get('url')
+  } catch {
+    return null
+  }
+}
+
+function getProxyBaseFromRequest(requestUrl: string) {
+  try {
+    const url = new URL(requestUrl)
+    return `${url.origin}${url.pathname.replace(/\/proxy$/, '')}`
+  } catch {
+    return ''
+  }
+}
+
+function shouldRewritePlaylistUrl(rawUrl: string) {
+  return !/^(blob:|data:|skd:|urn:)/i.test(rawUrl)
+}
+
+function rewriteHlsManifestUrls(manifestText: string, requestUrl: string) {
+  const targetUrl = getProxyTargetUrl(requestUrl)
+  const proxyBase = getProxyBaseFromRequest(requestUrl)
+  if (!targetUrl || !proxyBase) return manifestText
+
+  const absolutizeAndProxy = (rawUrl: string) => {
+    if (!rawUrl || !shouldRewritePlaylistUrl(rawUrl)) return rawUrl
+
+    try {
+      return buildProxyUrl(proxyBase, new URL(rawUrl, targetUrl).href)
+    } catch {
+      return rawUrl
+    }
+  }
+
+  return manifestText
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return line
+
+      if (trimmed.startsWith('#')) {
+        return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => `URI="${absolutizeAndProxy(uri)}"`)
+      }
+
+      return absolutizeAndProxy(trimmed)
+    })
+    .join('\n')
+}
+
 function channelToPlayerItem(channel: Channel): PlayerItem {
   return {
     id: channel.id,
@@ -377,6 +430,7 @@ function channelToPlayerItem(channel: Channel): PlayerItem {
     source: channel.tvgId || channel.group || 'M3U',
     href: channel.streamUrl,
     streamUrl: channel.streamUrl,
+    fallbackStreamUrl: channel.fallbackStreamUrl,
     note: channel.logo ? 'Canal carregado da playlist importada.' : 'Canal da playlist importada.',
   }
 }
@@ -707,11 +761,38 @@ export function App() {
         return
       }
 
+      const BasePlaylistLoader = HlsClient.DefaultConfig.loader
+      const ProxiedPlaylistLoader = class extends BasePlaylistLoader {
+        load(context: unknown, config: unknown, callbacks: unknown) {
+          const loaderContext = context as { url?: string }
+          const loaderCallbacks = callbacks as {
+            onSuccess?: (response: { data?: unknown }, stats: unknown, context: unknown, networkDetails: unknown) => void
+          }
+          const wrappedCallbacks = {
+            ...(loaderCallbacks as Record<string, unknown>),
+            onSuccess: (
+              response: { data?: unknown },
+              stats: unknown,
+              successContext: unknown,
+              networkDetails: unknown,
+            ) => {
+              if (typeof response.data === 'string' && loaderContext.url) {
+                response.data = rewriteHlsManifestUrls(response.data, loaderContext.url)
+              }
+              loaderCallbacks.onSuccess?.(response, stats, successContext, networkDetails)
+            },
+          }
+
+          super.load(context as never, config as never, wrappedCallbacks as never)
+        }
+      }
+
       const hls = new HlsClient({
         enableWorker: true,
         lowLatencyMode: true,
         backBufferLength: 60,
         liveSyncDurationCount: 3,
+        pLoader: ProxiedPlaylistLoader as never,
       })
 
       hlsRef.current = hls
