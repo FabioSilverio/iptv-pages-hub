@@ -333,6 +333,20 @@ function readStoredJson<T>(key: string, fallback: T): T {
   }
 }
 
+function readStoredArray<T>(key: string): T[] {
+  if (typeof window === 'undefined') return []
+
+  try {
+    const rawValue = window.localStorage.getItem(key)
+    if (!rawValue) return []
+
+    const parsed = JSON.parse(rawValue)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 function viewFromHash(hash: string): AppView | null {
   const value = hash.replace('#', '')
   return value === 'iptv' || value === 'links' || value === 'live' || value === 'radios' ? value : null
@@ -501,7 +515,7 @@ export function App() {
   const [playlistError, setPlaylistError] = useState('')
   const [selectedGroup, setSelectedGroup] = useState('Todos')
   const [selectedChannelId, setSelectedChannelId] = useState('')
-  const [favoriteChannels, setFavoriteChannels] = useState<FavoriteChannel[]>(() => readStoredJson<FavoriteChannel[]>(FAVORITE_CHANNELS_KEY, []))
+  const [favoriteChannels, setFavoriteChannels] = useState<FavoriteChannel[]>(() => readStoredArray<FavoriteChannel>(FAVORITE_CHANNELS_KEY))
   const [showFavorites, setShowFavorites] = useState(false)
   const [radioReplayItem, setRadioReplayItem] = useState<PlayerItem | null>(null)
   const [copeBufferState, setCopeBufferState] = useState<'idle' | 'recording' | 'blocked'>('idle')
@@ -595,6 +609,13 @@ export function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return
 
+    window.history.scrollRestoration = 'manual'
+    window.scrollTo({ left: 0, top: 0 })
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
     const syncViewFromHash = () => {
       const hashView = viewFromHash(window.location.hash)
       if (hashView) setView(hashView)
@@ -615,6 +636,7 @@ export function App() {
 
   useEffect(() => {
     setQuery('')
+    if (typeof window !== 'undefined') window.scrollTo({ left: 0, top: 0 })
   }, [view])
 
   useEffect(() => {
