@@ -58,12 +58,15 @@ interface PlayerItem {
   rewindHours?: number
 }
 
+type FavoriteChannel = Channel & { savedAt: string }
+
 const M3U_URL_KEY = 'iptv-pages-lite.m3u-url'
 const XTREAM_KEY = 'iptv-pages-lite.xtream'
 const IPTV_SOURCE_KEY = 'iptv-pages-lite.iptv-source'
 const LAST_NATIVE_KEY = 'iptv-pages-lite.last-native'
 const LAST_RADIO_KEY = 'iptv-pages-lite.last-radio'
 const LAST_VIEW_KEY = 'iptv-pages-lite.view'
+const FAVORITE_CHANNELS_KEY = 'iptv-pages-lite.favorite-channels'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const COPE_REWIND_LIMIT_MS = 5 * 60 * 60 * 1000
 const DASH_REWIND_SEGMENT_LIMIT = 4000
@@ -455,7 +458,7 @@ function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')
 }
 
-function Icon({ name }: { name: 'play' | 'reload' | 'external' | 'search' | 'list' | 'link' }) {
+function Icon({ name }: { name: 'play' | 'reload' | 'external' | 'search' | 'list' | 'link' | 'star' }) {
   const paths = {
     play: <path d="M8 5v14l11-7z" />,
     reload: <path d="M20 6v5h-5M4 18v-5h5M18.7 9A7 7 0 0 0 6.2 6.7L4 9m2 6a7 7 0 0 0 11.8 2.3L20 15" />,
@@ -463,6 +466,7 @@ function Icon({ name }: { name: 'play' | 'reload' | 'external' | 'search' | 'lis
     search: <path d="m21 21-4.3-4.3M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4z" />,
     list: <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" />,
     link: <path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" />,
+    star: <path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6-5.4-2.9-5.4 2.9 1-6-4.4-4.3 6.1-.9z" />,
   }
 
   return (
@@ -476,6 +480,7 @@ export function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<Hls | null>(null)
   const shakaRef = useRef<DashPlayer | null>(null)
+  const mpegtsRef = useRef<{ destroy: () => void } | null>(null)
   const copeBufferAbortRef = useRef<AbortController | null>(null)
   const copeBufferChunksRef = useRef<Array<{ at: number; chunk: Uint8Array }>>([])
   const replayUrlRef = useRef('')
@@ -496,6 +501,8 @@ export function App() {
   const [playlistError, setPlaylistError] = useState('')
   const [selectedGroup, setSelectedGroup] = useState('Todos')
   const [selectedChannelId, setSelectedChannelId] = useState('')
+  const [favoriteChannels, setFavoriteChannels] = useState<FavoriteChannel[]>(() => readStoredJson<FavoriteChannel[]>(FAVORITE_CHANNELS_KEY, []))
+  const [showFavorites, setShowFavorites] = useState(false)
   const [radioReplayItem, setRadioReplayItem] = useState<PlayerItem | null>(null)
   const [copeBufferState, setCopeBufferState] = useState<'idle' | 'recording' | 'blocked'>('idle')
   const [copeBufferSeconds, setCopeBufferSeconds] = useState(0)
@@ -544,9 +551,26 @@ export function App() {
       .slice(0, 400)
   }, [playlist, query, selectedGroup])
 
+  const filteredFavoriteChannels = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    const channels = normalized
+      ? favoriteChannels.filter((channel) =>
+        `${channel.name} ${channel.group} ${channel.tvgId || ''}`.toLowerCase().includes(normalized),
+      )
+      : favoriteChannels
+
+    return channels.slice(0, 400)
+  }, [favoriteChannels, query])
+
+  const displayedChannels = showFavorites ? filteredFavoriteChannels : filteredChannels
+
   const selectedChannel = useMemo(
-    () => playlist?.channels.find((channel) => channel.id === selectedChannelId) || filteredChannels[0] || null,
-    [filteredChannels, playlist, selectedChannelId],
+    () =>
+      playlist?.channels.find((channel) => channel.id === selectedChannelId)
+      || favoriteChannels.find((channel) => channel.id === selectedChannelId)
+      || displayedChannels[0]
+      || null,
+    [displayedChannels, favoriteChannels, playlist, selectedChannelId],
   )
 
   const activeItem: PlayerItem = view === 'iptv' && selectedChannel
@@ -624,6 +648,12 @@ export function App() {
   }, [xtream])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    window.localStorage.setItem(FAVORITE_CHANNELS_KEY, JSON.stringify(favoriteChannels))
+  }, [favoriteChannels])
+
+  useEffect(() => {
     const video = videoRef.current
     const streamUrl = activeItem?.streamUrl
     let cancelled = false
@@ -635,6 +665,12 @@ export function App() {
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
+      }
+    }
+    const destroyMpegts = () => {
+      if (mpegtsRef.current) {
+        mpegtsRef.current.destroy()
+        mpegtsRef.current = null
       }
     }
     const destroyShaka = async () => {
@@ -676,6 +712,7 @@ export function App() {
 
     async function loadStream() {
       destroyHls()
+      destroyMpegts()
       await destroyShaka()
       setPlayerState('loading')
       setPlayerError('')
@@ -690,6 +727,7 @@ export function App() {
 
       const isHls = /\.m3u8?($|\?)/i.test(streamUrl)
       const isDash = /\.mpd($|\?)/i.test(streamUrl)
+      const isTransportStream = /\.(ts|flv)($|\?)/i.test(streamUrl)
 
       if (!isHls) {
         if (isDash) {
@@ -737,6 +775,22 @@ export function App() {
             dashPlayer.goToLive?.()
           }
 
+          await playWhenPossible()
+          return
+        }
+
+        if (isTransportStream) {
+          const { default: mpegts } = await import('mpegts.js')
+          if (cancelled) return
+
+          const player = mpegts.createPlayer({
+            type: streamUrl.toLowerCase().includes('.flv') ? 'flv' : 'mpegts',
+            isLive: true,
+            url: streamUrl,
+          })
+          mpegtsRef.current = player
+          player.attachMediaElement(media)
+          player.load()
           await playWhenPossible()
           return
         }
@@ -801,16 +855,42 @@ export function App() {
       hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
         void playWhenPossible()
       })
-      hls.on(HlsClient.Events.ERROR, (_event, data: { fatal?: boolean; type?: string }) => {
+      let triedFallback = false
+      const loadFallback = () => {
+        if (!activeItem.fallbackStreamUrl || triedFallback) return false
+        triedFallback = true
+        hls.destroy()
+        hlsRef.current = null
+        setPlayerError('HLS falhou; tentando stream alternativo do Xtream.')
+        void (async () => {
+          const fallbackUrl = activeItem.fallbackStreamUrl!
+          const { default: mpegts } = await import('mpegts.js')
+          if (cancelled) return
+          const player = mpegts.createPlayer({
+            type: fallbackUrl.toLowerCase().includes('.flv') ? 'flv' : 'mpegts',
+            isLive: true,
+            url: fallbackUrl,
+          })
+          mpegtsRef.current = player
+          player.attachMediaElement(media)
+          player.load()
+          await playWhenPossible()
+        })()
+        return true
+      }
+
+      hls.on(HlsClient.Events.ERROR, (_event, data: { fatal?: boolean; type?: string; details?: string }) => {
         if (!data.fatal) return
 
         if (data.type === 'networkError') {
+          if (loadFallback()) return
           setPlayerError('Oscilacao de rede. Tentando religar a stream.')
           hls.startLoad()
           return
         }
 
         if (data.type === 'mediaError') {
+          if (loadFallback()) return
           setPlayerError('Erro de midia. Recuperando o player.')
           hls.recoverMediaError()
           return
@@ -830,9 +910,10 @@ export function App() {
       media.removeEventListener('waiting', markWaiting)
       media.removeEventListener('error', markVideoError)
       destroyHls()
+      destroyMpegts()
       void destroyShaka()
     }
-  }, [activeItem?.id, activeItem?.streamUrl, isMuted, reloadToken])
+  }, [activeItem?.fallbackStreamUrl, activeItem?.id, activeItem?.streamUrl, isMuted, reloadToken])
 
   useEffect(() => {
     copeBufferAbortRef.current?.abort()
@@ -961,6 +1042,26 @@ export function App() {
   function selectChannel(channelId: string) {
     setSelectedChannelId(channelId)
     setView('iptv')
+  }
+
+  function isFavoriteChannel(channel: Channel) {
+    return favoriteChannels.some((favorite) => favorite.streamUrl === channel.streamUrl)
+  }
+
+  function toggleFavoriteChannel(channel: Channel) {
+    setFavoriteChannels((current) => {
+      if (current.some((favorite) => favorite.streamUrl === channel.streamUrl)) {
+        return current.filter((favorite) => favorite.streamUrl !== channel.streamUrl)
+      }
+
+      return [
+        {
+          ...channel,
+          savedAt: new Date().toISOString(),
+        },
+        ...current,
+      ]
+    })
   }
 
   function playCopeReplay(minutesBack: number) {
@@ -1266,42 +1367,73 @@ export function App() {
                 </form>
               )}
 
+              <div class="favorite-tabs">
+                <button class={classNames(!showFavorites && 'active')} type="button" onClick={() => setShowFavorites(false)}>Todos</button>
+                <button class={classNames(showFavorites && 'active')} type="button" onClick={() => setShowFavorites(true)}>
+                  <Icon name="star" />
+                  Favoritos
+                </button>
+              </div>
+
               {playlist ? (
-                <div class="playlist-tools">
-                  <select
-                    aria-label="Filtrar grupo"
-                    value={selectedGroup}
-                    onChange={(event) => setSelectedGroup((event.currentTarget as HTMLSelectElement).value)}
-                  >
-                    {playlistGroups.map((group) => (
-                      <option key={group} value={group}>{group}</option>
-                    ))}
-                  </select>
-                  <span>{filteredChannels.length} de {playlist.channels.length} canais</span>
+                <div class="playlist-toolbar">
+                  <div class="playlist-tools">
+                    <select
+                      aria-label="Filtrar grupo"
+                      disabled={showFavorites}
+                      value={selectedGroup}
+                      onChange={(event) => setSelectedGroup((event.currentTarget as HTMLSelectElement).value)}
+                    >
+                      {playlistGroups.map((group) => (
+                        <option key={group} value={group}>{group}</option>
+                      ))}
+                    </select>
+                    <span>
+                      {showFavorites
+                        ? `${filteredFavoriteChannels.length} de ${favoriteChannels.length} favoritos`
+                        : `${filteredChannels.length} de ${playlist.channels.length} canais`}
+                    </span>
+                  </div>
                 </div>
               ) : null}
 
               {playlistError ? <p class="inline-alert">{playlistError}</p> : null}
 
               <div class="channel-list">
-                {filteredChannels.map((channel) => (
-                  <button
-                    class={classNames('channel-row', selectedChannel?.id === channel.id && 'selected')}
-                    key={channel.id}
-                    type="button"
-                    onClick={() => selectChannel(channel.id)}
-                  >
-                    <span class="channel-mark">{channel.name.slice(0, 2).toUpperCase()}</span>
-                    <span>
-                      <strong>{channel.name}</strong>
-                      <small>{channel.group}</small>
-                    </span>
-                    <em>{channel.streamUrl.toLowerCase().includes('.m3u8') ? 'HLS' : 'Auto'}</em>
-                  </button>
+                {displayedChannels.map((channel) => (
+                  <div class={classNames('channel-item', selectedChannel?.id === channel.id && 'selected')} key={channel.id}>
+                    <button
+                      aria-label={isFavoriteChannel(channel) ? `Remover ${channel.name} dos favoritos` : `Favoritar ${channel.name}`}
+                      class={classNames('favorite-toggle', isFavoriteChannel(channel) && 'active')}
+                      type="button"
+                      onClick={() => toggleFavoriteChannel(channel)}
+                    >
+                      <Icon name="star" />
+                    </button>
+                    <button
+                      class="channel-row"
+                      type="button"
+                      onClick={() => selectChannel(channel.id)}
+                    >
+                      <span class="channel-mark">{channel.name.slice(0, 2).toUpperCase()}</span>
+                      <span>
+                        <strong>{channel.name}</strong>
+                        <small>{channel.group}</small>
+                      </span>
+                      <em>{channel.streamUrl.toLowerCase().includes('.m3u8') ? 'HLS' : channel.streamUrl.toLowerCase().includes('.ts') ? 'TS' : 'Auto'}</em>
+                    </button>
+                  </div>
                 ))}
               </div>
 
-              {!playlist && !playlistError ? (
+              {showFavorites && !favoriteChannels.length ? (
+                <div class="empty-panel">
+                  <Icon name="star" />
+                  <p>Toque na estrela de qualquer canal para salvar aqui.</p>
+                </div>
+              ) : null}
+
+              {!playlist && !playlistError && !showFavorites ? (
                 <div class="empty-panel">
                   <Icon name="list" />
                   <p>Carregue uma playlist para montar o guia IPTV.</p>
