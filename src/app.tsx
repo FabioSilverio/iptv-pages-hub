@@ -497,6 +497,7 @@ export function App() {
   const mpegtsRef = useRef<{ destroy: () => void } | null>(null)
   const copeBufferAbortRef = useRef<AbortController | null>(null)
   const copeBufferChunksRef = useRef<Array<{ at: number; chunk: Uint8Array }>>([])
+  const autoLoadedXtreamRef = useRef(false)
   const replayUrlRef = useRef('')
 
   const [view, setView] = useState<AppView>(() => readInitialView())
@@ -676,12 +677,21 @@ export function App() {
   }, [favoriteChannels])
 
   useEffect(() => {
+    if (autoLoadedXtreamRef.current || iptvSource !== 'xtream' || playlist) return
+    if (!xtream.serverUrl.trim() || !xtream.username.trim() || !xtream.password.trim()) return
+
+    autoLoadedXtreamRef.current = true
+    void connectXtream(xtream, { reason: 'auto' })
+  }, [iptvSource, playlist, xtream])
+
+  useEffect(() => {
     const video = videoRef.current
     const streamUrl = activeItem?.streamUrl
     let cancelled = false
 
     if (!video || !streamUrl) return
     const media = video
+    let fallbackProbeTimer = 0
 
     const destroyHls = () => {
       if (hlsRef.current) {
@@ -718,7 +728,11 @@ export function App() {
     const markVideoError = () => {
       if (!cancelled) {
         setPlayerState('error')
-        setPlayerError(media.error?.message || 'O navegador recusou essa stream.')
+        setPlayerError(
+          media.error?.message && !media.error.message.includes('PIPELINE_ERROR')
+            ? media.error.message
+            : 'O navegador recusou o codec dessa stream. Teste outro canal HD/SD ou outra saida do Xtream.',
+        )
       }
     }
 
@@ -874,16 +888,15 @@ export function App() {
       hlsRef.current = hls
       hls.attachMedia(media)
       hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(streamUrl))
-      hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
-        void playWhenPossible()
-      })
       let triedFallback = false
       const loadFallback = () => {
         if (!activeItem.fallbackStreamUrl || triedFallback) return false
         triedFallback = true
+        if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
         hls.destroy()
         hlsRef.current = null
-        setPlayerError('HLS falhou; tentando stream alternativo do Xtream.')
+        setPlayerState('loading')
+        setPlayerError('HLS nao firmou imagem; tentando stream TS do Xtream.')
         void (async () => {
           const fallbackUrl = activeItem.fallbackStreamUrl!
           const { default: mpegts } = await import('mpegts.js')
@@ -900,6 +913,27 @@ export function App() {
         })()
         return true
       }
+      const scheduleFallbackProbe = () => {
+        if (!activeItem.fallbackStreamUrl || triedFallback) return
+        if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
+
+        fallbackProbeTimer = window.setTimeout(() => {
+          if (cancelled || triedFallback || hlsRef.current !== hls) return
+
+          const hasDecodedVideo = media.videoWidth > 0 && media.videoHeight > 0
+          const hasBufferedEnough = media.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+          const hasStarted = media.currentTime > 1 || !media.paused
+
+          if (!hasDecodedVideo || !hasBufferedEnough || !hasStarted) {
+            loadFallback()
+          }
+        }, 9_000)
+      }
+
+      hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
+        void playWhenPossible()
+        scheduleFallbackProbe()
+      })
 
       hls.on(HlsClient.Events.ERROR, (_event, data: { fatal?: boolean; type?: string; details?: string }) => {
         if (!data.fatal) return
@@ -927,6 +961,7 @@ export function App() {
 
     return () => {
       cancelled = true
+      if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
       media.removeEventListener('canplay', markReady)
       media.removeEventListener('playing', markPlaying)
       media.removeEventListener('waiting', markWaiting)
@@ -1010,17 +1045,16 @@ export function App() {
     }
   }
 
-  async function loadXtream(event: Event) {
-    event.preventDefault()
+  async function connectXtream(credentials: XtreamCredentials, options?: { reason?: 'manual' | 'auto' }) {
     const controller = new AbortController()
 
     try {
       setPlaylistState('loading')
-      setPlaylistError('')
+      setPlaylistError(options?.reason === 'auto' ? 'Reconectando sua playlist Xtream salva...' : '')
       const nextPlaylist = await fetchXtreamPlaylist(
         {
-          ...xtream,
-          proxyUrl: xtream.proxyUrl?.trim() || DEFAULT_XTREAM_PROXY_URL,
+          ...credentials,
+          proxyUrl: credentials.proxyUrl?.trim() || DEFAULT_XTREAM_PROXY_URL,
         },
         controller.signal,
       )
@@ -1028,11 +1062,24 @@ export function App() {
       setSelectedGroup('Todos')
       setSelectedChannelId(nextPlaylist.channels[0]?.id || '')
       setPlaylistState('ready')
+      setPlaylistError('')
       setView('iptv')
     } catch (error) {
       setPlaylistState('error')
-      setPlaylistError(error instanceof Error ? error.message : 'Nao foi possivel entrar no Xtream.')
+      setPlaylistError(
+        error instanceof Error
+          ? error.message
+          : options?.reason === 'auto'
+            ? 'Nao foi possivel recarregar o Xtream salvo.'
+            : 'Nao foi possivel entrar no Xtream.',
+      )
     }
+  }
+
+  async function loadXtream(event: Event) {
+    event.preventDefault()
+    autoLoadedXtreamRef.current = true
+    await connectXtream(xtream, { reason: 'manual' })
   }
 
   async function playActiveVideo() {
