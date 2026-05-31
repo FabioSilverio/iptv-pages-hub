@@ -56,12 +56,7 @@ export default {
       return json({ error: 'Only http and https targets are supported.' }, 400, request)
     }
 
-    const upstream = await fetch(targetUrl.toString(), {
-      method: isHeadRequest ? 'GET' : request.method,
-      headers: buildUpstreamHeaders(request.headers, targetUrl),
-      body: canHaveBody(request.method) ? request.body : undefined,
-      redirect: 'follow',
-    })
+    const upstream = await fetchUpstreamWithHeaderFallback(request, targetUrl, isHeadRequest)
 
     const contentType = upstream.headers.get('content-type') || ''
     const isManifest =
@@ -410,6 +405,10 @@ function filterRequestHeaders(headers) {
 }
 
 function buildUpstreamHeaders(headers, targetUrl) {
+  return buildUpstreamHeadersForMode(headers, targetUrl, 'browser')
+}
+
+function buildUpstreamHeadersForMode(headers, targetUrl, mode) {
   const next = filterRequestHeaders(headers)
   const userAgent =
     headers.get('user-agent') ||
@@ -420,9 +419,18 @@ function buildUpstreamHeaders(headers, targetUrl) {
   next.set('accept-encoding', 'identity')
   next.set('cache-control', 'no-cache')
   next.set('pragma', 'no-cache')
-  next.set('origin', targetUrl.origin)
-  next.set('referer', `${targetUrl.origin}/`)
-  next.set('user-agent', userAgent)
+  next.set('user-agent', mode === 'vlc' ? 'VLC/3.0.20 LibVLC/3.0.20' : userAgent)
+
+  if (mode === 'browser') {
+    next.set('origin', targetUrl.origin)
+    next.set('referer', `${targetUrl.origin}/`)
+  } else {
+    next.delete('origin')
+    next.delete('referer')
+    next.delete('sec-fetch-dest')
+    next.delete('sec-fetch-mode')
+    next.delete('sec-fetch-site')
+  }
 
   if (requiresNbcHeaders(targetUrl)) {
     next.set('origin', 'https://www.nbc.com')
@@ -447,6 +455,54 @@ function buildUpstreamHeaders(headers, targetUrl) {
   }
 
   return next
+}
+
+async function fetchUpstreamWithHeaderFallback(request, targetUrl, isHeadRequest) {
+  const method = isHeadRequest ? 'GET' : request.method
+  const body = canHaveBody(request.method) ? request.body : undefined
+  const modes = canHaveBody(request.method) ? ['browser'] : ['browser', 'plain', 'vlc']
+  let lastResponse
+
+  for (const mode of modes) {
+    const upstream = await fetch(targetUrl.toString(), {
+      method,
+      headers: buildUpstreamHeadersForMode(request.headers, targetUrl, mode),
+      body,
+      redirect: 'follow',
+    })
+
+    if (!shouldRetryUpstreamStatus(upstream.status)) {
+      return upstream
+    }
+
+    lastResponse = upstream
+  }
+
+  return lastResponse
+}
+
+function shouldRetryUpstreamStatus(status) {
+  return [
+    403,
+    406,
+    408,
+    409,
+    425,
+    429,
+    451,
+    458,
+    500,
+    502,
+    503,
+    520,
+    521,
+    522,
+    523,
+    524,
+    525,
+    526,
+    530,
+  ].includes(status)
 }
 
 function requiresNbcHeaders(targetUrl) {

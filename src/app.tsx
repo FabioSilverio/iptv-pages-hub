@@ -939,6 +939,10 @@ export function App() {
             isLive: true,
             url: streamUrl,
           })
+          player.on(mpegts.Events.ERROR, () => {
+            if (switchToAlternateRoute()) return
+            markStalledStreamError()
+          })
           mpegtsRef.current = player
           player.attachMediaElement(media)
           player.load()
@@ -1025,6 +1029,9 @@ export function App() {
             type: hasPlayableExtension(fallbackUrl, /\.flv($|\?)/i) ? 'flv' : 'mpegts',
             isLive: true,
             url: fallbackUrl,
+          })
+          player.on(mpegts.Events.ERROR, () => {
+            markStalledStreamError()
           })
           mpegtsRef.current = player
           player.attachMediaElement(media)
