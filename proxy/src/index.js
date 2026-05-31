@@ -411,6 +411,18 @@ function filterRequestHeaders(headers) {
 
 function buildUpstreamHeaders(headers, targetUrl) {
   const next = filterRequestHeaders(headers)
+  const userAgent =
+    headers.get('user-agent') ||
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
+
+  next.set('accept', headers.get('accept') || '*/*')
+  next.set('accept-language', headers.get('accept-language') || 'en-US,en;q=0.9')
+  next.set('accept-encoding', 'identity')
+  next.set('cache-control', 'no-cache')
+  next.set('pragma', 'no-cache')
+  next.set('origin', targetUrl.origin)
+  next.set('referer', `${targetUrl.origin}/`)
+  next.set('user-agent', userAgent)
 
   if (requiresNbcHeaders(targetUrl)) {
     next.set('origin', 'https://www.nbc.com')
