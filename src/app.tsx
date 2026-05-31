@@ -707,6 +707,8 @@ export function App() {
     if (!video || !rawStreamUrl) return
     const media = video
     let fallbackProbeTimer = 0
+    let blackFrameTimer = 0
+    let lockedError = false
     const shouldPromoteHlsFallback =
       view === 'iptv'
       && iptvSource === 'xtream'
@@ -717,6 +719,9 @@ export function App() {
     const streamUrl = shouldPromoteHlsFallback ? activeItem.fallbackStreamUrl! : rawStreamUrl
     const fallbackStreamUrl = shouldPromoteHlsFallback ? rawStreamUrl : activeItem.fallbackStreamUrl
     const expectsVideo = activeItem.mode !== 'radio'
+    const codecHint = /\b(hevc|h\.?265|uhd|4k)\b/i.test(`${activeItem.name} ${activeItem.group} ${activeItem.source}`)
+      ? ' Este canal parece HEVC/H.265/UHD; Chrome/Edge geralmente nao mostram video nesse codec. Tente uma versao HD/H264 do mesmo canal.'
+      : ' Tente outra versao HD/H264 do mesmo canal.'
 
     const destroyHls = () => {
       if (hlsRef.current) {
@@ -739,14 +744,14 @@ export function App() {
     }
 
     const markReady = () => {
-      if (!cancelled) setPlayerState('ready')
+      if (!cancelled && !lockedError) setPlayerState('ready')
     }
     const hasVisiblePlayback = () => {
       if (!expectsVideo) return true
       return media.videoWidth > 0 && media.videoHeight > 0 && media.currentTime > 0.5
     }
     const markPlaying = () => {
-      if (!cancelled) {
+      if (!cancelled && !lockedError) {
         if (hasVisiblePlayback()) {
           setPlayerState('playing')
           setPlayerError('')
@@ -757,15 +762,23 @@ export function App() {
     }
     const markProgress = () => {
       if (!cancelled && hasVisiblePlayback()) {
+        if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
         setPlayerState('playing')
         setPlayerError('')
       }
     }
     const markWaiting = () => {
-      if (!cancelled) setPlayerState('loading')
+      if (!cancelled && !lockedError) setPlayerState('loading')
+    }
+    const markBlackFrameError = () => {
+      if (cancelled || hasVisiblePlayback()) return
+      lockedError = true
+      setPlayerState('error')
+      setPlayerError(`A stream abriu, mas nao entregou quadro de video no navegador.${codecHint}`)
     }
     const markVideoError = () => {
       if (!cancelled) {
+        lockedError = true
         setPlayerState('error')
         setPlayerError(
           media.error?.message && !media.error.message.includes('PIPELINE_ERROR')
@@ -773,6 +786,11 @@ export function App() {
             : 'O navegador recusou o codec dessa stream. Teste outro canal HD/SD ou outra saida do Xtream.',
         )
       }
+    }
+    const scheduleBlackFrameProbe = (delay = 8_000) => {
+      if (!expectsVideo) return
+      if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
+      blackFrameTimer = window.setTimeout(markBlackFrameError, delay)
     }
 
     const playWhenPossible = async () => {
@@ -869,12 +887,14 @@ export function App() {
           player.attachMediaElement(media)
           player.load()
           await playWhenPossible()
+          scheduleBlackFrameProbe()
           return
         }
 
         media.src = streamUrl
         media.load()
         await playWhenPossible()
+        scheduleBlackFrameProbe()
         return
       }
 
@@ -951,11 +971,11 @@ export function App() {
           player.attachMediaElement(media)
           player.load()
           await playWhenPossible()
+          scheduleBlackFrameProbe()
         })()
         return true
       }
       const scheduleFallbackProbe = () => {
-        if (!fallbackStreamUrl || triedFallback) return
         if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
 
         fallbackProbeTimer = window.setTimeout(() => {
@@ -965,6 +985,10 @@ export function App() {
           const hasAdvanced = media.currentTime > 0.75
 
           if (!hasDecodedVideo || !hasAdvanced) {
+            if (!fallbackStreamUrl) {
+              markBlackFrameError()
+              return
+            }
             loadFallback()
           }
         }, 3_500)
@@ -1002,6 +1026,7 @@ export function App() {
     return () => {
       cancelled = true
       if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
+      if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
       media.removeEventListener('canplay', markReady)
       media.removeEventListener('loadeddata', markProgress)
       media.removeEventListener('playing', markPlaying)
