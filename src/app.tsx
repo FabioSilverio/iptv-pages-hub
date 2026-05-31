@@ -394,6 +394,21 @@ function getProxyTargetUrl(requestUrl: string) {
   }
 }
 
+function getPlayableUrlTarget(rawUrl: string) {
+  return getProxyTargetUrl(rawUrl) || rawUrl
+}
+
+function hasPlayableExtension(rawUrl: string, pattern: RegExp) {
+  return pattern.test(getPlayableUrlTarget(rawUrl))
+}
+
+function streamTypeLabel(rawUrl: string) {
+  if (hasPlayableExtension(rawUrl, /\.m3u8?($|\?)/i)) return 'HLS'
+  if (hasPlayableExtension(rawUrl, /\.ts($|\?)/i)) return 'TS'
+  if (hasPlayableExtension(rawUrl, /\.flv($|\?)/i)) return 'FLV'
+  return 'Auto'
+}
+
 function getProxyBaseFromRequest(requestUrl: string) {
   try {
     const url = new URL(requestUrl)
@@ -443,7 +458,7 @@ function channelToPlayerItem(channel: Channel): PlayerItem {
     name: channel.name,
     group: channel.group || 'Playlist',
     region: 'Playlist M3U',
-    quality: channel.streamUrl.toLowerCase().includes('.m3u8') ? 'HLS' : 'Auto',
+    quality: streamTypeLabel(channel.streamUrl),
     source: channel.tvgId || channel.group || 'M3U',
     href: channel.streamUrl,
     streamUrl: channel.streamUrl,
@@ -761,9 +776,9 @@ export function App() {
       media.addEventListener('waiting', markWaiting)
       media.addEventListener('error', markVideoError)
 
-      const isHls = /\.m3u8?($|\?)/i.test(streamUrl)
-      const isDash = /\.mpd($|\?)/i.test(streamUrl)
-      const isTransportStream = /\.(ts|flv)($|\?)/i.test(streamUrl)
+      const isHls = hasPlayableExtension(streamUrl, /\.m3u8?($|\?)/i)
+      const isDash = hasPlayableExtension(streamUrl, /\.mpd($|\?)/i)
+      const isTransportStream = hasPlayableExtension(streamUrl, /\.(ts|flv)($|\?)/i)
 
       if (!isHls) {
         if (isDash) {
@@ -820,7 +835,7 @@ export function App() {
           if (cancelled) return
 
           const player = mpegts.createPlayer({
-            type: streamUrl.toLowerCase().includes('.flv') ? 'flv' : 'mpegts',
+            type: hasPlayableExtension(streamUrl, /\.flv($|\?)/i) ? 'flv' : 'mpegts',
             isLive: true,
             url: streamUrl,
           })
@@ -902,7 +917,7 @@ export function App() {
           const { default: mpegts } = await import('mpegts.js')
           if (cancelled) return
           const player = mpegts.createPlayer({
-            type: fallbackUrl.toLowerCase().includes('.flv') ? 'flv' : 'mpegts',
+            type: hasPlayableExtension(fallbackUrl, /\.flv($|\?)/i) ? 'flv' : 'mpegts',
             isLive: true,
             url: fallbackUrl,
           })
@@ -1489,7 +1504,7 @@ export function App() {
                         <strong>{channel.name}</strong>
                         <small>{channel.group}</small>
                       </span>
-                      <em>{channel.streamUrl.toLowerCase().includes('.m3u8') ? 'HLS' : channel.streamUrl.toLowerCase().includes('.ts') ? 'TS' : 'Auto'}</em>
+                      <em>{streamTypeLabel(channel.streamUrl)}</em>
                     </button>
                   </div>
                 ))}
