@@ -67,7 +67,8 @@ const LAST_NATIVE_KEY = 'iptv-pages-lite.last-native'
 const LAST_RADIO_KEY = 'iptv-pages-lite.last-radio'
 const LAST_VIEW_KEY = 'iptv-pages-lite.view'
 const FAVORITE_CHANNELS_KEY = 'iptv-pages-lite.favorite-channels'
-const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
+const LEGACY_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
+const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fagulhuonline.workers.dev'
 const COPE_REWIND_LIMIT_MS = 5 * 60 * 60 * 1000
 const DASH_REWIND_SEGMENT_LIMIT = 4000
 const RADIO_REWIND_OPTIONS = [15, 60, 120, 300]
@@ -333,6 +334,16 @@ function readStoredJson<T>(key: string, fallback: T): T {
   }
 }
 
+function normalizeStoredXtream(credentials: XtreamCredentials): XtreamCredentials {
+  const proxyUrl = credentials.proxyUrl?.trim()
+
+  if (!proxyUrl || proxyUrl === LEGACY_XTREAM_PROXY_URL) {
+    return { ...credentials, proxyUrl: DEFAULT_XTREAM_PROXY_URL }
+  }
+
+  return credentials
+}
+
 function readStoredArray<T>(key: string): T[] {
   if (typeof window === 'undefined') return []
 
@@ -525,7 +536,7 @@ export function App() {
   const [query, setQuery] = useState('')
   const [iptvSource, setIptvSource] = useState<IptvSource>(() => readStoredValue(IPTV_SOURCE_KEY) === 'xtream' ? 'xtream' : 'm3u')
   const [m3uUrl, setM3uUrl] = useState(() => readStoredValue(M3U_URL_KEY))
-  const [xtream, setXtream] = useState<XtreamCredentials>(() => readStoredJson<XtreamCredentials>(XTREAM_KEY, defaultXtream))
+  const [xtream, setXtream] = useState<XtreamCredentials>(() => normalizeStoredXtream(readStoredJson<XtreamCredentials>(XTREAM_KEY, defaultXtream)))
   const [playlist, setPlaylist] = useState<PlaylistSession | null>(null)
   const [playlistState, setPlaylistState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [playlistError, setPlaylistError] = useState('')

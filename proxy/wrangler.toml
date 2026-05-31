@@ -1,7 +1,8 @@
 name = "iptv-pages-hub-proxy"
 main = "src/index.js"
 compatibility_date = "2026-03-29"
-account_id = "0504c9c1d5f02da42eea3b5d86b1e07b"
+account_id = "c6a5d563986627055b0a34bb95080c35"
+workers_dev = true
 
 [observability]
 enabled = true
