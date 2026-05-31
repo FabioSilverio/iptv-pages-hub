@@ -250,7 +250,9 @@ export async function fetchXtreamPlaylist(
     categoryList.map((item) => [String(item.category_id ?? ''), item.category_name ?? FALLBACK_GROUP]),
   )
 
-  const preferHls = credentials.output === 'm3u8'
+  const preferHls =
+    credentials.output === 'm3u8'
+    || (credentials.output === 'auto' && Boolean(proxyUrl))
   const primaryExtension = preferHls ? 'm3u8' : 'ts'
   const fallbackExtension = primaryExtension === 'm3u8' ? 'ts' : 'm3u8'
   const channels = sortChannels(

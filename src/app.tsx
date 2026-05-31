@@ -701,12 +701,21 @@ export function App() {
 
   useEffect(() => {
     const video = videoRef.current
-    const streamUrl = activeItem?.streamUrl
+    const rawStreamUrl = activeItem?.streamUrl
     let cancelled = false
 
-    if (!video || !streamUrl) return
+    if (!video || !rawStreamUrl) return
     const media = video
     let fallbackProbeTimer = 0
+    const shouldPromoteHlsFallback =
+      view === 'iptv'
+      && iptvSource === 'xtream'
+      && xtream.output === 'auto'
+      && Boolean(activeItem.fallbackStreamUrl)
+      && hasPlayableExtension(rawStreamUrl, /\.ts($|\?)/i)
+      && hasPlayableExtension(activeItem.fallbackStreamUrl || '', /\.m3u8?($|\?)/i)
+    const streamUrl = shouldPromoteHlsFallback ? activeItem.fallbackStreamUrl! : rawStreamUrl
+    const fallbackStreamUrl = shouldPromoteHlsFallback ? rawStreamUrl : activeItem.fallbackStreamUrl
 
     const destroyHls = () => {
       if (hlsRef.current) {
@@ -905,15 +914,15 @@ export function App() {
       hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(streamUrl))
       let triedFallback = false
       const loadFallback = () => {
-        if (!activeItem.fallbackStreamUrl || triedFallback) return false
+        if (!fallbackStreamUrl || triedFallback) return false
         triedFallback = true
         if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
         hls.destroy()
         hlsRef.current = null
         setPlayerState('loading')
-        setPlayerError('HLS nao firmou imagem; tentando stream TS do Xtream.')
+        setPlayerError('')
         void (async () => {
-          const fallbackUrl = activeItem.fallbackStreamUrl!
+          const fallbackUrl = fallbackStreamUrl
           const { default: mpegts } = await import('mpegts.js')
           if (cancelled) return
           const player = mpegts.createPlayer({
@@ -929,7 +938,7 @@ export function App() {
         return true
       }
       const scheduleFallbackProbe = () => {
-        if (!activeItem.fallbackStreamUrl || triedFallback) return
+        if (!fallbackStreamUrl || triedFallback) return
         if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
 
         fallbackProbeTimer = window.setTimeout(() => {
@@ -985,7 +994,7 @@ export function App() {
       destroyMpegts()
       void destroyShaka()
     }
-  }, [activeItem?.fallbackStreamUrl, activeItem?.id, activeItem?.streamUrl, isMuted, reloadToken])
+  }, [activeItem?.fallbackStreamUrl, activeItem?.id, activeItem?.streamUrl, iptvSource, isMuted, reloadToken, view, xtream.output])
 
   useEffect(() => {
     copeBufferAbortRef.current?.abort()
