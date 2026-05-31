@@ -947,8 +947,6 @@ export function App() {
       })
 
       hlsRef.current = hls
-      hls.attachMedia(media)
-      hls.on(HlsClient.Events.MEDIA_ATTACHED, () => hls.loadSource(streamUrl))
       let triedFallback = false
       const loadFallback = () => {
         if (!fallbackStreamUrl || triedFallback) return false
@@ -975,7 +973,7 @@ export function App() {
         })()
         return true
       }
-      const scheduleFallbackProbe = () => {
+      const scheduleFallbackProbe = (delay = 3_500) => {
         if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
 
         fallbackProbeTimer = window.setTimeout(() => {
@@ -991,9 +989,13 @@ export function App() {
             }
             loadFallback()
           }
-        }, 3_500)
+        }, delay)
       }
 
+      hls.on(HlsClient.Events.MEDIA_ATTACHED, () => {
+        hls.loadSource(streamUrl)
+        scheduleFallbackProbe(5_000)
+      })
       hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
         void playWhenPossible()
         scheduleFallbackProbe()
@@ -1019,6 +1021,7 @@ export function App() {
         setPlayerState('error')
         setPlayerError('A stream recusou o player nativo.')
       })
+      hls.attachMedia(media)
     }
 
     void loadStream()
