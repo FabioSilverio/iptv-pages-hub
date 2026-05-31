@@ -716,6 +716,7 @@ export function App() {
       && hasPlayableExtension(activeItem.fallbackStreamUrl || '', /\.m3u8?($|\?)/i)
     const streamUrl = shouldPromoteHlsFallback ? activeItem.fallbackStreamUrl! : rawStreamUrl
     const fallbackStreamUrl = shouldPromoteHlsFallback ? rawStreamUrl : activeItem.fallbackStreamUrl
+    const expectsVideo = activeItem.mode !== 'radio'
 
     const destroyHls = () => {
       if (hlsRef.current) {
@@ -740,8 +741,22 @@ export function App() {
     const markReady = () => {
       if (!cancelled) setPlayerState('ready')
     }
+    const hasVisiblePlayback = () => {
+      if (!expectsVideo) return true
+      return media.videoWidth > 0 && media.videoHeight > 0 && media.currentTime > 0.5
+    }
     const markPlaying = () => {
       if (!cancelled) {
+        if (hasVisiblePlayback()) {
+          setPlayerState('playing')
+          setPlayerError('')
+        } else {
+          setPlayerState('loading')
+        }
+      }
+    }
+    const markProgress = () => {
+      if (!cancelled && hasVisiblePlayback()) {
         setPlayerState('playing')
         setPlayerError('')
       }
@@ -781,7 +796,9 @@ export function App() {
       media.load()
 
       media.addEventListener('canplay', markReady)
+      media.addEventListener('loadeddata', markProgress)
       media.addEventListener('playing', markPlaying)
+      media.addEventListener('timeupdate', markProgress)
       media.addEventListener('waiting', markWaiting)
       media.addEventListener('error', markVideoError)
 
@@ -944,14 +961,13 @@ export function App() {
         fallbackProbeTimer = window.setTimeout(() => {
           if (cancelled || triedFallback || hlsRef.current !== hls) return
 
-          const hasDecodedVideo = media.videoWidth > 0 && media.videoHeight > 0
-          const hasBufferedEnough = media.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
-          const hasStarted = media.currentTime > 1 || !media.paused
+          const hasDecodedVideo = !expectsVideo || (media.videoWidth > 0 && media.videoHeight > 0)
+          const hasAdvanced = media.currentTime > 0.75
 
-          if (!hasDecodedVideo || !hasBufferedEnough || !hasStarted) {
+          if (!hasDecodedVideo || !hasAdvanced) {
             loadFallback()
           }
-        }, 9_000)
+        }, 3_500)
       }
 
       hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
@@ -987,7 +1003,9 @@ export function App() {
       cancelled = true
       if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
       media.removeEventListener('canplay', markReady)
+      media.removeEventListener('loadeddata', markProgress)
       media.removeEventListener('playing', markPlaying)
+      media.removeEventListener('timeupdate', markProgress)
       media.removeEventListener('waiting', markWaiting)
       media.removeEventListener('error', markVideoError)
       destroyHls()
