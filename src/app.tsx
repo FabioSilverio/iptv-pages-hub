@@ -1255,7 +1255,7 @@ export function App() {
         </nav>
       </header>
 
-      <main class="workspace">
+      <main class={classNames('workspace', view === 'iptv' && 'iptv-workspace')}>
         <section class="player-panel" aria-label="Player nativo">
           <div class={classNames('player-frame', activeItem.mode === 'radio' && 'audio-frame')}>
             {activeItem.mode === 'radio' ? (
@@ -1444,12 +1444,12 @@ export function App() {
                 </button>
               </div>
 
-              {playlist ? (
+              {playlist || showFavorites ? (
                 <div class="playlist-toolbar">
                   <div class="playlist-tools">
                     <select
                       aria-label="Filtrar grupo"
-                      disabled={showFavorites}
+                      disabled={showFavorites || !playlist}
                       value={selectedGroup}
                       onChange={(event) => setSelectedGroup((event.currentTarget as HTMLSelectElement).value)}
                     >
@@ -1460,7 +1460,7 @@ export function App() {
                     <span>
                       {showFavorites
                         ? `${filteredFavoriteChannels.length} de ${favoriteChannels.length} favoritos`
-                        : `${filteredChannels.length} de ${playlist.channels.length} canais`}
+                        : `${filteredChannels.length} de ${playlist?.channels.length || 0} canais`}
                     </span>
                   </div>
                 </div>

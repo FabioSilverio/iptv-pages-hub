@@ -148,6 +148,10 @@ video {
   align-items: start;
 }
 
+.workspace.iptv-workspace {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .player-panel,
 .guide-panel {
   border: 1px solid var(--line);
@@ -340,10 +344,19 @@ video {
   padding: 16px;
 }
 
+.iptv-workspace .guide-panel {
+  min-height: 0;
+}
+
 .guide-head {
   display: grid;
   gap: 12px;
   margin-bottom: 14px;
+}
+
+.iptv-workspace .guide-head {
+  grid-template-columns: minmax(180px, auto) minmax(280px, 1fr);
+  align-items: end;
 }
 
 .search-box {
@@ -460,6 +473,14 @@ video {
   white-space: nowrap;
 }
 
+.iptv-workspace .channel-row strong {
+  display: -webkit-box;
+  min-height: 2.35em;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: normal;
+}
+
 .channel-row small,
 .external-row small,
 .playlist-tools span {
@@ -470,6 +491,10 @@ video {
   font-size: 0.82rem;
   line-height: 1.25;
   text-overflow: ellipsis;
+}
+
+.iptv-workspace .channel-row small {
+  white-space: nowrap;
 }
 
 .channel-row em {
@@ -485,6 +510,38 @@ video {
 .iptv-panel {
   display: grid;
   gap: 12px;
+}
+
+.iptv-workspace .iptv-panel {
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.iptv-workspace .iptv-panel > .source-tabs,
+.iptv-workspace .iptv-panel > .playlist-form,
+.iptv-workspace .iptv-panel > .favorite-tabs,
+.iptv-workspace .iptv-panel > .playlist-toolbar,
+.iptv-workspace .iptv-panel > .inline-alert,
+.iptv-workspace .iptv-panel > .empty-panel {
+  grid-column: 1;
+}
+
+.iptv-workspace .iptv-panel > .channel-list {
+  grid-column: 2;
+  grid-row: 1 / span 8;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 560px;
+  align-content: start;
+  padding-right: 8px;
+}
+
+.iptv-workspace .channel-item {
+  grid-template-columns: 46px minmax(0, 1fr);
+}
+
+.iptv-workspace .favorite-toggle,
+.iptv-workspace .channel-item .channel-row {
+  min-height: 82px;
 }
 
 .playlist-form {
@@ -702,6 +759,26 @@ video {
   }
 
   .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .iptv-workspace .guide-head,
+  .iptv-workspace .iptv-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .iptv-workspace .iptv-panel > .source-tabs,
+  .iptv-workspace .iptv-panel > .playlist-form,
+  .iptv-workspace .iptv-panel > .favorite-tabs,
+  .iptv-workspace .iptv-panel > .playlist-toolbar,
+  .iptv-workspace .iptv-panel > .inline-alert,
+  .iptv-workspace .iptv-panel > .empty-panel,
+  .iptv-workspace .iptv-panel > .channel-list {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .iptv-workspace .iptv-panel > .channel-list {
     grid-template-columns: 1fr;
   }
 
