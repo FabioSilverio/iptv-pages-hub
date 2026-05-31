@@ -460,7 +460,7 @@ function channelToPlayerItem(channel: Channel): PlayerItem {
     region: 'Playlist M3U',
     quality: streamTypeLabel(channel.streamUrl),
     source: channel.tvgId || channel.group || 'M3U',
-    href: channel.streamUrl,
+    href: channel.externalUrl || channel.streamUrl,
     streamUrl: channel.streamUrl,
     fallbackStreamUrl: channel.fallbackStreamUrl,
     note: channel.logo ? 'Canal carregado da playlist importada.' : 'Canal da playlist importada.',
@@ -709,15 +709,8 @@ export function App() {
     let fallbackProbeTimer = 0
     let blackFrameTimer = 0
     let lockedError = false
-    const shouldPromoteHlsFallback =
-      view === 'iptv'
-      && iptvSource === 'xtream'
-      && xtream.output === 'auto'
-      && Boolean(activeItem.fallbackStreamUrl)
-      && hasPlayableExtension(rawStreamUrl, /\.ts($|\?)/i)
-      && hasPlayableExtension(activeItem.fallbackStreamUrl || '', /\.m3u8?($|\?)/i)
-    const streamUrl = shouldPromoteHlsFallback ? activeItem.fallbackStreamUrl! : rawStreamUrl
-    const fallbackStreamUrl = shouldPromoteHlsFallback ? rawStreamUrl : activeItem.fallbackStreamUrl
+    const streamUrl = rawStreamUrl
+    const fallbackStreamUrl = activeItem.fallbackStreamUrl
     const expectsVideo = activeItem.mode !== 'radio'
     const codecHint = /\b(hevc|h\.?265|uhd|4k)\b/i.test(`${activeItem.name} ${activeItem.group} ${activeItem.source}`)
       ? ' Este canal parece HEVC/H.265/UHD; Chrome/Edge geralmente nao mostram video nesse codec. Tente uma versao HD/H264 do mesmo canal.'

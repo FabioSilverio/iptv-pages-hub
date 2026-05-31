@@ -8,6 +8,7 @@ export interface Channel {
   group: string
   streamUrl: string
   fallbackStreamUrl?: string
+  externalUrl?: string
   logo?: string
   tvgId?: string
   categoryId?: string
@@ -250,9 +251,7 @@ export async function fetchXtreamPlaylist(
     categoryList.map((item) => [String(item.category_id ?? ''), item.category_name ?? FALLBACK_GROUP]),
   )
 
-  const preferHls =
-    credentials.output === 'm3u8'
-    || (credentials.output === 'auto' && Boolean(proxyUrl))
+  const preferHls = credentials.output === 'm3u8'
   const primaryExtension = preferHls ? 'm3u8' : 'ts'
   const fallbackExtension = primaryExtension === 'm3u8' ? 'ts' : 'm3u8'
   const channels = sortChannels(
@@ -280,6 +279,7 @@ export async function fetchXtreamPlaylist(
           group: normalizeGroupName(categoryMap.get(String(item.category_id ?? ''))),
           streamUrl,
           fallbackStreamUrl,
+          externalUrl: rawStreamUrl,
           logo: item.stream_icon || undefined,
           tvgId: item.epg_channel_id || undefined,
           categoryId: item.category_id || undefined,
