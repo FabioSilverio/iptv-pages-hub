@@ -533,6 +533,7 @@ export function App() {
   const [selectedChannelId, setSelectedChannelId] = useState('')
   const [favoriteChannels, setFavoriteChannels] = useState<FavoriteChannel[]>(() => readStoredArray<FavoriteChannel>(FAVORITE_CHANNELS_KEY))
   const [showFavorites, setShowFavorites] = useState(false)
+  const [streamOverrides, setStreamOverrides] = useState<Record<string, string>>({})
   const [radioReplayItem, setRadioReplayItem] = useState<PlayerItem | null>(null)
   const [copeBufferState, setCopeBufferState] = useState<'idle' | 'recording' | 'blocked'>('idle')
   const [copeBufferSeconds, setCopeBufferSeconds] = useState(0)
@@ -608,6 +609,7 @@ export function App() {
     : view === 'radios'
       ? radioReplayItem || radioToPlayerItem(selectedRadio)
       : selectedNative
+  const activeStreamOverride = streamOverrides[activeItem.id]
 
   const radioRewindMinutes = useMemo(() => {
     const maxMinutes = (selectedRadio.rewindHours || 0) * 60
@@ -701,16 +703,17 @@ export function App() {
 
   useEffect(() => {
     const video = videoRef.current
-    const rawStreamUrl = activeItem?.streamUrl
+    const rawStreamUrl = activeStreamOverride || activeItem?.streamUrl
     let cancelled = false
 
     if (!video || !rawStreamUrl) return
     const media = video
     let fallbackProbeTimer = 0
+    let alternateRouteTimer = 0
     let blackFrameTimer = 0
     let lockedError = false
     const streamUrl = rawStreamUrl
-    const fallbackStreamUrl = activeItem.fallbackStreamUrl
+    const fallbackStreamUrl = activeStreamOverride ? activeItem.streamUrl : activeItem.fallbackStreamUrl
     const expectsVideo = activeItem.mode !== 'radio'
     const codecHint = /\b(hevc|h\.?265|uhd|4k)\b/i.test(`${activeItem.name} ${activeItem.group} ${activeItem.source}`)
       ? ' Este canal parece HEVC/H.265/UHD; Chrome/Edge geralmente nao mostram video nesse codec. Tente uma versao HD/H264 do mesmo canal.'
@@ -784,6 +787,22 @@ export function App() {
       if (!expectsVideo) return
       if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
       blackFrameTimer = window.setTimeout(markBlackFrameError, delay)
+    }
+    const switchToAlternateRoute = () => {
+      if (!fallbackStreamUrl || cancelled || hasVisiblePlayback()) return false
+      setStreamOverrides((current) => (
+        current[activeItem.id] === fallbackStreamUrl
+          ? current
+          : { ...current, [activeItem.id]: fallbackStreamUrl }
+      ))
+      return true
+    }
+    const scheduleAlternateRouteProbe = (delay = 5_000) => {
+      if (!fallbackStreamUrl || !expectsVideo) return
+      if (alternateRouteTimer) window.clearTimeout(alternateRouteTimer)
+      alternateRouteTimer = window.setTimeout(() => {
+        if (!switchToAlternateRoute()) markBlackFrameError()
+      }, delay)
     }
 
     const playWhenPossible = async () => {
@@ -880,14 +899,16 @@ export function App() {
           player.attachMediaElement(media)
           player.load()
           await playWhenPossible()
-          scheduleBlackFrameProbe()
+          scheduleAlternateRouteProbe()
+          scheduleBlackFrameProbe(12_000)
           return
         }
 
         media.src = streamUrl
         media.load()
         await playWhenPossible()
-        scheduleBlackFrameProbe()
+        scheduleAlternateRouteProbe()
+        scheduleBlackFrameProbe(12_000)
         return
       }
 
@@ -1022,6 +1043,7 @@ export function App() {
     return () => {
       cancelled = true
       if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
+      if (alternateRouteTimer) window.clearTimeout(alternateRouteTimer)
       if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
       media.removeEventListener('canplay', markReady)
       media.removeEventListener('loadeddata', markProgress)
@@ -1033,7 +1055,7 @@ export function App() {
       destroyMpegts()
       void destroyShaka()
     }
-  }, [activeItem?.fallbackStreamUrl, activeItem?.id, activeItem?.streamUrl, iptvSource, isMuted, reloadToken, view, xtream.output])
+  }, [activeItem?.fallbackStreamUrl, activeItem?.id, activeItem?.streamUrl, activeStreamOverride, iptvSource, isMuted, reloadToken, view, xtream.output])
 
   useEffect(() => {
     copeBufferAbortRef.current?.abort()
