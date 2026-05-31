@@ -337,8 +337,21 @@ function readStoredJson<T>(key: string, fallback: T): T {
 function normalizeStoredXtream(credentials: XtreamCredentials): XtreamCredentials {
   const proxyUrl = credentials.proxyUrl?.trim()
 
-  if (!proxyUrl || proxyUrl === LEGACY_XTREAM_PROXY_URL) {
+  if (!proxyUrl) {
     return { ...credentials, proxyUrl: DEFAULT_XTREAM_PROXY_URL }
+  }
+
+  try {
+    const savedProxy = new URL(proxyUrl)
+    const legacyProxy = new URL(LEGACY_XTREAM_PROXY_URL)
+
+    if (savedProxy.hostname === legacyProxy.hostname) {
+      return { ...credentials, proxyUrl: DEFAULT_XTREAM_PROXY_URL }
+    }
+  } catch {
+    if (proxyUrl.includes('iptv-pages-hub-proxy.fabiogsilverio.workers.dev')) {
+      return { ...credentials, proxyUrl: DEFAULT_XTREAM_PROXY_URL }
+    }
   }
 
   return credentials
@@ -722,9 +735,14 @@ export function App() {
     let fallbackProbeTimer = 0
     let alternateRouteTimer = 0
     let blackFrameTimer = 0
+    let stalledStreamTimer = 0
     let lockedError = false
     const streamUrl = rawStreamUrl
-    const fallbackStreamUrl = activeStreamOverride ? activeItem.streamUrl : activeItem.fallbackStreamUrl
+    const fallbackStreamUrl = activeStreamOverride
+      ? activeStreamOverride === activeItem.streamUrl
+        ? activeItem.fallbackStreamUrl
+        : activeItem.streamUrl
+      : activeItem.fallbackStreamUrl
     const expectsVideo = activeItem.mode !== 'radio'
     const codecHint = /\b(hevc|h\.?265|uhd|4k)\b/i.test(`${activeItem.name} ${activeItem.group} ${activeItem.source}`)
       ? ' Este canal parece HEVC/H.265/UHD; Chrome/Edge geralmente nao mostram video nesse codec. Tente uma versao HD/H264 do mesmo canal.'
@@ -783,6 +801,15 @@ export function App() {
       setPlayerState('error')
       setPlayerError(`A stream abriu, mas nao entregou quadro de video no navegador.${codecHint}`)
     }
+    const markStalledStreamError = () => {
+      if (cancelled || hasVisiblePlayback()) return
+
+      if (switchToAlternateRoute()) return
+
+      lockedError = true
+      setPlayerState('error')
+      setPlayerError(`A stream ficou presa em 0:00 e nao entregou video para o navegador.${codecHint}`)
+    }
     const markVideoError = () => {
       if (!cancelled) {
         lockedError = true
@@ -799,8 +826,13 @@ export function App() {
       if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
       blackFrameTimer = window.setTimeout(markBlackFrameError, delay)
     }
+    const scheduleStalledStreamProbe = (delay = 15_000) => {
+      if (!expectsVideo) return
+      if (stalledStreamTimer) window.clearTimeout(stalledStreamTimer)
+      stalledStreamTimer = window.setTimeout(markStalledStreamError, delay)
+    }
     const switchToAlternateRoute = () => {
-      if (!fallbackStreamUrl || cancelled || hasVisiblePlayback()) return false
+      if (!fallbackStreamUrl || fallbackStreamUrl === streamUrl || cancelled || hasVisiblePlayback()) return false
       setStreamOverrides((current) => (
         current[activeItem.id] === fallbackStreamUrl
           ? current
@@ -894,6 +926,7 @@ export function App() {
           }
 
           await playWhenPossible()
+          scheduleStalledStreamProbe()
           return
         }
 
@@ -912,6 +945,7 @@ export function App() {
           await playWhenPossible()
           scheduleAlternateRouteProbe()
           scheduleBlackFrameProbe(12_000)
+          scheduleStalledStreamProbe()
           return
         }
 
@@ -920,6 +954,7 @@ export function App() {
         await playWhenPossible()
         scheduleAlternateRouteProbe()
         scheduleBlackFrameProbe(12_000)
+        scheduleStalledStreamProbe()
         return
       }
 
@@ -929,6 +964,7 @@ export function App() {
           media.src = streamUrl
           media.load()
           await playWhenPossible()
+          scheduleStalledStreamProbe()
           return
         }
 
@@ -995,6 +1031,7 @@ export function App() {
           player.load()
           await playWhenPossible()
           scheduleBlackFrameProbe()
+          scheduleStalledStreamProbe()
         })()
         return true
       }
@@ -1020,6 +1057,7 @@ export function App() {
       hls.on(HlsClient.Events.MEDIA_ATTACHED, () => {
         hls.loadSource(streamUrl)
         scheduleFallbackProbe(5_000)
+        scheduleStalledStreamProbe()
       })
       hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
         void playWhenPossible()
@@ -1056,6 +1094,7 @@ export function App() {
       if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
       if (alternateRouteTimer) window.clearTimeout(alternateRouteTimer)
       if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
+      if (stalledStreamTimer) window.clearTimeout(stalledStreamTimer)
       media.removeEventListener('canplay', markReady)
       media.removeEventListener('loadeddata', markProgress)
       media.removeEventListener('playing', markPlaying)
