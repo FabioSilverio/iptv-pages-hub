@@ -31,6 +31,7 @@ export default async function handler(req, res) {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET,HEAD,OPTIONS',
     'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Private-Network': 'true',
     Vary: 'Origin',
   }
 

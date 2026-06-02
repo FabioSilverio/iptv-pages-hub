@@ -8,6 +8,7 @@ function buildCorsHeaders(origin) {
     'Access-Control-Allow-Origin': origin || '*',
     'Access-Control-Allow-Methods': 'GET,HEAD,POST,OPTIONS',
     'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Private-Network': 'true',
     Vary: 'Origin',
   }
 }

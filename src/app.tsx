@@ -68,8 +68,8 @@ const LAST_RADIO_KEY = 'iptv-pages-lite.last-radio'
 const LAST_VIEW_KEY = 'iptv-pages-lite.view'
 const FAVORITE_CHANNELS_KEY = 'iptv-pages-lite.favorite-channels'
 const LEGACY_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
-const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fagulhuonline.workers.dev'
-const LOCAL_XTREAM_PROXY_URL = 'http://127.0.0.1:8787'
+const DEFAULT_XTREAM_PROXY_URL = 'https://http-proxy-eight.vercel.app/api'
+const PUBLIC_XTREAM_PLAYBACK_PROXY_URL = DEFAULT_XTREAM_PROXY_URL
 const COPE_REWIND_LIMIT_MS = 5 * 60 * 60 * 1000
 const DASH_REWIND_SEGMENT_LIMIT = 4000
 const RADIO_REWIND_OPTIONS = [15, 60, 120, 300]
@@ -346,11 +346,11 @@ function normalizeStoredXtream(credentials: XtreamCredentials): XtreamCredential
     const savedProxy = new URL(proxyUrl)
     const legacyProxy = new URL(LEGACY_XTREAM_PROXY_URL)
 
-    if (savedProxy.hostname === legacyProxy.hostname) {
+    if (savedProxy.hostname === legacyProxy.hostname || savedProxy.hostname.endsWith('.workers.dev')) {
       return { ...credentials, proxyUrl: DEFAULT_XTREAM_PROXY_URL }
     }
   } catch {
-    if (proxyUrl.includes('iptv-pages-hub-proxy.fabiogsilverio.workers.dev')) {
+    if (proxyUrl.includes('iptv-pages-hub-proxy') || proxyUrl.includes('workers.dev')) {
       return { ...credentials, proxyUrl: DEFAULT_XTREAM_PROXY_URL }
     }
   }
@@ -374,7 +374,7 @@ function resolveLocalXtreamPlaybackUrl(rawUrl?: string) {
     const parsedTarget = new URL(targetUrl)
     if (parsedTarget.protocol === 'http:' && parsedTarget.pathname.includes('/live/')) {
       if (canUseDirectXtreamPlayback()) return targetUrl
-      return buildProxyUrl(LOCAL_XTREAM_PROXY_URL, targetUrl)
+      return buildProxyUrl(PUBLIC_XTREAM_PLAYBACK_PROXY_URL, targetUrl)
     }
   } catch {
     return rawUrl
