@@ -30,6 +30,7 @@ export interface XtreamCredentials {
   password: string
   output: 'auto' | 'm3u8' | 'ts'
   proxyUrl?: string
+  directPlayback?: boolean
 }
 
 export interface M3UCredentials {
@@ -254,6 +255,7 @@ export async function fetchXtreamPlaylist(
   const preferHls = credentials.output === 'm3u8'
   const primaryExtension = preferHls ? 'm3u8' : 'ts'
   const fallbackExtension = primaryExtension === 'm3u8' ? 'ts' : 'm3u8'
+  const playbackProxyUrl = credentials.directPlayback ? '' : proxyUrl
   const channels = sortChannels(
     streamList
       .filter((item) => item.stream_id && item.stream_type !== 'radio')
@@ -265,12 +267,12 @@ export async function fetchXtreamPlaylist(
         const rawFallbackStreamUrl = `${serverUrl}/live/${encodeURIComponent(
           credentials.username.trim(),
         )}/${encodeURIComponent(credentials.password.trim())}/${streamId}.${fallbackExtension}`
-        const streamUrl = proxyUrl ? buildProxyUrl(proxyUrl, rawStreamUrl) : rawStreamUrl
+        const streamUrl = playbackProxyUrl ? buildProxyUrl(playbackProxyUrl, rawStreamUrl) : rawStreamUrl
         const fallbackStreamUrl =
           primaryExtension === fallbackExtension
             ? undefined
-            : proxyUrl
-              ? buildProxyUrl(proxyUrl, rawFallbackStreamUrl)
+            : playbackProxyUrl
+              ? buildProxyUrl(playbackProxyUrl, rawFallbackStreamUrl)
               : rawFallbackStreamUrl
 
         return {

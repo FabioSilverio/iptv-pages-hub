@@ -357,6 +357,12 @@ function normalizeStoredXtream(credentials: XtreamCredentials): XtreamCredential
   return credentials
 }
 
+function canUseDirectXtreamPlayback() {
+  if (typeof window === 'undefined') return false
+
+  return window.location.protocol === 'http:'
+}
+
 function readStoredArray<T>(key: string): T[] {
   if (typeof window === 'undefined') return []
 
@@ -1197,6 +1203,7 @@ export function App() {
         {
           ...credentials,
           proxyUrl: credentials.proxyUrl?.trim() || DEFAULT_XTREAM_PROXY_URL,
+          directPlayback: canUseDirectXtreamPlayback(),
         },
         controller.signal,
       )
