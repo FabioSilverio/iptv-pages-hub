@@ -481,7 +481,14 @@ function rewriteHlsManifestUrls(manifestText: string, requestUrl: string) {
     if (!rawUrl || !shouldRewritePlaylistUrl(rawUrl)) return rawUrl
 
     try {
-      return buildProxyUrl(proxyBase, new URL(rawUrl, targetUrl).href)
+      const absoluteUrl = new URL(rawUrl, targetUrl)
+      const proxyUrl = new URL(proxyBase)
+
+      if (absoluteUrl.origin === proxyUrl.origin && absoluteUrl.searchParams.has('url')) {
+        return absoluteUrl.href
+      }
+
+      return buildProxyUrl(proxyBase, absoluteUrl.href)
     } catch {
       return rawUrl
     }
