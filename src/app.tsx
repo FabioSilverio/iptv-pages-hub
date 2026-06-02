@@ -69,6 +69,7 @@ const LAST_VIEW_KEY = 'iptv-pages-lite.view'
 const FAVORITE_CHANNELS_KEY = 'iptv-pages-lite.favorite-channels'
 const LEGACY_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fabiogsilverio.workers.dev'
 const DEFAULT_XTREAM_PROXY_URL = 'https://iptv-pages-hub-proxy.fagulhuonline.workers.dev'
+const LOCAL_XTREAM_PROXY_URL = 'http://127.0.0.1:8787'
 const COPE_REWIND_LIMIT_MS = 5 * 60 * 60 * 1000
 const DASH_REWIND_SEGMENT_LIMIT = 4000
 const RADIO_REWIND_OPTIONS = [15, 60, 120, 300]
@@ -361,6 +362,25 @@ function canUseDirectXtreamPlayback() {
   if (typeof window === 'undefined') return false
 
   return window.location.protocol === 'http:'
+}
+
+function resolveLocalXtreamPlaybackUrl(rawUrl?: string) {
+  if (!rawUrl || typeof window === 'undefined') return rawUrl
+
+  const targetUrl = getProxyTargetUrl(rawUrl)
+  if (!targetUrl) return rawUrl
+
+  try {
+    const parsedTarget = new URL(targetUrl)
+    if (parsedTarget.protocol === 'http:' && parsedTarget.pathname.includes('/live/')) {
+      if (canUseDirectXtreamPlayback()) return targetUrl
+      return buildProxyUrl(LOCAL_XTREAM_PROXY_URL, targetUrl)
+    }
+  } catch {
+    return rawUrl
+  }
+
+  return rawUrl
 }
 
 function readStoredArray<T>(key: string): T[] {
@@ -733,7 +753,7 @@ export function App() {
 
   useEffect(() => {
     const video = videoRef.current
-    const rawStreamUrl = activeStreamOverride || activeItem?.streamUrl
+    const rawStreamUrl = resolveLocalXtreamPlaybackUrl(activeStreamOverride || activeItem?.streamUrl)
     let cancelled = false
 
     if (!video || !rawStreamUrl) return
@@ -744,11 +764,12 @@ export function App() {
     let stalledStreamTimer = 0
     let lockedError = false
     const streamUrl = rawStreamUrl
-    const fallbackStreamUrl = activeStreamOverride
+    const rawFallbackStreamUrl = activeStreamOverride
       ? activeStreamOverride === activeItem.streamUrl
         ? activeItem.fallbackStreamUrl
         : activeItem.streamUrl
       : activeItem.fallbackStreamUrl
+    const fallbackStreamUrl = resolveLocalXtreamPlaybackUrl(rawFallbackStreamUrl)
     const expectsVideo = activeItem.mode !== 'radio'
     const codecHint = /\b(hevc|h\.?265|uhd|4k)\b/i.test(`${activeItem.name} ${activeItem.group} ${activeItem.source}`)
       ? ' Este canal parece HEVC/H.265/UHD; Chrome/Edge geralmente nao mostram video nesse codec. Tente uma versao HD/H264 do mesmo canal.'
@@ -1466,7 +1487,7 @@ export function App() {
             </div>
             <div>
               <dt>Stream</dt>
-              <dd>{compactUrl(activeItem.streamUrl)}</dd>
+              <dd>{compactUrl(resolveLocalXtreamPlaybackUrl(activeItem.streamUrl) || activeItem.streamUrl)}</dd>
             </div>
           </dl>
 

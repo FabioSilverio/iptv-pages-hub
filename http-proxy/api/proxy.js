@@ -65,22 +65,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const upstream = await fetch(targetUrl.toString(), {
-      method: req.method === 'HEAD' ? 'GET' : 'GET',
-      headers: {
-        Accept: req.headers.accept || '*/*',
-        'Accept-Encoding': 'identity',
-        'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
-        Range: req.headers.range || '',
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
-        Referer: customReferer || targetUrl.origin,
-        Origin: customOrigin || targetUrl.origin,
-      },
-      redirect: 'follow',
-    })
+    const upstream = await fetchUpstream(req, targetUrl, customReferer, customOrigin)
 
     const contentType = upstream.headers.get('content-type') || ''
     const proto = req.headers['x-forwarded-proto'] || 'https'
@@ -104,15 +89,61 @@ export default async function handler(req, res) {
       return
     }
 
-    const buffer = Buffer.from(await upstream.arrayBuffer())
     res.writeHead(upstream.status, {
       ...corsHeaders,
       'Content-Type': contentType || 'application/octet-stream',
       'Cache-Control': 'no-store',
     })
-    res.end(buffer)
+    if (req.method === 'HEAD' || !upstream.body) {
+      res.end()
+      return
+    }
+
+    for await (const chunk of upstream.body) {
+      res.write(chunk)
+    }
+    res.end()
   } catch (error) {
     res.writeHead(502, { ...corsHeaders, 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ error: error instanceof Error ? error.message : 'Proxy failure.' }))
   }
+}
+
+async function fetchUpstream(req, targetUrl, customReferer, customOrigin) {
+  const headers = {
+    Accept: req.headers.accept || '*/*',
+    'Accept-Encoding': 'identity',
+    'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+    ...(customReferer ? { Referer: customReferer } : {}),
+    ...(customOrigin ? { Origin: customOrigin } : {}),
+  }
+
+  if (req.headers.range) {
+    headers.Range = req.headers.range
+  }
+
+  const firstResponse = await fetch(targetUrl.toString(), {
+    method: req.method === 'HEAD' ? 'GET' : 'GET',
+    headers,
+    redirect: 'manual',
+  })
+
+  if (![301, 302, 303, 307, 308].includes(firstResponse.status)) {
+    return firstResponse
+  }
+
+  const location = firstResponse.headers.get('location')
+  if (!location) {
+    return firstResponse
+  }
+
+  const redirectUrl = new URL(location, targetUrl)
+  return fetch(redirectUrl.toString(), {
+    method: 'GET',
+    headers,
+    redirect: 'manual',
+  })
 }

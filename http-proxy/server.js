@@ -69,24 +69,7 @@ async function proxyRequest(req, res) {
     return
   }
 
-  const upstream = await fetch(targetUrl.toString(), {
-    method: req.method === 'HEAD' ? 'GET' : req.method,
-    headers: {
-      Accept: req.headers.accept || '*/*',
-      'Accept-Encoding': 'identity',
-      'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
-      'Cache-Control': 'no-cache',
-      Pragma: 'no-cache',
-      'User-Agent':
-        req.headers['user-agent'] ||
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-      Range: req.headers.range || '',
-      Referer: targetUrl.origin,
-      Origin: targetUrl.origin,
-    },
-    redirect: 'follow',
-  })
-
+  const upstream = await fetchUpstream(targetUrl, req)
   const contentType = upstream.headers.get('content-type') || ''
   const proxyOrigin = `${req.protocol}://${req.get('host')}`
 
@@ -129,6 +112,43 @@ async function proxyRequest(req, res) {
     res.write(chunk)
   }
   res.end()
+}
+
+async function fetchUpstream(targetUrl, req) {
+  const headers = {
+    Accept: req.headers.accept || '*/*',
+    'Accept-Encoding': 'identity',
+    'Accept-Language': req.headers['accept-language'] || 'en-US,en;q=0.9',
+    'Cache-Control': 'no-cache',
+    Pragma: 'no-cache',
+    'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+  }
+
+  if (req.headers.range) {
+    headers.Range = req.headers.range
+  }
+
+  const firstResponse = await fetch(targetUrl.toString(), {
+    method: req.method === 'HEAD' ? 'GET' : req.method,
+    headers,
+    redirect: 'manual',
+  })
+
+  if (![301, 302, 303, 307, 308].includes(firstResponse.status)) {
+    return firstResponse
+  }
+
+  const location = firstResponse.headers.get('location')
+  if (!location) {
+    return firstResponse
+  }
+
+  const redirectUrl = new URL(location, targetUrl)
+  return fetch(redirectUrl.toString(), {
+    method: 'GET',
+    headers,
+    redirect: 'manual',
+  })
 }
 
 app.options('/proxy', (req, res) => {
