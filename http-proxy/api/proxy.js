@@ -79,7 +79,8 @@ export default async function handler(req, res) {
 
     if (isManifest) {
       const rawManifest = await upstream.text()
-      const manifest = rewriteManifest(rawManifest, targetUrl, proxyOrigin, customReferer, customOrigin)
+      const manifestBaseUrl = new URL(upstream.url || targetUrl.toString())
+      const manifest = rewriteManifest(rawManifest, manifestBaseUrl, proxyOrigin, customReferer, customOrigin)
       res.writeHead(upstream.status, {
         ...corsHeaders,
         'Content-Type': 'application/vnd.apple.mpegurl',

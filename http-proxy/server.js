@@ -87,7 +87,8 @@ async function proxyRequest(req, res) {
     targetUrl.pathname.endsWith('.m3u8')
   ) {
     const rawManifest = await upstream.text()
-    const manifest = rewriteManifest(rawManifest, targetUrl, proxyOrigin)
+    const manifestBaseUrl = new URL(upstream.url || targetUrl.toString())
+    const manifest = rewriteManifest(rawManifest, manifestBaseUrl, proxyOrigin)
     res.status(upstream.status)
     for (const [key, value] of headers.entries()) res.setHeader(key, value)
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl')

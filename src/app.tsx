@@ -459,44 +459,6 @@ function streamTypeLabel(rawUrl: string) {
   return 'Auto'
 }
 
-function looksBrowserHostileChannel(channel: Pick<Channel, 'name' | 'group' | 'tvgId'>) {
-  return /\b(4k|uhd|hevc|h\.?265|raw|3840p)\b/i.test(`${channel.name} ${channel.group} ${channel.tvgId || ''}`)
-}
-
-function getInitialPlayableChannel(channels: Channel[]) {
-  return channels.find((channel) => !looksBrowserHostileChannel(channel)) || channels[0]
-}
-
-function normalizeChannelSearchName(value: string) {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/\b(4k|uhd|hevc|h\.?265|raw|3840p|hd|sd|fhd)\b/gi, '')
-    .replace(/[^\w]+/g, ' ')
-    .trim()
-    .toLowerCase()
-}
-
-function getCompatibleFallbackChannel(current: Channel | null, channels: Channel[], failedIds: Set<string>) {
-  if (!current) return null
-
-  const currentName = normalizeChannelSearchName(current.name)
-  const currentTokens = new Set(currentName.split(/\s+/).filter((token) => token.length > 2))
-  const candidates = channels.filter((channel) =>
-    channel.id !== current.id &&
-    !failedIds.has(channel.id) &&
-    !looksBrowserHostileChannel(channel)
-  )
-
-  return (
-    candidates.find((channel) => channel.group === current.group && normalizeChannelSearchName(channel.name) === currentName)
-    || candidates.find((channel) => channel.group === current.group && [...currentTokens].some((token) => normalizeChannelSearchName(channel.name).includes(token)))
-    || candidates.find((channel) => channel.group === current.group)
-    || candidates[0]
-    || null
-  )
-}
-
 function getProxyBaseFromRequest(requestUrl: string) {
   try {
     const url = new URL(requestUrl)
@@ -622,7 +584,6 @@ export function App() {
   const [favoriteChannels, setFavoriteChannels] = useState<FavoriteChannel[]>(() => readStoredArray<FavoriteChannel>(FAVORITE_CHANNELS_KEY))
   const [showFavorites, setShowFavorites] = useState(false)
   const [streamOverrides, setStreamOverrides] = useState<Record<string, string>>({})
-  const [failedPlaybackIds, setFailedPlaybackIds] = useState<Set<string>>(() => new Set())
   const [radioReplayItem, setRadioReplayItem] = useState<PlayerItem | null>(null)
   const [copeBufferState, setCopeBufferState] = useState<'idle' | 'recording' | 'blocked'>('idle')
   const [copeBufferSeconds, setCopeBufferSeconds] = useState(0)
@@ -699,22 +660,6 @@ export function App() {
       ? radioReplayItem || radioToPlayerItem(selectedRadio)
       : selectedNative
   const activeStreamOverride = streamOverrides[activeItem.id]
-
-  const switchToCompatibleChannel = (message: string) => {
-    if (view !== 'iptv' || !selectedChannel || !playlist?.channels.length) return false
-
-    const nextFailedIds = new Set(failedPlaybackIds)
-    nextFailedIds.add(selectedChannel.id)
-    const fallbackChannel = getCompatibleFallbackChannel(selectedChannel, playlist.channels, nextFailedIds)
-    setFailedPlaybackIds(nextFailedIds)
-
-    if (!fallbackChannel) return false
-
-    setSelectedChannelId(fallbackChannel.id)
-    setPlayerState('loading')
-    setPlayerError(message)
-    return true
-  }
 
   const radioRewindMinutes = useMemo(() => {
     const maxMinutes = (selectedRadio.rewindHours || 0) * 60
@@ -879,7 +824,6 @@ export function App() {
     }
     const markBlackFrameError = () => {
       if (cancelled || hasVisiblePlayback()) return
-      if (switchToCompatibleChannel('Esse canal nao entregou video no navegador. Tentando uma versao compativel...')) return
       lockedError = true
       setPlayerState('error')
       setPlayerError(`A stream abriu, mas nao entregou quadro de video no navegador.${codecHint}`)
@@ -888,7 +832,6 @@ export function App() {
       if (cancelled || hasVisiblePlayback()) return
 
       if (switchToAlternateRoute()) return
-      if (switchToCompatibleChannel('Essa stream ficou presa em 0:00. Tentando outro canal compativel...')) return
 
       lockedError = true
       setPlayerState('error')
@@ -899,7 +842,6 @@ export function App() {
         lockedError = true
         const rawMessage = media.error?.message || ''
         const isDemuxerError = /demuxer|pipeline|mediasource|metadata/i.test(rawMessage)
-        if (isDemuxerError && switchToCompatibleChannel('Codec recusado pelo navegador. Tentando uma versao HD/SD compativel...')) return
         setPlayerState('error')
         setPlayerError(
           rawMessage && !isDemuxerError
@@ -1263,11 +1205,9 @@ export function App() {
       setPlaylistState('loading')
       setPlaylistError('')
       const nextPlaylist = await fetchM3UPlaylist({ url: m3uUrl }, controller.signal)
-      const initialChannel = getInitialPlayableChannel(nextPlaylist.channels)
-      setFailedPlaybackIds(new Set())
       setPlaylist(nextPlaylist)
       setSelectedGroup('Todos')
-      setSelectedChannelId(initialChannel?.id || '')
+      setSelectedChannelId(nextPlaylist.channels[0]?.id || '')
       setPlaylistState('ready')
       setView('iptv')
     } catch (error) {
@@ -1290,11 +1230,9 @@ export function App() {
         },
         controller.signal,
       )
-      const initialChannel = getInitialPlayableChannel(nextPlaylist.channels)
-      setFailedPlaybackIds(new Set())
       setPlaylist(nextPlaylist)
       setSelectedGroup('Todos')
-      setSelectedChannelId(initialChannel?.id || '')
+      setSelectedChannelId(nextPlaylist.channels[0]?.id || '')
       setPlaylistState('ready')
       setPlaylistError('')
       setView('iptv')
@@ -1343,7 +1281,6 @@ export function App() {
   }
 
   function selectChannel(channelId: string) {
-    setFailedPlaybackIds(new Set())
     setSelectedChannelId(channelId)
     setView('iptv')
   }
