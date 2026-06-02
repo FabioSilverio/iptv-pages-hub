@@ -359,9 +359,7 @@ function normalizeStoredXtream(credentials: XtreamCredentials): XtreamCredential
 }
 
 function canUseDirectXtreamPlayback() {
-  if (typeof window === 'undefined') return false
-
-  return window.location.protocol === 'http:'
+  return false
 }
 
 function resolveLocalXtreamPlaybackUrl(rawUrl?: string) {
@@ -769,6 +767,9 @@ export function App() {
     let alternateRouteTimer = 0
     let blackFrameTimer = 0
     let stalledStreamTimer = 0
+    let videoOnlyRetryTimer = 0
+    let frameProbeCanvas: HTMLCanvasElement | null = null
+    let triedVideoOnlyTransport = false
     let lockedError = false
     const streamUrl = rawStreamUrl
     const rawFallbackStreamUrl = activeStreamOverride
@@ -805,9 +806,45 @@ export function App() {
     const markReady = () => {
       if (!cancelled && !lockedError) setPlayerState('ready')
     }
-    const hasVisiblePlayback = () => {
+    const hasDecodedPlayback = () => {
       if (!expectsVideo) return true
       return media.videoWidth > 0 && media.videoHeight > 0 && media.currentTime > 0.5
+    }
+    const hasRenderableVideoFrame = () => {
+      if (!expectsVideo) return true
+      if (!hasDecodedPlayback()) return false
+      if (media.currentTime < 1.5) return false
+
+      try {
+        frameProbeCanvas ??= document.createElement('canvas')
+        frameProbeCanvas.width = 32
+        frameProbeCanvas.height = 18
+        const context = frameProbeCanvas.getContext('2d')
+        if (!context) return true
+
+        context.drawImage(media, 0, 0, frameProbeCanvas.width, frameProbeCanvas.height)
+        const pixels = context.getImageData(0, 0, frameProbeCanvas.width, frameProbeCanvas.height).data
+        let litPixels = 0
+        let maxLuma = 0
+        let totalLuma = 0
+        const pixelCount = pixels.length / 4
+
+        for (let index = 0; index < pixels.length; index += 4) {
+          const luma = (pixels[index] * 0.2126) + (pixels[index + 1] * 0.7152) + (pixels[index + 2] * 0.0722)
+          totalLuma += luma
+          if (luma > maxLuma) maxLuma = luma
+          if (luma > 18) litPixels += 1
+        }
+
+        const averageLuma = totalLuma / pixelCount
+        return averageLuma > 6 || maxLuma > 32 || litPixels > 6
+      } catch {
+        return true
+      }
+    }
+    const hasVisiblePlayback = () => {
+      if (!expectsVideo) return true
+      return hasDecodedPlayback() && hasRenderableVideoFrame()
     }
     const markPlaying = () => {
       if (!cancelled && !lockedError) {
@@ -822,6 +859,7 @@ export function App() {
     const markProgress = () => {
       if (!cancelled && hasVisiblePlayback()) {
         if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
+        if (videoOnlyRetryTimer) window.clearTimeout(videoOnlyRetryTimer)
         setPlayerState('playing')
         setPlayerError('')
       }
@@ -867,8 +905,27 @@ export function App() {
       if (stalledStreamTimer) window.clearTimeout(stalledStreamTimer)
       stalledStreamTimer = window.setTimeout(markStalledStreamError, delay)
     }
+    const retryVideoOnlyTransport = (transportUrl: string) => {
+      if (!expectsVideo || triedVideoOnlyTransport || cancelled || hasVisiblePlayback()) return false
+      triedVideoOnlyTransport = true
+      if (videoOnlyRetryTimer) window.clearTimeout(videoOnlyRetryTimer)
+      if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
+      if (stalledStreamTimer) window.clearTimeout(stalledStreamTimer)
+      setPlayerState('loading')
+      setPlayerError('')
+      void startTransportStream(transportUrl, { videoOnly: true })
+      return true
+    }
+    const scheduleVideoOnlyRetry = (transportUrl: string, delay = 6_000) => {
+      if (!expectsVideo || triedVideoOnlyTransport) return
+      if (videoOnlyRetryTimer) window.clearTimeout(videoOnlyRetryTimer)
+      videoOnlyRetryTimer = window.setTimeout(() => {
+        if (!hasVisiblePlayback()) retryVideoOnlyTransport(transportUrl)
+      }, delay)
+    }
     const switchToAlternateRoute = () => {
       if (!fallbackStreamUrl || fallbackStreamUrl === streamUrl || cancelled || hasVisiblePlayback()) return false
+      if (expectsVideo && media.videoWidth > 0 && media.videoHeight > 0) return false
       setStreamOverrides((current) => (
         current[activeItem.id] === fallbackStreamUrl
           ? current
@@ -892,6 +949,39 @@ export function App() {
       } catch {
         if (!cancelled) setPlayerState('ready')
       }
+    }
+    const startTransportStream = async (transportUrl: string, options?: { videoOnly?: boolean }) => {
+      const { default: mpegts } = await import('mpegts.js')
+      if (cancelled) return
+
+      destroyMpegts()
+      media.pause()
+      media.removeAttribute('src')
+      media.load()
+
+      const player = mpegts.createPlayer({
+        type: hasPlayableExtension(transportUrl, /\.flv($|\?)/i) ? 'flv' : 'mpegts',
+        isLive: true,
+        url: transportUrl,
+        hasVideo: true,
+        hasAudio: !options?.videoOnly,
+      }, {
+        enableStashBuffer: false,
+        lazyLoad: false,
+        autoCleanupSourceBuffer: true,
+      })
+      player.on(mpegts.Events.ERROR, () => {
+        if (!options?.videoOnly && retryVideoOnlyTransport(transportUrl)) return
+        if (switchToAlternateRoute()) return
+        markStalledStreamError()
+      })
+      mpegtsRef.current = player
+      player.attachMediaElement(media)
+      player.load()
+      await playWhenPossible()
+      if (!options?.videoOnly) scheduleVideoOnlyRetry(transportUrl)
+      scheduleBlackFrameProbe(options?.videoOnly ? 10_000 : 12_000)
+      scheduleStalledStreamProbe(options?.videoOnly ? 12_000 : 15_000)
     }
 
     async function loadStream() {
@@ -967,25 +1057,8 @@ export function App() {
         }
 
         if (isTransportStream) {
-          const { default: mpegts } = await import('mpegts.js')
-          if (cancelled) return
-
-          const player = mpegts.createPlayer({
-            type: hasPlayableExtension(streamUrl, /\.flv($|\?)/i) ? 'flv' : 'mpegts',
-            isLive: true,
-            url: streamUrl,
-          })
-          player.on(mpegts.Events.ERROR, () => {
-            if (switchToAlternateRoute()) return
-            markStalledStreamError()
-          })
-          mpegtsRef.current = player
-          player.attachMediaElement(media)
-          player.load()
-          await playWhenPossible()
+          await startTransportStream(streamUrl)
           scheduleAlternateRouteProbe()
-          scheduleBlackFrameProbe(12_000)
-          scheduleStalledStreamProbe()
           return
         }
 
@@ -1042,6 +1115,8 @@ export function App() {
       const hls = new HlsClient({
         enableWorker: true,
         lowLatencyMode: true,
+        preferManagedMediaSource: false,
+        stretchShortVideoTrack: true,
         backBufferLength: 60,
         liveSyncDurationCount: 3,
         pLoader: ProxiedPlaylistLoader as never,
@@ -1049,6 +1124,17 @@ export function App() {
 
       hlsRef.current = hls
       let triedFallback = false
+      let nudgedToLiveEdge = false
+      const seekToLiveEdge = () => {
+        if (nudgedToLiveEdge || cancelled || !expectsVideo) return
+        const ranges = media.seekable
+        if (!ranges.length) return
+        const liveEdge = ranges.end(ranges.length - 1)
+        if (Number.isFinite(liveEdge) && liveEdge > 6 && media.currentTime < liveEdge - 4) {
+          media.currentTime = Math.max(0, liveEdge - 2)
+          nudgedToLiveEdge = true
+        }
+      }
       const loadFallback = () => {
         if (!fallbackStreamUrl || triedFallback) return false
         triedFallback = true
@@ -1059,52 +1145,23 @@ export function App() {
         setPlayerError('')
         void (async () => {
           const fallbackUrl = fallbackStreamUrl
-          const { default: mpegts } = await import('mpegts.js')
           if (cancelled) return
-          const player = mpegts.createPlayer({
-            type: hasPlayableExtension(fallbackUrl, /\.flv($|\?)/i) ? 'flv' : 'mpegts',
-            isLive: true,
-            url: fallbackUrl,
-          })
-          player.on(mpegts.Events.ERROR, () => {
-            markStalledStreamError()
-          })
-          mpegtsRef.current = player
-          player.attachMediaElement(media)
-          player.load()
-          await playWhenPossible()
-          scheduleBlackFrameProbe()
-          scheduleStalledStreamProbe()
+          await startTransportStream(fallbackUrl)
         })()
         return true
       }
-      const scheduleFallbackProbe = (delay = 3_500) => {
-        if (fallbackProbeTimer) window.clearTimeout(fallbackProbeTimer)
-
-        fallbackProbeTimer = window.setTimeout(() => {
-          if (cancelled || triedFallback || hlsRef.current !== hls) return
-
-          const hasDecodedVideo = !expectsVideo || (media.videoWidth > 0 && media.videoHeight > 0)
-          const hasAdvanced = media.currentTime > 0.75
-
-          if (!hasDecodedVideo || !hasAdvanced) {
-            if (!fallbackStreamUrl) {
-              markBlackFrameError()
-              return
-            }
-            loadFallback()
-          }
-        }, delay)
-      }
-
       hls.on(HlsClient.Events.MEDIA_ATTACHED, () => {
         hls.loadSource(streamUrl)
-        scheduleFallbackProbe(5_000)
         scheduleStalledStreamProbe()
       })
       hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
+        hls.startLoad(-1)
         void playWhenPossible()
-        scheduleFallbackProbe()
+        window.setTimeout(seekToLiveEdge, 600)
+        scheduleBlackFrameProbe(18_000)
+      })
+      hls.on(HlsClient.Events.LEVEL_LOADED, () => {
+        window.setTimeout(seekToLiveEdge, 0)
       })
 
       hls.on(HlsClient.Events.ERROR, (_event, data: { fatal?: boolean; type?: string; details?: string }) => {
@@ -1138,6 +1195,7 @@ export function App() {
       if (alternateRouteTimer) window.clearTimeout(alternateRouteTimer)
       if (blackFrameTimer) window.clearTimeout(blackFrameTimer)
       if (stalledStreamTimer) window.clearTimeout(stalledStreamTimer)
+      if (videoOnlyRetryTimer) window.clearTimeout(videoOnlyRetryTimer)
       media.removeEventListener('canplay', markReady)
       media.removeEventListener('loadeddata', markProgress)
       media.removeEventListener('playing', markPlaying)
