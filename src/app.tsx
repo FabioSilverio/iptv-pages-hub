@@ -364,6 +364,7 @@ function canUseDirectXtreamPlayback() {
 
 function resolveLocalXtreamPlaybackUrl(rawUrl?: string) {
   if (!rawUrl || typeof window === 'undefined') return rawUrl
+  if (hasProxyPlaybackVariant(rawUrl, 'transcode') || hasProxyPlaybackVariant(rawUrl, 'videoOnly')) return rawUrl
 
   const targetUrl = getProxyTargetUrl(rawUrl)
   if (!targetUrl) return rawUrl
@@ -379,6 +380,40 @@ function resolveLocalXtreamPlaybackUrl(rawUrl?: string) {
   }
 
   return rawUrl
+}
+
+function buildProxyPlaybackVariantUrl(rawUrl: string | undefined, params: Record<string, string>) {
+  if (!rawUrl) return undefined
+
+  try {
+    const parsed = new URL(rawUrl)
+    if (!parsed.pathname.endsWith('/proxy')) return undefined
+    for (const [key, value] of Object.entries(params)) {
+      if (parsed.searchParams.get(key) === value) return undefined
+      parsed.searchParams.set(key, value)
+    }
+    return parsed.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function buildVideoOnlyProxyUrl(rawUrl?: string) {
+  return buildProxyPlaybackVariantUrl(rawUrl, { videoOnly: '1' })
+}
+
+function buildTranscodedProxyUrl(rawUrl?: string) {
+  return buildProxyPlaybackVariantUrl(rawUrl, { transcode: '1' })
+}
+
+function hasProxyPlaybackVariant(rawUrl: string | undefined, key: string) {
+  if (!rawUrl) return false
+
+  try {
+    return new URL(rawUrl).searchParams.get(key) === '1'
+  } catch {
+    return false
+  }
 }
 
 function readStoredArray<T>(key: string): T[] {
@@ -770,6 +805,8 @@ export function App() {
     let videoOnlyRetryTimer = 0
     let frameProbeCanvas: HTMLCanvasElement | null = null
     let triedVideoOnlyTransport = false
+    let triedVideoOnlyHls = false
+    let triedTranscodedHls = hasProxyPlaybackVariant(rawStreamUrl, 'transcode')
     let lockedError = false
     const streamUrl = rawStreamUrl
     const rawFallbackStreamUrl = activeStreamOverride
@@ -869,6 +906,8 @@ export function App() {
     }
     const markBlackFrameError = () => {
       if (cancelled || hasVisiblePlayback()) return
+      if (switchToTranscodedRoute()) return
+      if (switchToVideoOnlyRoute()) return
       lockedError = true
       setPlayerState('error')
       setPlayerError(`A stream abriu, mas nao entregou quadro de video no navegador.${codecHint}`)
@@ -876,6 +915,8 @@ export function App() {
     const markStalledStreamError = () => {
       if (cancelled || hasVisiblePlayback()) return
 
+      if (switchToTranscodedRoute()) return
+      if (switchToVideoOnlyRoute()) return
       if (switchToAlternateRoute()) return
 
       lockedError = true
@@ -930,6 +971,33 @@ export function App() {
         current[activeItem.id] === fallbackStreamUrl
           ? current
           : { ...current, [activeItem.id]: fallbackStreamUrl }
+      ))
+      return true
+    }
+    const switchToVideoOnlyRoute = () => {
+      if (!expectsVideo || triedVideoOnlyHls || cancelled || hasVisiblePlayback()) return false
+      if (hasProxyPlaybackVariant(streamUrl, 'transcode') || hasProxyPlaybackVariant(streamUrl, 'videoOnly')) return false
+      const videoOnlyUrl = buildVideoOnlyProxyUrl(streamUrl)
+      if (!videoOnlyUrl || videoOnlyUrl === streamUrl) return false
+
+      triedVideoOnlyHls = true
+      setStreamOverrides((current) => (
+        current[activeItem.id] === videoOnlyUrl
+          ? current
+          : { ...current, [activeItem.id]: videoOnlyUrl }
+      ))
+      return true
+    }
+    const switchToTranscodedRoute = () => {
+      if (!expectsVideo || triedTranscodedHls || cancelled || hasVisiblePlayback()) return false
+      const transcodedUrl = buildTranscodedProxyUrl(streamUrl)
+      if (!transcodedUrl || transcodedUrl === streamUrl) return false
+
+      triedTranscodedHls = true
+      setStreamOverrides((current) => (
+        current[activeItem.id] === transcodedUrl
+          ? current
+          : { ...current, [activeItem.id]: transcodedUrl }
       ))
       return true
     }
@@ -1117,6 +1185,9 @@ export function App() {
         lowLatencyMode: true,
         preferManagedMediaSource: false,
         stretchShortVideoTrack: true,
+        manifestLoadingTimeOut: hasProxyPlaybackVariant(streamUrl, 'transcode') ? 45_000 : 10_000,
+        fragLoadingTimeOut: hasProxyPlaybackVariant(streamUrl, 'transcode') ? 60_000 : 20_000,
+        fragLoadingMaxRetry: hasProxyPlaybackVariant(streamUrl, 'transcode') ? 2 : 6,
         backBufferLength: 60,
         liveSyncDurationCount: 3,
         pLoader: ProxiedPlaylistLoader as never,
@@ -1158,7 +1229,7 @@ export function App() {
         hls.startLoad(-1)
         void playWhenPossible()
         window.setTimeout(seekToLiveEdge, 600)
-        scheduleBlackFrameProbe(18_000)
+        scheduleBlackFrameProbe(hasProxyPlaybackVariant(streamUrl, 'transcode') ? 55_000 : 18_000)
       })
       hls.on(HlsClient.Events.LEVEL_LOADED, () => {
         window.setTimeout(seekToLiveEdge, 0)
@@ -1168,6 +1239,7 @@ export function App() {
         if (!data.fatal) return
 
         if (data.type === 'networkError') {
+          if (switchToVideoOnlyRoute()) return
           if (loadFallback()) return
           setPlayerError('Oscilacao de rede. Tentando religar a stream.')
           hls.startLoad()
@@ -1175,6 +1247,8 @@ export function App() {
         }
 
         if (data.type === 'mediaError') {
+          if (switchToTranscodedRoute()) return
+          if (switchToVideoOnlyRoute()) return
           if (loadFallback()) return
           setPlayerError('Erro de midia. Recuperando o player.')
           hls.recoverMediaError()

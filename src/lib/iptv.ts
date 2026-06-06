@@ -119,6 +119,26 @@ export function buildProxyUrl(proxyBase: string, targetUrl: string) {
   return `${base}/proxy?url=${encodeURIComponent(targetUrl)}`
 }
 
+function withProxyParam(proxyUrl: string, key: string, value: string) {
+  try {
+    const url = new URL(proxyUrl)
+    url.searchParams.set(key, value)
+    return url.toString()
+  } catch {
+    return proxyUrl
+  }
+}
+
+function shouldTranscodeXtreamChannel(name: string, group: string) {
+  const text = `${name} ${group}`.toUpperCase()
+  return (
+    /\b(PT|MEO|VIP):/.test(text) ||
+    text.includes('PORTUGAL') ||
+    text.includes('A BOLA') ||
+    text.includes('SPORT TV')
+  )
+}
+
 function buildTwitchVodEmbedUrl(videoId: string) {
   const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost'
   return `https://player.twitch.tv/?video=v${encodeURIComponent(videoId)}&parent=${encodeURIComponent(host)}&autoplay=true&muted=true`
@@ -267,7 +287,13 @@ export async function fetchXtreamPlaylist(
         const rawFallbackStreamUrl = `${serverUrl}/live/${encodeURIComponent(
           credentials.username.trim(),
         )}/${encodeURIComponent(credentials.password.trim())}/${streamId}.${fallbackExtension}`
-        const streamUrl = playbackProxyUrl ? buildProxyUrl(playbackProxyUrl, rawStreamUrl) : rawStreamUrl
+        const channelName = safeChannelName(item.name)
+        const groupName = normalizeGroupName(categoryMap.get(String(item.category_id ?? '')))
+        const proxiedStreamUrl = playbackProxyUrl ? buildProxyUrl(playbackProxyUrl, rawStreamUrl) : rawStreamUrl
+        const streamUrl =
+          playbackProxyUrl && primaryExtension === 'm3u8' && shouldTranscodeXtreamChannel(channelName, groupName)
+            ? withProxyParam(proxiedStreamUrl, 'transcode', '1')
+            : proxiedStreamUrl
         const fallbackStreamUrl =
           primaryExtension === fallbackExtension
             ? undefined
@@ -277,8 +303,8 @@ export async function fetchXtreamPlaylist(
 
         return {
           id: createChannelId('xtream', streamId),
-          name: safeChannelName(item.name),
-          group: normalizeGroupName(categoryMap.get(String(item.category_id ?? ''))),
+          name: channelName,
+          group: groupName,
           streamUrl,
           fallbackStreamUrl,
           externalUrl: rawStreamUrl,
