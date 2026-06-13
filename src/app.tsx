@@ -978,7 +978,7 @@ export function App() {
       }
     }
     const markWaiting = () => {
-      if (!cancelled && !lockedError) setPlayerState('loading')
+      if (!cancelled && !lockedError) setPlayerState(hasVisiblePlayback() ? 'playing' : 'loading')
     }
     const markBlackFrameError = () => {
       if (cancelled || hasVisiblePlayback()) return
@@ -1259,7 +1259,7 @@ export function App() {
       const isTranscodedStream = hasProxyPlaybackVariant(streamUrl, 'transcode')
       const hls = new HlsClient({
         enableWorker: true,
-        lowLatencyMode: !isTranscodedStream,
+        lowLatencyMode: false,
         preferManagedMediaSource: false,
         stretchShortVideoTrack: true,
         manifestLoadingTimeOut: isTranscodedStream ? 45_000 : 10_000,
@@ -1274,23 +1274,12 @@ export function App() {
         maxBufferHole: 0.8,
         nudgeMaxRetry: 5,
         liveDurationInfinity: true,
-        liveSyncDurationCount: isTranscodedStream ? 6 : 3,
+        liveSyncDurationCount: isTranscodedStream ? 6 : 5,
         pLoader: ProxiedPlaylistLoader as never,
       })
 
       hlsRef.current = hls
       let triedFallback = false
-      let nudgedToLiveEdge = false
-      const seekToLiveEdge = () => {
-        if (isTranscodedStream || nudgedToLiveEdge || cancelled || !expectsVideo) return
-        const ranges = media.seekable
-        if (!ranges.length) return
-        const liveEdge = ranges.end(ranges.length - 1)
-        if (Number.isFinite(liveEdge) && liveEdge > 6 && media.currentTime < liveEdge - 4) {
-          media.currentTime = Math.max(0, liveEdge - 2)
-          nudgedToLiveEdge = true
-        }
-      }
       const loadFallback = () => {
         if (!fallbackStreamUrl || triedFallback) return false
         triedFallback = true
@@ -1313,15 +1302,11 @@ export function App() {
       hls.on(HlsClient.Events.MANIFEST_PARSED, () => {
         hls.startLoad(-1)
         void playWhenPossible()
-        window.setTimeout(seekToLiveEdge, 600)
         scheduleBlackFrameProbe(hasProxyPlaybackVariant(streamUrl, 'transcode') ? 55_000 : 18_000)
-      })
-      hls.on(HlsClient.Events.LEVEL_LOADED, () => {
-        window.setTimeout(seekToLiveEdge, 0)
       })
       const recoverLivePlayback = () => {
         if (cancelled) return
-        hls.startLoad(isTranscodedStream ? -1 : undefined)
+        hls.startLoad(-1)
       }
       hlsRecoverHandler = recoverLivePlayback
       media.addEventListener('waiting', recoverLivePlayback)
