@@ -284,17 +284,87 @@ const extraRadioStations: RadioStation[] = [
     logo: 'https://img.radios.com.br/radio/lg/radio8803_1760319906.png',
     href: 'https://tmc360.com.br/',
     streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/RT_SP.mp3',
-    note: 'TMC Sao Paulo 100.1 FM, antiga Transamerica, em MP3 oficial via StreamTheWorld.',
+    note: 'TMC Sao Paulo 100.1 FM, antiga Transamerica, em MP3 oficial via StreamTheWorld. Rede indicada para transmissao da Copa do Mundo.',
+  },
+  {
+    id: 'cbn-sp',
+    name: 'CBN Sao Paulo',
+    source: 'CBN / StreamTheWorld',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://cbn.globo.com/',
+    streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/CBN_SPAAC.aac',
+    note: 'Feed AAC da CBN Sao Paulo. Sistema Globo de Radio/CBN aparece entre as redes brasileiras da Copa.',
+  },
+  {
+    id: 'cbn-rio',
+    name: 'CBN Rio de Janeiro',
+    source: 'CBN / StreamTheWorld',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://cbn.globo.com/',
+    streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/CBN_RJ_ADP.m3u8',
+    note: 'Feed HLS da CBN Rio. Mantida como alternativa da rede CBN para jogos e cobertura nacional.',
+  },
+  {
+    id: 'radio-bandeirantes-sp',
+    name: 'Radio Bandeirantes Sao Paulo',
+    source: 'Band / StreamTheWorld',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://www.band.uol.com.br/radio-bandeirantes',
+    streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/RadioBandeirantesAAC.m3u8',
+    note: 'Feed HLS da Radio Bandeirantes SP. Grupo Bandeirantes confirmou cobertura da Copa.',
+  },
+  {
+    id: 'bandnews-sp',
+    name: 'BandNews FM Sao Paulo',
+    source: 'BandNews / StreamTheWorld',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://www.band.uol.com.br/radios/bandnews-fm/sao-paulo',
+    streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/BANDNEWSFM_SPAAC.m3u8',
+    note: 'Feed HLS da BandNews FM SP. Radio indicada para a cobertura da Copa do Mundo.',
+  },
+  {
+    id: 'bandnews-rio',
+    name: 'BandNews FM Rio',
+    source: 'BandNews / StreamTheWorld',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://www.band.uol.com.br/radios/bandnews-fm/rio-de-janeiro',
+    streamUrl: 'https://playerservices.streamtheworld.com/api/livestream-redirect/BANDNEWSFM_RJAAC.aac',
+    note: 'Feed AAC da BandNews FM Rio, como opcao extra da rede BandNews.',
+  },
+  {
+    id: 'gaucha-rbs',
+    name: 'Radio Gaucha',
+    source: 'RBS / HLS',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://gauchazh.clicrbs.com.br/',
+    streamUrl: 'https://liverdgaupoa.rbsdirect.com.br/primary/gaucha_rbs.sdp/playlist.m3u8',
+    note: 'Feed HLS da Radio Gaucha. Radio Gaucha aparece entre as redes com presenca na Copa.',
+  },
+  {
+    id: 'itatiaia-bh',
+    name: 'Radio Itatiaia',
+    source: 'Itatiaia / BrasilStream',
+    category: 'Brasil Copa',
+    logo: '',
+    href: 'https://www.itatiaia.com.br/',
+    streamUrl: 'https://8903.brasilstream.com.br/stream',
+    note: 'Feed ao vivo da Itatiaia Belo Horizonte. Itatiaia aparece entre as radios brasileiras da Copa.',
   },
   {
     id: 'energia-97-sp',
     name: 'Energia 97 FM',
     source: 'Energia 97',
-    category: 'Brasil Musica',
+    category: 'Brasil Copa',
     logo: '',
     href: 'https://www.97fm.com.br/',
     streamUrl: 'https://streaming.inweb.com.br/energia',
-    note: 'Energia 97 FM Sao Paulo, feed AAC/HTTPs testado via RadioBrowser.',
+    note: 'Energia 97 FM Sao Paulo. Emissora indicada entre as radios brasileiras com transmissao da Copa.',
   },
   {
     id: 'cope-es',
@@ -808,6 +878,7 @@ export function App() {
     let triedVideoOnlyHls = false
     let triedTranscodedHls = hasProxyPlaybackVariant(rawStreamUrl, 'transcode')
     let lockedError = false
+    let hlsRecoverHandler: (() => void) | null = null
     const streamUrl = rawStreamUrl
     const rawFallbackStreamUrl = activeStreamOverride
       ? activeStreamOverride === activeItem.streamUrl
@@ -821,6 +892,11 @@ export function App() {
       : ' Tente outra versao HD/H264 do mesmo canal.'
 
     const destroyHls = () => {
+      if (hlsRecoverHandler) {
+        media.removeEventListener('waiting', hlsRecoverHandler)
+        media.removeEventListener('stalled', hlsRecoverHandler)
+        hlsRecoverHandler = null
+      }
       if (hlsRef.current) {
         hlsRef.current.destroy()
         hlsRef.current = null
@@ -1180,16 +1256,25 @@ export function App() {
         }
       }
 
+      const isTranscodedStream = hasProxyPlaybackVariant(streamUrl, 'transcode')
       const hls = new HlsClient({
         enableWorker: true,
-        lowLatencyMode: true,
+        lowLatencyMode: !isTranscodedStream,
         preferManagedMediaSource: false,
         stretchShortVideoTrack: true,
-        manifestLoadingTimeOut: hasProxyPlaybackVariant(streamUrl, 'transcode') ? 45_000 : 10_000,
-        fragLoadingTimeOut: hasProxyPlaybackVariant(streamUrl, 'transcode') ? 60_000 : 20_000,
-        fragLoadingMaxRetry: hasProxyPlaybackVariant(streamUrl, 'transcode') ? 2 : 6,
-        backBufferLength: 60,
-        liveSyncDurationCount: 3,
+        manifestLoadingTimeOut: isTranscodedStream ? 45_000 : 10_000,
+        fragLoadingTimeOut: isTranscodedStream ? 60_000 : 20_000,
+        fragLoadingMaxRetry: isTranscodedStream ? 4 : 6,
+        fragLoadingRetryDelay: isTranscodedStream ? 1_500 : 1_000,
+        fragLoadingMaxRetryTimeout: isTranscodedStream ? 20_000 : 12_000,
+        backBufferLength: isTranscodedStream ? 30 : 60,
+        liveBackBufferLength: 30,
+        maxBufferLength: isTranscodedStream ? 90 : 45,
+        maxMaxBufferLength: isTranscodedStream ? 120 : 90,
+        maxBufferHole: 0.8,
+        nudgeMaxRetry: 5,
+        liveDurationInfinity: true,
+        liveSyncDurationCount: isTranscodedStream ? 6 : 3,
         pLoader: ProxiedPlaylistLoader as never,
       })
 
@@ -1197,7 +1282,7 @@ export function App() {
       let triedFallback = false
       let nudgedToLiveEdge = false
       const seekToLiveEdge = () => {
-        if (nudgedToLiveEdge || cancelled || !expectsVideo) return
+        if (isTranscodedStream || nudgedToLiveEdge || cancelled || !expectsVideo) return
         const ranges = media.seekable
         if (!ranges.length) return
         const liveEdge = ranges.end(ranges.length - 1)
@@ -1234,6 +1319,13 @@ export function App() {
       hls.on(HlsClient.Events.LEVEL_LOADED, () => {
         window.setTimeout(seekToLiveEdge, 0)
       })
+      const recoverLivePlayback = () => {
+        if (cancelled) return
+        hls.startLoad(isTranscodedStream ? -1 : undefined)
+      }
+      hlsRecoverHandler = recoverLivePlayback
+      media.addEventListener('waiting', recoverLivePlayback)
+      media.addEventListener('stalled', recoverLivePlayback)
 
       hls.on(HlsClient.Events.ERROR, (_event, data: { fatal?: boolean; type?: string; details?: string }) => {
         if (!data.fatal) return
